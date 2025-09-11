@@ -4,7 +4,6 @@
 *.gph
 *.pdf
 *.png
-*.jpg
 *.dat
 *.csv
 *.dta
@@ -29,13 +28,9 @@
 *.shx
 *.zip
 *.ini
-.dta
-.Rdata
-.pdf
-.stswp
 .DS_Store
-.stwsp
 # but have those folders in the structure
 !.keep
 *.smcl
-.Rproj.user
+*.7z
+*.stswp
