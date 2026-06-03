@@ -65,15 +65,6 @@
 					exit 301
 				}
 				
-				//limits option
-				if "`limits'"=="" {
-					loc L=1
-					loc H=0
-				}
-				else gettoken L H: limits
-				
-				loc zH=`cutoff'+`H'*`bw'
-				loc zL=`cutoff'-`L'*`bw'
 				
 				// check varlist vs bw opts
 				loc nvars: word count `varlist' 
@@ -119,6 +110,16 @@
 					collapse (count) `y'=`z', by(`bin')
 					rename `bin' `z'
 				}
+				
+				//limits option
+				if "`limits'"=="" {
+					loc L=1
+					loc H=0
+				}
+				else gettoken L H: limits
+				
+				loc zH=`cutoff'+`H'*`bw'
+				loc zL=`cutoff'-`L'*`bw'
 				
 				//Put bins in e(table)
 				tempname table
