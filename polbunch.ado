@@ -180,6 +180,9 @@
 				else {
 					loc rhsvars 
 					loc names _cons
+					
+					loc coleq0 h0
+					loc coleq1 h1
 				}
 				
 				//gen dummies
