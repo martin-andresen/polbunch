@@ -344,9 +344,7 @@
 
 						local names `names' `bnames'
 					}
-					}
-				}
-							
+					}							
 							
 				if `estimator'>1 { //specify NL model
 					
