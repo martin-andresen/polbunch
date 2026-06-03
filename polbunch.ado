@@ -304,20 +304,12 @@
 
 					if `estimator' > 1 {
 						if `estimator' == 2 {
-							if "`positiveshift'" != "nopositiveshift" {
-								local names `names' delta:lndelta
-							}
-							else {
-								local names `names' delta:delta
-							}
+							if "`positiveshift'" != "nopositiveshift" local names `names' delta:lndelta
+							else local names `names' delta:delta
 						}
 						else {
-							if "`positiveshift'" != "nopositiveshift" {
-								local names `names' shift:lnshift
-							}
-							else {
-								local names `names' shift:shift
-							}
+							if "`positiveshift'" != "nopositiveshift" local names `names' shift:lnshift
+							else local names `names' shift:shift
 						}
 
 						if `polynomial' > 0 {
@@ -325,25 +317,30 @@
 								local names `names' h0:``k''
 							}
 						}
-
+						local names `names' h0:_cons
 						local names `bnames' `names'
 					}
 					else {
-						forvalues h = 0/1 {
+						// estimator 0 and 1: h0 coefficients
+						if `polynomial' > 0 {
+							forvalues k = 1/`polynomial' {
+								local names `names' h0:``k''
+							}
+						}
+						local names `names' h0:_cons
+
+						// estimator 0 only: h1 coefficients
+						if `estimator' == 0 {
 							if `polynomial' > 0 {
 								forvalues k = 1/`polynomial' {
-									local names `names' h`h':``k''
+									local names `names' h1:``k''
 								}
 							}
-
-							local names `names' h`h':_cons
-
-							if `estimator' == 1 {
-								continue, break
-							}
+							local names `names' h1:_cons
 						}
 
 						local names `names' `bnames'
+					}
 					}
 				}
 							
@@ -478,7 +475,6 @@
 					`noisily' reg `unresmodel', nocons
 					if `bootreps'==1 { //get variance for unrestricted model, perform test of model restrictions
 						varcorrect `unresmodel', `smallsample'
-						pause
 						mat `Vu'=r(V)
 						mat `bu'=e(b)
 						mat colnames `bu'=`newnames'	
