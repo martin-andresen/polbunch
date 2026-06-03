@@ -549,13 +549,6 @@
 							local init shift `shiftinit'
 						}
 
-						// initialize b0; needed especially for polynomial(0)
-						capture local b0init = _b[/b0]
-						if _rc {
-							quietly summarize `y' if `z' < `cutoff' & `bunch' == 0, meanonly
-							local b0init = r(mean)
-						}
-						local init `init' b0 `b0init'
 
 						// initialize higher-order polynomial terms; skipped automatically if polynomial==0
 						forvalues k = 1/`polynomial' {
