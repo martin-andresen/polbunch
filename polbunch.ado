@@ -164,8 +164,21 @@
 				if `estimator'==4 loc polynomial=0
 				
 				//NORMALIZE Z
-				if "`normalize'"!="nonormalize" {
-					replace `z'=(`z'-`cutoff')/`bw'
+				tempvar znorm
+				loc z_orig = `z'
+				loc cutoff_orig = `cutoff'
+				loc bw_orig = `bw'
+				
+				if "`normalize'" != "nonormalize" {
+					gen double `znorm' = (`z' - `cutoff') / `bw'
+					local z `znorm'
+					local cutoff = 0
+					local bw = 1
+				}
+				else {
+					local z `z'
+					local cutoff= `cutoff'
+					local bw = `bw'
 				}
 				
 				//NAMES
@@ -217,7 +230,7 @@
 							loc note note
 							loc polynomial=`polynomial'-1
 							if `polynomial'<0 {
-								noi di in red "Could not estiamte separate polynomials on either side of the cutoff."
+								noi di in red "Could not estimate separate polynomials on either side of the cutoff."
 								exit 301
 								}
 							
@@ -591,10 +604,10 @@
 					}
 						if "`transform'"!="notransform" { //TRANSFORM ESTIMATES
 							if `bootreps'==1 {
-								bunchcalc, estimator(`estimator') polynomial(`polynomial') cutoff(`cutoff') bw(`bw') h(`H') l(`L') b0(`b0') t0(`t0') t1(`t1') `constant' `positiveshift' `log' nlcom(`nlcom')
+								bunchcalc, estimator(`estimator') polynomial(`polynomial') cutoff(`cutoff_orig') bw(`bw_orig') h(`H') l(`L') b0(`b0') t0(`t0') t1(`t1') `constant' `positiveshift' `log' nlcom(`nlcom')
 								mat `V'=r(V)
 							}
-							else bunchcalc, estimator(`estimator') polynomial(`polynomial') cutoff(`cutoff') bw(`bw') h(`H') l(`L') b0(`b0') t0(`t0') t1(`t1') boot `constant' `positiveshift' `log' nlcom(`nlcom')
+							else bunchcalc, estimator(`estimator') polynomial(`polynomial') cutoff(`cutoff_orig') bw(`bw_orig') h(`H') l(`L') b0(`b0') t0(`t0') t1(`t1') boot `constant' `positiveshift' `log' nlcom(`nlcom')
 							if r(exit)==1 {
 								noi di in red "Could not find solution to polynomial equation for the response of the marginal buncher in one or more bootstrap repetitions. You could consider trying the constant approximation using the option "constant", or the option "notransform" to report raw estimates and then manually convert those to objects of interest post-estimation (the latter being less prone to bias)."
 								exit 301
@@ -661,6 +674,7 @@
 
 				
 				//POST RESULTS
+				pause
 				mat colnames `b'=`names'
 				if `bootreps'>=1 {
 					mat colnames `V'=`names'
