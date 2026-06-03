@@ -6,8 +6,8 @@
 		program polbunch, eclass sortpreserve
 			syntax varlist(min=1 max=2) [if] [in],  CUToff(real) [bw(numlist min=1 max=1 >0)  ///
 			LIMits(numlist max=2 min=2 integer) ///
-			t0(numlist min=1 max=1 <1) //
-			t1(numlist min=1 max=1 <1) //
+			t0(numlist min=1 max=1 <1) ///
+			t1(numlist min=1 max=1 <1) ///
 			POLynomial(integer 7) ///
 			NOIsily ///
 			ESTimator(integer 3) /// Specify estimator - 3 = theoretically consistent efficient estimator, 2 = chetty, 1 = no adjustment, 0=data to the left only
