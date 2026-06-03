@@ -15,6 +15,7 @@
 			INITvals(string) ///
 			notransform ///
 			nopositiveshift ///
+			nonormalize ///
 			BOOTreps(integer 1) ///
 			log ///
 			constant ///
@@ -161,6 +162,11 @@
 				
 				//Reset pol for saez estimator
 				if `estimator'==4 loc polynomial=0
+				
+				//NORMALIZE Z
+				if "`normalize'"!="nonormalize" {
+					replace `z'=(`z'-`cutoff')/`bw'
+				}
 				
 				//NAMES
 				if `polynomial'>0 {
