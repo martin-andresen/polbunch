@@ -247,11 +247,19 @@
 				}
 
 				foreach l in b g {
-					foreach k of numlist 1/`polynomial' 0 {
-						loc newnames `newnames' /`l'`k'
-						if `estimator'==1&"`l'"=="b" loc namesest1 `namesest1' /b`k'
+					forvalues k = 1/`polynomial' {
+						local newnames `newnames' /`l'`k'
+						if `estimator' == 1 & "`l'" == "b" {
+							local namesest1 `namesest1' /b`k'
+						}
+					}
+
+					local newnames `newnames' /`l'0
+					if `estimator' == 1 & "`l'" == "b" {
+						local namesest1 `namesest1' /b0
 					}
 				}
+				
 				forvalues bval=1/`=`H'+`L'' {
 					loc newnames `newnames' /bunch`bval'
 					loc namesest1 `namesest1' /bunch`bval'
@@ -266,52 +274,80 @@
 					}
 				}
 
-				//NAMES for final model
-				if "`transform'"!="notransform" {
-					if `estimator'!=2 loc names `names' `names' number_bunchers excess_mass shift marginal_response
-					else loc names `names' `names' delta number_bunchers excess_mass shift marginal_response
-					if "`t0'"!=""&"`t1'"!="" loc names `names' elasticity
+				// NAMES for final model
+				if "`transform'" != "notransform" {
+					if `estimator' != 2 {
+						local names `names' `names' number_bunchers excess_mass shift marginal_response
+					}
+					else {
+						local names `names' `names' delta number_bunchers excess_mass shift marginal_response
+					}
+
+					if "`t0'" != "" & "`t1'" != "" {
+						local names `names' elasticity
+					}
 				}
 				else {
 					tokenize `names'
-					loc names
-					forvalues i=1/`=`L'' {
-						loc bnames `bnames' number_bunchers:`=`L'-`i'+1'.below
+					local names
+					local bnames
+
+					forvalues i = 1/`L' {
+						local bnames `bnames' number_bunchers:`=`L'-`i'+1'.below
 					}
-					if `H'>0 {
-							forvalues i=1/`=`H'' {
-								loc bnames `bnames' number_bunchers:`i'.above
+
+					if `H' > 0 {
+						forvalues i = 1/`H' {
+							local bnames `bnames' number_bunchers:`i'.above
+						}
+					}
+
+					if `estimator' > 1 {
+						if `estimator' == 2 {
+							if "`positiveshift'" != "nopositiveshift" {
+								local names `names' delta:lndelta
+							}
+							else {
+								local names `names' delta:delta
 							}
 						}
-					if `estimator'>1 {
-						if `estimator'==2 {
-							if "`positiveshift'"!="nopositiveshift" loc names `names' delta:lndelta
-							else loc names `names' delta:delta
-						}
 						else {
-							if "`positiveshift'"!="nopositiveshift" loc names `names' shift:lnshift
-							else loc names `names' shift:shift
+							if "`positiveshift'" != "nopositiveshift" {
+								local names `names' shift:lnshift
+							}
+							else {
+								local names `names' shift:shift
+							}
 						}
-						forvalues k=1/`polynomial' {
-							loc names `names' h0:``k''
+
+						if `polynomial' > 0 {
+							forvalues k = 1/`polynomial' {
+								local names `names' h0:``k''
+							}
 						}
-						loc names `bnames' `names'
-					} 
-				else {
-					forvalues h=0/1 {
-						forvalues k=1/`polynomial' {
-							loc names `names' h`h':``k''
-						}
-						loc names `names' h`h':_cons
-						if `estimator'==1 continue, break
+
+						local names `bnames' `names'
 					}
-				loc names `names' `bnames'
+					else {
+						forvalues h = 0/1 {
+							if `polynomial' > 0 {
+								forvalues k = 1/`polynomial' {
+									local names `names' h`h':``k''
+								}
+							}
+
+							local names `names' h`h':_cons
+
+							if `estimator' == 1 {
+								continue, break
+							}
+						}
+
+						local names `names' `bnames'
+					}
 				}
-				
-				}
-				
-				
-				
+							
+							
 				if `estimator'>1 { //specify NL model
 					
 				//Specify parameter restrictions
@@ -442,6 +478,7 @@
 					`noisily' reg `unresmodel', nocons
 					if `bootreps'==1 { //get variance for unrestricted model, perform test of model restrictions
 						varcorrect `unresmodel', `smallsample'
+						pause
 						mat `Vu'=r(V)
 						mat `bu'=e(b)
 						mat colnames `bu'=`newnames'	
@@ -789,5 +826,3 @@ real scalar eresp(real scalar B, real scalar tau, real matrix cf, real scalar bw
 }
 
 end
-end
-
