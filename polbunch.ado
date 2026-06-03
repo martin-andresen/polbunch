@@ -77,7 +77,7 @@
 					loc z: word 2 of `varlist'
 					
 					sort `z'
-					tempname tmp
+					tempvar tmp
 					gen `tmp'=`z'-`z'[_n-1]
 					su `tmp'
 					if r(Var)>0.01*r(mean) {
@@ -111,6 +111,7 @@
 					rename `bin' `z'
 				}
 				
+
 				//limits option
 				if "`limits'"=="" {
 					loc L=1
@@ -410,7 +411,6 @@
 						if "`test'"!="notest"&`estimator'>0 {
 							`noisily' eret di
 							`noisily' testnl `teststr'
-							pause
 							loc chi2=r(chi2)
 							loc p_mod=r(p)
 							loc df=r(df)
@@ -535,7 +535,6 @@
 
 				
 				//POST RESULTS
-				noi mat li `b'
 				mat colnames `b'=`names'
 				if `bootreps'>=1 {
 					mat colnames `V'=`names'
