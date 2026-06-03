@@ -10,7 +10,7 @@
 			t1(numlist min=1 max=1 <1) ///
 			POLynomial(integer 7) ///
 			NOIsily ///
-			ESTimator(integer 3) /// Specify estimator - 3 = theoretically consistent efficient estimator, 2 = chetty, 1 = no adjustment, 0=data to the left only
+			ESTimator(integer 3) /// Specify estimator - 3 = theoretically consistent efficient estimator, 2 = chetty, 1 = no adjustment, 0=data to the left only, 4=Saez three-region trapezoid approximaton
 			nodrop ///
 			INITvals(string) ///
 			notransform ///
@@ -47,8 +47,8 @@
 					loc coeftabresults=c(coeftabresults)
 					set coeftabresults off
 				}
-				if !inlist(`estimator',0,1,2,3) {
-					noi di as error "Option estimator can take only values 1 (using data to the left only), 2 (no adjustment), 2 (Chetty et. al. adjustment) or 3 (theoretically consistent and efficient estimator)."
+				if !inlist(`estimator',0,1,2,3,4) {
+					noi di as error "Option estimator can take only values 0 (using data to the left only),  1 (no adjustment), 2 (Chetty et. al. adjustment) or 3 (theoretically consistent and efficient estimator) or 4 (Saez trapezoid approximation)."
 					exit 301
 				}
 				tempvar touse
@@ -60,7 +60,7 @@
 					noi di as error "Option bootreps can only take values 0 (no inference), 1 (analytic standard errors, the default) or a positive integer >0 (binned bootstrap)."
 					exit 301
 				}
-				if `polynomial'<=0 {
+				if `polynomial'<0 {
 					noi di as error "Polynomial must be a positive integer"
 					exit 301
 				}
@@ -145,31 +145,42 @@
 				mat colnames `table'= freq `z'
 				
 				//check if there are people on either side
-				count if `z'<`cutoff'
+				count if `z'<`zL'
 				if r(N)==0 {
-					noi di as error "No individuals in sample allocates below cutoff."
+					noi di as error "No individuals in sample allocates below the excluded region."
 					exit 301
 					}
 				
-				count if `z'>`cutoff'
+				count if `z'>`zH'
 				if r(N)==0 {
-					noi di as error "No individuals in sample allocates above cutoff."
-					exit 301
+					if (`estimator'>0) {
+						noi di as error "No individuals in sample allocates above the excluded region."
+						exit 301
 					}
-					
+					}
+				
+				//Reset pol for saez estimator
+				if `estimator'==4 loc polynomial=0
+				
 				//NAMES
-				forvalues i=1/`polynomial' { 
-					if "`rhsvars'"=="" loc rhsvars  c.`z'
-					else loc rhsvars `rhsvars'##c.`z'
+				if `polynomial'>0 {
+					forvalues i=1/`polynomial' { 
+						if "`rhsvars'"=="" loc rhsvars  c.`z'
+						else loc rhsvars `rhsvars'##c.`z'
+						loc coleq0 `coleq0' h0
+						loc coleq1 `coleq1' h1
+						}
+				
 					loc coleq0 `coleq0' h0
 					loc coleq1 `coleq1' h1
-					}
-			
-				loc coleq0 `coleq0' h0
-				loc coleq1 `coleq1' h1
-				
-				fvexpand `rhsvars'
-				loc names `r(varlist)' _cons
+					
+					fvexpand `rhsvars'
+					loc names `r(varlist)' _cons
+				}
+				else {
+					loc rhsvars 
+					loc names _cons
+				}
 				
 				//gen dummies
 				tempvar fw dupe dum dum2 bunch cons
@@ -186,46 +197,55 @@
 				count
 				loc numbins=r(N)
 				
+
 				//Evaluate multicollinearity
-				loc nmiss=1
-				while `nmiss'>0 {
-					regress `y' 0.`dum'#(`rhsvars') 0.`dum' 1.`dum2'#(`rhsvars') 1.`dum2' b0.`bunch', nocons
-					loc nmiss=e(rank)<(`polynomial'+1)*2+`H'+`L'
-					if `nmiss'>0 {
-						loc note note
-						loc polynomial=`polynomial'-1
-						if `polynomial'==0 {
-							noi di in red "Omitted variable problems."
-							exit 301
+				if `polynomial'>0 {
+					loc nmiss=1
+					while `nmiss'>0 {
+						regress `y' 0.`dum'#(`rhsvars') 0.`dum' 1.`dum2'#(`rhsvars') 1.`dum2' b0.`bunch', nocons
+						loc nmiss=e(rank)<(`polynomial'+1)*2+`H'+`L'
+						if `nmiss'>0 {
+							loc note note
+							loc polynomial=`polynomial'-1
+							if `polynomial'<0 {
+								noi di in red "Could not estiamte separate polynomials on either side of the cutoff."
+								exit 301
+								}
+							
+							//NEW NAMES
+							loc coleq0 
+							loc coleq1 
+							forvalues i=1/`polynomial' { 
+								if `i'==1 loc rhsvars  c.`z'
+								else loc rhsvars `rhsvars'##c.`z'
+								loc coleq0 `coleq0' h0
+								loc coleq1 `coleq1' h1
 							}
-						
-						//NEW NAMES
-						loc coleq0 
-						loc coleq1 
-						forvalues i=1/`polynomial' { 
-							if `i'==1 loc rhsvars  c.`z'
-							else loc rhsvars `rhsvars'##c.`z'
+					
 							loc coleq0 `coleq0' h0
 							loc coleq1 `coleq1' h1
+							
+							fvexpand `rhsvars'
+							loc names `r(varlist)' _cons
+							}
 						}
-				
-						loc coleq0 `coleq0' h0
-						loc coleq1 `coleq1' h1
-						
-						fvexpand `rhsvars'
-						loc names `r(varlist)' _cons
-						}
+					if "`note'"=="note" {
+						noi di as text "Note: Polynomial order lowered to `polynomial' because of multicollinearity problems with the specified polynomial."
 					}
-				if "`note'"=="note" {
-					noi di as text "Note: Polynomial order lowered to `polynomial' because of multicollinearity problems with the specified polynomial."
 				}
 					
 				//NAMES and model string FOR UNRESTRICTED MODEL (as benchmark or main model if estimator==0)
 				forvalues bval=1/`=`H'+`L'' {
 					loc bunchvars `bunchvars' `bval'.`bunch'
 					}
-				loc unresmodel `y' 0.`dum'#(`rhsvars') 0.`dum' 1.`dum2'#(`rhsvars') 1.`dum2' `bunchvars'
-			
+				if `polynomial' == 0 {
+					local unresmodel `y' 0.`dum' 1.`dum2' `bunchvars'
+				}
+				else {
+					local unresmodel `y' 0.`dum'#(`rhsvars') 0.`dum' ///
+						1.`dum2'#(`rhsvars') 1.`dum2' `bunchvars'
+				}
+
 				foreach l in b g {
 					foreach k of numlist 1/`polynomial' 0 {
 						loc newnames `newnames' /`l'`k'
@@ -449,17 +469,68 @@
 					
 					//ESTIMATE RESTRICTED MODEL
 					if `estimator'>1 { //with NLS
-						//find good starting values
-						if "`log'"=="" loc shiftinit=(_b[/g0]/_b[/b0])-1
-						else loc shiftinit=exp((_b[/g`=`polynomial'-1']-_b[/b`=`polynomial'-1'])/(`polynomial'*_b[/b`polynomial']))-1
-						if `shiftinit'<=0|mi(`shiftinit') loc shiftinit=0.1
-						if "`positiveshift'"!="nopositiveshift" loc init lnshift `=ln(`shiftinit')'
-						else loc init shift `shiftinit'
-						forvalues k=1/`polynomial' {
-							loc init `init' b`k' `=_b[/b`k']'
+						// find good starting values
+						// Use excess mass relative to predicted left density at cutoff.
+
+						local Binit = 0
+						forvalues bval = 1/`=`H'+`L'' {
+							local thisb = _b[/bunch`bval']
+							if !missing(`thisb') {
+								local Binit = `Binit' + max(0, `thisb')
+							}
 						}
-						forvalues bval=1/`=`H'+`L'' {
-							loc init `init' bunch`bval' `=_b[/bunch`bval']'
+
+						// fallback-safe predicted left-side bin count at cutoff
+						capture local hinit = _b[/b0]
+						if _rc {
+							quietly summarize `y' if `z' < `cutoff' & `bunch' == 0, meanonly
+							local hinit = r(mean)
+						}
+
+						forvalues k = 1/`polynomial' {
+							local hinit = `hinit' + _b[/b`k']*(`cutoff'^`k')
+						}
+
+						// fallback if polynomial prediction is bad
+						if missing(`hinit') | `hinit' <= 0 {
+							quietly summarize `y' if `z' < `cutoff' & `bunch' == 0, meanonly
+							local hinit = r(mean)
+						}
+
+						// approximate shift: excess bins / local counterfactual bin height
+						local shiftinit = (`Binit' * `bw') / (`hinit' * `cutoff')
+
+						if missing(`shiftinit') | `shiftinit' <= 0 {
+							local shiftinit = 0.05
+						}
+						if `shiftinit' > 0.5 {
+							local shiftinit = 0.5
+						}
+
+						// initialize shift
+						if "`positiveshift'" != "nopositiveshift" {
+							local init lnshift `=ln(`shiftinit')'
+						}
+						else {
+							local init shift `shiftinit'
+						}
+
+						// initialize b0; needed especially for polynomial(0)
+						capture local b0init = _b[/b0]
+						if _rc {
+							quietly summarize `y' if `z' < `cutoff' & `bunch' == 0, meanonly
+							local b0init = r(mean)
+						}
+						local init `init' b0 `b0init'
+
+						// initialize higher-order polynomial terms; skipped automatically if polynomial==0
+						forvalues k = 1/`polynomial' {
+							local init `init' b`k' `=_b[/b`k']'
+						}
+
+						// initialize bunching dummy parameters
+						forvalues bval = 1/`=`H'+`L'' {
+							local init `init' bunch`bval' `=_b[/bunch`bval']'
 						}
 						
 						
