@@ -691,62 +691,103 @@
 		end
 		
 program define varcorrect, rclass
-syntax anything, [nl nosmallsample]
-	
-	qui {
-		gettoken y anything: anything
-		tempvar res rss
-		tempname g V
-		loc numbins=_N
-		su `y'
-		loc N=r(sum)
-		loc k=e(df_m)
-		//if "`nl'"=="" loc ++k
-		if "`nl'"=="nl" {
-			predictnl `res'=predict(), g(`g') iterate(1000)
-			replace `res'=-`res'
-			mata: st_matrix("`V'",varcorrect(st_data(.,"`g'*"),st_data(.,"`y'"),st_data(.,"`res'"),0))
-			}
-		else {
-			predict `res', residuals
-			mata: st_matrix("`V'",varcorrect(st_data(.,"`anything'"),st_data(.,"`y'"),st_data(.,"`res'"),0))
-		}
-		if "`smallsample'"!="nosmallsample" mat `V'=`=(`N'/(`N'-1))*((`N'*`numbins'-1)/(`N'*`numbins'-`k'))' * `V'
-		return matrix V=`V'
-		gen `rss'=`y'*(`N'-`res')^2+(`N'-`y')*(`res')^2
-		su `rss'
-		return local rss=r(sum)
-	}
-	end
+    syntax anything, [nl nosmallsample]
+
+    quietly {
+        gettoken y anything : anything
+
+        tempvar res rss
+        tempname g V
+        local numbins = _N
+
+        summarize `y', meanonly
+        local N = r(sum)
+        local k = e(df_m)
+
+        if "`nl'" == "nl" {
+            predictnl `res' = predict(), g(`g') iterate(1000)
+            replace `res' = -`res'
+
+            unab gvars : `g'*
+            return local xvars "`gvars'"
+
+            mata: st_matrix("`V'", ///
+                varcorrect(st_data(., tokens(st_local("gvars"))), ///
+                           st_data(., "`y'"), ///
+                           st_data(., "`res'"), 0))
+        }
+        else {
+            predict `res', residuals
+            return local xvars "`anything'"
+
+            mata: st_matrix("`V'", ///
+                varcorrect(st_data(., tokens(st_local("anything"))), ///
+                           st_data(., "`y'"), ///
+                           st_data(., "`res'"), 0))
+        }
+
+        if "`smallsample'" != "nosmallsample" {
+            matrix `V' = (`N'/(`N'-1)) * ///
+                ((`N'*`numbins'-1)/(`N'*`numbins'-`k')) * `V'
+        }
+
+        return matrix V = `V'
+
+        gen double `rss' = `y'*(`N'-`res')^2 + (`N'-`y')*(`res')^2
+        summarize `rss', meanonly
+        return local rss = r(sum)
+    }
+end
+
 
 mata:
-	
-function varcorrect(real matrix X, real matrix fw, real matrix e, real scalar addcons)
-	{
-	B=length(fw)
-	N=sum(fw)
-	if (addcons==1) X=X,J(rows(X),1,1)
-	meat=0
-	for (i=1; i<=B; i++) {
-		e[i]=e[i]+N
-		meat=meat:+fw[i]:*(X' * e * e' * X)
-		e[i]=e[i]-N
-	}
-	return(invsym(quadcross(X,X):*N)*meat*invsym(quadcross(X,X):*N))
-	}
-				
-function eresp(real scalar B,real scalar tau,real matrix cf, real scalar bw)
-	{
-	integral=polyinteg(cf,1)
-	integral[1]=-polyeval(integral,tau)-B*bw
-	roots=polyroots(integral)
-	realroots=Re(select(roots, Im(roots):==0))
-	out=sort(select(realroots,realroots:>tau)',1)'
-	if (cols(out)==0) {
-		return(.)
-	}
-	else return(out[1]-tau)
-	}
-			
+
+real matrix varcorrect(real matrix X, real matrix fw, real matrix e, real scalar addcons)
+{
+    real scalar B, N, i
+    real matrix meat, bread
+
+    B = rows(fw)
+    N = sum(fw)
+
+    if (addcons == 1) {
+        X = X, J(rows(X), 1, 1)
+    }
+
+    meat = J(cols(X), cols(X), 0)
+
+    for (i = 1; i <= B; i++) {
+        e[i] = e[i] + N
+        meat = meat + fw[i] * (X' * e * e' * X)
+        e[i] = e[i] - N
+    }
+
+    bread = invsym(quadcross(X, X) :* N)
+
+    return(bread * meat * bread)
+}
+
+
+real scalar eresp(real scalar B, real scalar tau, real matrix cf, real scalar bw)
+{
+    real matrix integral, roots, realroots, out
+
+    if (cols(cf) == 1) {
+        if (cf[1] <= 0) return(.)
+        return((B * bw) / cf[1])
+    }
+
+    integral = polyinteg(cf, 1)
+    integral[1] = -polyeval(integral, tau) - B*bw
+
+    roots = polyroots(integral)
+    realroots = Re(select(roots, Im(roots) :== 0))
+    out = sort(select(realroots, realroots :> tau)', 1)'
+
+    if (cols(out) == 0) return(.)
+    else return(out[1] - tau)
+}
+
+end
 end
 
