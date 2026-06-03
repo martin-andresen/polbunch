@@ -79,14 +79,14 @@ program bunchcalc, rclass
 		if `estimator'==3&"`constant'"=="" {
 			loc deltaz `shift'*`cutoff'
 			loc nlcom `nlcom' (`shift') (`deltaz')
-			if "`t0'"!=""&"`t1'"!=""  loc nlcom `nlcom' (ln(1+`shift')/(ln(1-`t0')-ln(1-`t1')))
+			if "`t0'"!=""&"`t1'"!=""  loc nlcom `nlcom' (ln(1+`shift')/(ln(1-(`t0'))-ln(1-(`t1'))))
 			}
 		else if "`constant'"!="" {
 			if "`log'"=="" loc nlcom `nlcom' (`deltaz'/`cutoff') (`deltaz')
 			else loc nlcom `nlcom' (exp(`deltaz'+`cutoff')/exp(`cutoff')) (`deltaz')
 			if "`t0'"!=""&"`t1'"!="" { //elasticity
-				if "`log'"=="" loc nlcom `nlcom' (ln(1+ `deltaz'/`cutoff')/(ln(1-`t0')-ln(1-`t1'))) 
-				else loc nlcom `nlcom' ((ln(exp(`cutoff'+`deltaz'))-`cutoff')/(ln(1-`t0')-ln(1-`t1')))
+				if "`log'"=="" loc nlcom `nlcom' (ln(1+ `deltaz'/`cutoff')/(ln(1-(`t0'))-ln(1-(`t1')))) 
+				else loc nlcom `nlcom' ((ln(exp(`cutoff'+`deltaz'))-`cutoff')/(ln(1-(`t0'))-ln(1-(`t1'))))
 			}
 		}
 	}
@@ -112,8 +112,8 @@ program bunchcalc, rclass
 			if "`log'"=="" mat `b'=`b',`=eresp/`cutoff'',eresp
 			else mat `b'=`b',`=exp(eresp+`cutoff')/exp(`cutoff')',eresp
 			if "`t0'"!=""&"`t1'"!="" { //elasticity
-				if "`log'"=="" mat `b'=`b',`=ln(1+ eresp/`cutoff')/(ln(1-`t0')-ln(1-`t1'))'
-				else mat `b'=`b',`=(ln(exp(`cutoff'+eresp))-`cutoff')/(ln(1-`t0')-ln(1-`t1'))'
+				if "`log'"=="" mat `b'=`b',`=ln(1+ eresp/`cutoff')/(ln(1-(`t0'))-ln(1-(`t1')))'
+				else mat `b'=`b',`=(ln(exp(`cutoff'+eresp))-`cutoff')/(ln(1-(`t0'))-ln(1-(`t1')))'
 			}
 
 			if "`t0'"!=""&"`t1'"!="" loc extra=3
@@ -138,8 +138,8 @@ program bunchcalc, rclass
 			if "`log'"=="" mat `b'=`b',`=eresp/`cutoff'',eresp
 			else mat `b'=`b',`=exp(eresp+`cutoff')/exp(`cutoff')',eresp
 			if "`t0'"!=""&"`t1'"!="" { //elasticity
-				if "`log'"=="" mat `b'=`b',`=ln(1+ eresp/`cutoff')/(ln(1-`t0')-ln(1-`t1'))'
-				else mat `b'=`b',`=(ln(exp(`cutoff'+eresp))-`cutoff')/(ln(1-`t0')-ln(1-`t1'))'
+				if "`log'"=="" mat `b'=`b',`=ln(1+ eresp/`cutoff')/(ln(1-(`t0'))-ln(1-(`t1')))'
+				else mat `b'=`b',`=(ln(exp(`cutoff'+eresp))-`cutoff')/(ln(1-(`t0'))-ln(1-(`t1')))'
 			}
 
 		}

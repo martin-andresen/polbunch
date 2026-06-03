@@ -6,8 +6,8 @@
 		program polbunch, eclass sortpreserve
 			syntax varlist(min=1 max=2) [if] [in],  CUToff(real) [bw(numlist min=1 max=1 >0)  ///
 			LIMits(numlist max=2 min=2 integer) ///
-			t0(numlist min=1 max=1  >=0 <=1) ///
-			t1(numlist min=1 max=1  >=0 <=1) ///
+			t0(numlist min=1 max=1 <1) //
+			t1(numlist min=1 max=1 <1) //
 			POLynomial(integer 7) ///
 			NOIsily ///
 			ESTimator(integer 3) /// Specify estimator - 3 = theoretically consistent efficient estimator, 2 = chetty, 1 = no adjustment, 0=data to the left only
@@ -27,6 +27,22 @@
 			]
 			
 			 quietly {
+			 	
+					if "`t0'"!="" {
+					if "`t1'"=="" {
+						noi di as error "If specifying one tax rate (options t0 or t1), specify both."
+						exit 301
+					}
+					if `t0'==`t1' {
+						noi di as error "Tax rates t0 and t1 cannot be equal - no incentive! Estimate reduced form bunching by omitting tax rates."
+						exit 301
+					}
+					if `t1'<`t0' {
+						noi di as error "Polbunch currently support only convex kinks, t1>t0."
+						exit 301
+					}
+				}
+				
 				if `bootreps'>0 {
 					loc coeftabresults=c(coeftabresults)
 					set coeftabresults off
