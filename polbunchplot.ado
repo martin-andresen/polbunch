@@ -61,7 +61,7 @@ cap prog drop polbunchplot
 				(function h1=`h1plot', range(`=e(upper_limit)' `xmax') lcolor(navy) lpattern(solid)), ///
 				xline(`=e(cutoff)', lcolor(maroon) lpattern(dash)) xline(`=e(lower_limit)', lcolor(black) lpattern(dash)) `zhline' ///
 				graphregion(color(white)) plotregion(lcolor(black)) ytitle("Frequency") xtitle("`=e(binname)'") ///
-				legend(label(1 "Frequency") label(2 "Estimated h0") label(4 "Estimated h1") cols(3) order(1 2 4)) `yscale'
+				legend(label(1 "Frequency") label(2 "Estimated h0") label(4 "Estimated h1") cols(3) order(1 2 4) pos(6)) `yscale'
 		
 		restore
 	}

@@ -112,16 +112,33 @@
 				}
 				
 
-				//limits option
-				if "`limits'"=="" {
-					loc L=1
-					loc H=0
-				}
-				else gettoken L H: limits
-				
-				loc zH=`cutoff'+`H'*`bw'
-				loc zL=`cutoff'-`L'*`bw'
-				
+			// limits option
+			if "`limits'"=="" {
+				loc L = 1
+				loc H = 0
+			}
+			else gettoken L H : limits
+
+			// For pre-binned data, limits are numbers of whole bins below/above cutoff.
+			// Do not split bins.  relbin = -1 is closest bin below cutoff;
+			// relbin = 0 is first bin at or above cutoff.
+			tempvar zleft zright relbin
+
+			if `nvars' == 2 {
+				gen double `zleft'  = `z' - `bw'/2
+				gen double `zright' = `z' + `bw'/2
+
+				gen int `relbin' = floor((`zleft' - `cutoff') / `bw') + 1
+
+				summarize `z' if inrange(`relbin', -`L' + 1, `H'), meanonly
+				local zL = r(min) - `bw'/2
+				local zH = r(max) + `bw'/2
+			}
+			else {
+				local zH = `cutoff' + `H'*`bw'
+				local zL = `cutoff' - `L'*`bw'
+			}
+							
 				//Put bins in e(table)
 				tempname table
 				mkmat `y' `z', matrix(`table')
@@ -158,8 +175,13 @@
 				tempvar fw dupe dum dum2 bunch cons
 				gen byte `dum'=`z'>`cutoff'
 				gen byte `dum2'=`dum'
-				egen `bunch'=group(`z') if inrange(`z',`zL',`zH')
-				replace `bunch'=0 if `bunch'==.
+				if `nvars' == 2 {
+					egen `bunch' = group(`z') if inrange(`relbin', -`L' + 1, `H')
+				}
+				else {
+					egen `bunch' = group(`z') if inrange(`z', `zL', `zH')
+				}
+				replace `bunch' = 0 if missing(`bunch')
 				gen `cons'=1
 				count
 				loc numbins=r(N)
