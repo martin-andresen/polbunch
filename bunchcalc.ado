@@ -196,6 +196,5 @@ real scalar eresp(real scalar B, real scalar tau, real matrix cf, real scalar bw
     if (cols(out) == 0) return(.)
     else return((out[1] - tau) * xscale)
 }
-
 end
 

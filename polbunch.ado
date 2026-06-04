@@ -813,23 +813,4 @@ real matrix varcorrect(real matrix X, real matrix fw, real matrix e, real scalar
 }
 
 
-real scalar eresp(real scalar B, real scalar tau, real matrix cf, real scalar bw, real scalar xscale)
-{
-    real matrix integral, roots, realroots, out
-
-    if (cols(cf) == 1) {
-        if (cf[1] <= 0) return(.)
-        return(((B * bw) / cf[1]) * xscale)
-    }
-
-    integral = polyinteg(cf, 1)
-    integral[1] = -polyeval(integral, tau) - B*bw
-
-    roots = polyroots(integral)
-    realroots = Re(select(roots, Im(roots) :== 0))
-    out = sort(select(realroots, realroots :> tau)', 1)'
-
-    if (cols(out) == 0) return(.)
-    else return((out[1] - tau) * xscale)
-}
 end
