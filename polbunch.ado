@@ -363,101 +363,71 @@
 					}
 					}							
 							
-				if `estimator'>1 { //specify NL model
-					
-				//Specify parameter restrictions
-				
-				*********shift*********
-				if "`positiveshift'"!="nopositiveshift" loc shift exp({lnshift})
-				else loc shift {shift}
-				
-				*********b0************
-				loc B=0
-				forvalues b=1/`=`H'+`L'' {
-					loc B `B'+{bunch`b'}
-					}
-				loc cns (`B')*`bw'
-				if `estimator'!=2 {
-					forvalues k=1/`polynomial' {
-						if "`log'"=="" loc cns `cns' - ((`cutoff'^`=`k'+1')*((1+`shift')^(`=`k'+1')-1)*({b`k'}/`=`k'+1'))
-						else loc cns `cns' - (((`cutoff'+ln(1+`shift'))^(`=`k'+1')-`cutoff'^`=`k'+1')*({b`k'}/`=`k'+1'))
-						}
-						
-					if "`log'"=="" loc b0 (`cns')/(`cutoff'*`shift')
-					else loc b0 (`cns')/ln(1+`shift')
-				}
-				else {
-					loc cns ((`cns')/`shift')
-					su `z'
-					loc zmax=r(max)+`bw'/2				
-					forvalues k=1/`polynomial' {
-						loc cns `cns' - ({b`k'}/`=`k'+1')*(`zmax'^`=`k'+1'-`cutoff'^`=`k'+1')
-					}
-				loc b0 ((`cns')/(`zmax'-`cutoff'))
-				}
-				
-				********b1-bK*********
-				forvalues k=1/`polynomial' {
-					loc b`k' {b`k'}
-				}
-				
-				********g0-gK*********
-				forvalues k=0/`polynomial' {
-					if `estimator'==1 loc g`k' `b`k''
-					else if `estimator'==2 loc g`k' (`b`k'')/(1+`shift')
-					else if "`log'"=="" loc g`k' (`b`k'')*(1+`shift')^`=`k'+1'
-					else {
-						loc g`k' `b`k''
-						if `polynomial'>`k' forvalues n=`=`k'+1'/`polynomial' {
-							loc g`k' `g`k'' +{b`n'}*comb(`n',`k')*ln(1+`shift')^`=`n'-`k''
-						}
-					}
-				}
-				
-					
-				**** NL model string ****
-				loc modstr (`b0')*0.`dum'
-				forvalues k=1/`polynomial' {
-					loc modstr `modstr' +(`b`k'')*0.`dum'*`z'^`k'
-				}
-				loc modstr `modstr' +(`g0')*1.`dum'
-				forvalues k=1/`polynomial' {
-					loc modstr `modstr' +(`g`k'')*1.`dum'*`z'^`k'
-				}
-				
-				**** bunch dummies ****
-				forvalues bval=1/`=`H'+`L'' {
-					loc modstr `modstr' + {bunch`bval'}*`bval'.`bunch'
-					}
-
-				
-				//REPLACE { } with _b[/ ] for transformations and testing
-				foreach l in b g {
-					forvalues k=0/`polynomial' {
-						loc `l'`k' = subinstr("``l'`k''","{","_b[/",.)
-						loc `l'`k' = subinstr("``l'`k''","}","]",.)
-					}
-				}
-
-				//TESTSTRING
+				//BUILD TEST RESTRICITONS
 				if "`test'"!="notest" {
-						if `estimator'==3&"`log'"=="log" loc shiftres (exp((_b[/g`=`polynomial'-1']-_b[/b`=`polynomial'-1'])/(`polynomial'*_b[/b`polynomial']))-1)
-						else loc shiftres (_b[/g0]/_b[/b0]-1)
-						forvalues k=0/`polynomial' {
-							if "`positiveshift'"=="nopositiveshift" loc teststr `teststr' (_b[/g`k']=`=subinstr("`g`k''","_b[/shift]","`shiftres'",.)')
-							else loc teststr `teststr' (_b[/g`k']=`=subinstr("`g`k''","exp(_b[/lnshift])","`shiftres'",.)')
+
+				// Build symbolic restrictions g_k = f(b_k, shift)
+
+				if `estimator'==2 {
+
+					// shift identified from level ratio
+					loc shiftres (_b[/g0]/_b[/b0]-1)
+
+					forvalues k=0/`polynomial' {
+						loc rhs (_b[/b`k']/(1+`shiftres'))
+						loc teststr `teststr' (_b[/g`k'] = `rhs')
+					}
+
+				}
+				else if `estimator'==3 {
+
+					if "`log'"=="log" & `polynomial'>0 {
+						loc shiftres ///
+							(exp((_b[/g`=`polynomial'-1']-_b[/b`=`polynomial'-1']) ///
+							/(`polynomial'*_b[/b`polynomial']))-1)
+					}
+					else {
+						loc shiftres (_b[/g0]/_b[/b0]-1)
+					}
+
+					forvalues k=0/`polynomial' {
+
+						if "`log'"=="" {
+
+							// g_k = b_k (1+shift)^(k+1)
+
+							loc rhs (_b[/b`k']*(1+`shiftres')^`=`k'+1')
+
 						}
+						else {
+
+							// log-income case:
+							// g_k = sum_{n=k}^K b_n comb(n,k) ln(1+shift)^(n-k)
+
+							loc rhs _b[/b`k']
+
+							if `polynomial'>`k' {
+								forvalues n=`=`k'+1'/`polynomial' {
+									loc rhs ///
+									(`rhs' + ///
+									_b[/b`n']*comb(`n',`k')*ln(1+`shiftres')^`=`n'-`k'')
+								}
+							}
+						}
+
+						loc teststr `teststr' (_b[/g`k'] = `rhs')
 					}
 				}
-				else {
-					loc b0 _b[/b0]
-					if `estimator'==1&"`test'"!="notest" {
-						forvalues k=0/`polynomial' {
-							loc teststr `teststr' (_b[/b`k']=_b[g`k'])
-						}
+			}
+			else if `estimator'==1 {
+
+				if "`test'"!="notest" {
+					forvalues k=0/`polynomial' {
+						loc teststr `teststr' (_b[/b`k'] = _b[/g`k'])
 					}
 				}
-				
+			}
+							
 				
 				//ESTIMATION AND INFERENCE
 				tempname b V bu Vu tmpb
@@ -519,74 +489,22 @@
 					if `s'==0 mat `bu'=e(b)
 					
 					//ESTIMATE RESTRICTED MODEL
-					if `estimator'>1 { //with NLS
-						// find good starting values
-						// Use excess mass relative to predicted left density at cutoff.
+					if inlist(`estimator',2,3) {
+						profile23, ///
+							y(`y') z(`z') bunch(`bunch') relbin(`relbin') ///
+							cutoff_orig(`cutoff_orig') bw_orig(`bw_orig') ///
+							cutoff_est(`cutoff') bw_est(`bw') ///
+							polynomial(`polynomial') estimator(`estimator') ///
+							l(`L') h(`H') ///
+							`log' `normalize'
 
-						local Binit = 0
-						forvalues bval = 1/`=`H'+`L'' {
-							local thisb = _b[/bunch`bval']
-							if !missing(`thisb') {
-								local Binit = `Binit' + max(0, `thisb')
-							}
-						}
-
-						// fallback-safe predicted left-side bin count at cutoff
-						capture local hinit = _b[/b0]
-						if _rc {
-							quietly summarize `y' if `z' < `cutoff' & `bunch' == 0, meanonly
-							local hinit = r(mean)
-						}
-
-						forvalues k = 1/`polynomial' {
-							local hinit = `hinit' + _b[/b`k']*(`cutoff'^`k')
-						}
-
-						// fallback if polynomial prediction is bad
-						if missing(`hinit') | `hinit' <= 0 {
-							quietly summarize `y' if `z' < `cutoff' & `bunch' == 0, meanonly
-							local hinit = r(mean)
-						}
-
-						// approximate shift: excess bins / local counterfactual bin height
-						local shiftinit = (`Binit' * `bw') / (`hinit' * `cutoff')
-
-						if missing(`shiftinit') | `shiftinit' <= 0 {
-							local shiftinit = 0.05
-						}
-						if `shiftinit' > 0.5 {
-							local shiftinit = 0.5
-						}
-
-						// initialize shift
-						if "`positiveshift'" != "nopositiveshift" {
-							local init lnshift `=ln(`shiftinit')'
-						}
-						else {
-							local init shift `shiftinit'
-						}
-
-
-						// initialize higher-order polynomial terms; skipped automatically if polynomial==0
-						forvalues k = 1/`polynomial' {
-							local init `init' b`k' `=_b[/b`k']'
-						}
-
-						// initialize bunching dummy parameters
-						forvalues bval = 1/`=`H'+`L'' {
-							local init `init' bunch`bval' `=_b[/bunch`bval']'
-						}
-						
-						
-						//estimate restricted model W/ NLS
-						`noisily' nl (`y'=`modstr'), init(`init')
+						mat `b' = r(b)
 						if `bootreps'==1 {
-							varcorrect `y', nl `smallsample'
-							
-							mat `V'=r(V)
-							ereturn repost V=`V'
-							}
+							mat `V' = r(V)
 						}
+
+						ereturn post `b' `V'
+					}
 					else if `estimator'==1 { //With OLS
 						`noisily' reg `y' `rhsvars' `cons' `bunchvars', nocons
 						mat `b'=e(b)
@@ -600,30 +518,58 @@
 							}
 						else ereturn post `b'
 					}
-						if "`transform'"!="notransform" { //TRANSFORM ESTIMATES
-							if `bootreps'==1 {
-								bunchcalc, estimator(`estimator') polynomial(`polynomial') cutoff(`cutoff_orig') bw(`bw_orig') h(`H') l(`L') b0(`b0') t0(`t0') t1(`t1') `constant' `positiveshift' `log' nlcom(`nlcom') `normalize'
-								mat `V'=r(V)
+						if "`transform'"!="notransform"&inlist(`estimator',1,0) { //TRANSFORM ESTIMATES
+							local nlcomopt
+							if "`nlcom'" != "" local nlcomopt nlcom(`nlcom')
+
+							if inlist(`estimator', 2, 3) {
+								if `s' == 0 {
+									mat `b' = e(b)
+									if `bootreps' == 1 mat `V' = e(V)
+								}
+								else if `bootreps' == 2 {
+									mat `V' = nullmat(`V') \ e(b)
+								}
 							}
-							else bunchcalc, estimator(`estimator') polynomial(`polynomial') cutoff(`cutoff_orig') bw(`bw_orig') h(`H') l(`L') b0(`b0') t0(`t0') t1(`t1') boot `constant' `positiveshift' `log' nlcom(`nlcom') `normalize'
-							if r(exit)==1 {
-								noi di in red "Could not find solution to polynomial equation for the response of the marginal buncher in one or more bootstrap repetitions. You could consider trying the constant approximation using the option "constant", or the option "notransform" to report raw estimates and then manually convert those to objects of interest post-estimation (the latter being less prone to bias)."
-								exit 301
-							}
-							if `s'==0 {
-								loc nlcom `=r(nlcom)'
-								mat `b'=r(b)
+							else if "`transform'" != "notransform" {
+								if `bootreps' == 1 {
+									bunchcalc, estimator(`estimator') polynomial(`polynomial') ///
+										cutoff(`cutoff_orig') bw(`bw_orig') h(`H') l(`L') ///
+										b0(`b0') t0(`t0') t1(`t1') ///
+										`constant' `positiveshift' `log' `nlcomopt' `normalize'
+									mat `V' = r(V)
+								}
+								else {
+									bunchcalc, estimator(`estimator') polynomial(`polynomial') ///
+										cutoff(`cutoff_orig') bw(`bw_orig') h(`H') l(`L') ///
+										b0(`b0') t0(`t0') t1(`t1') boot ///
+										`constant' `positiveshift' `log' `nlcomopt' `normalize'
+								}
+
+								if r(exit) == 1 {
+									noi di as error `"Could not find solution to polynomial equation for the response of the marginal buncher in one or more bootstrap repetitions. Try constant or notransform."'
+									exit 301
+								}
+
+								if `s' == 0 {
+									local nlcom `r(nlcom)'
+									mat `b' = r(b)
+								}
+								else {
+									mat `V' = nullmat(`V') \ r(b)
+								}
 							}
 							else {
-								mat `V'=nullmat(`V') \ r(b)
+								if `s' == 0 {
+									mat `b' = e(b)
+									if `bootreps' == 1 mat `V' = e(V)
+								}
+								else if `bootreps' == 2 {
+									mat `V' = nullmat(`V') \ e(b)
+								}
 							}
-						}
-						else if `s'==0 {
-							mat `b'=e(b)
-							if `bootreps'==1 mat `V'=e(V)
-							}
-						else if `s'>0&`bootreps'==2 mat `V'=nullmat(`V') \ e(b)
-						if `s'>0 noi _dots `s' 0
+
+							if `s' > 0 noi _dots `s' 0
 					}
 					
 					//bootstrap inference sunmmary & test
@@ -701,6 +647,7 @@
 				ereturn scalar cutoff=`cutoff'
 				ereturn scalar lower_limit=`zL'
 				ereturn scalar upper_limit=`zH'
+				ereturn local normalize="`normalize'"
 				if `bootreps'>0 ereturn local cmd "polbunch"
 				ereturn local cmdname "polbunch"
 				ereturn local title 	"Polynomial bunching estimates"
@@ -785,6 +732,26 @@ program define varcorrect, rclass
 end
 
 
+program define profile23, rclass
+    syntax, y(name) z(name) relbin(name) bunch(name) ///
+        cutoff_orig(real) bw_orig(real) ///
+        polynomial(integer) estimator(integer) l(integer) h(integer) ///
+        [log nonormalize t0(real) t1(real)]
+
+    mata: profile23_run( ///
+        "`y'", "`z'", "`relbin'", "`bunch'", ///
+        `cutoff_orig', `bw_orig', ///
+        `polynomial', `estimator', ///
+        ("`nonormalize'" == ""), ///
+        ("`log'" == "log"), ///
+        `l', `h', ///
+        ("`t0'" != ""), `t0', `t1' ///
+    )
+
+    return matrix b = r_b_profile23
+    return matrix V = r_V_profile23
+end
+
 mata:
 
 real matrix varcorrect(real matrix X, real matrix fw, real matrix e, real scalar addcons)
@@ -812,5 +779,161 @@ real matrix varcorrect(real matrix X, real matrix fw, real matrix e, real scalar
     return(bread * meat * bread)
 }
 
+void profile23_run(
+    string scalar yvar,
+    string scalar zvar,
+    string scalar relbinvar,
+    string scalar bunchvar,
+    real scalar cutoff_orig,
+    real scalar bw_orig,
+    real scalar K,
+    real scalar estimator,
+    real scalar normalized,
+    real scalar islog,
+    real scalar L,
+    real scalar H,
+    real scalar has_tax,
+    real scalar t0,
+    real scalar t1
+)
+{
+    real colvector y, z, relbin, bunch, side
+    real scalar Hstar, lndelta_hat, delta_hat, elasticity
+    real rowvector beta_hat, b
+    transmorphic S
+
+    y      = st_data(., yvar)
+    z      = st_data(., zvar)
+    relbin = st_data(., relbinvar)
+    bunch  = st_data(., bunchvar)
+
+    side = J(rows(y), 1, .)
+    side[relbin :< -L + 1] = -1
+    side[relbin :>  H]     =  1
+
+    Hstar = sum(select(y, bunch :> 0))
+
+    S = optimize_init()
+    optimize_init_evaluator(S, &profQ23())
+    optimize_init_evaluatortype(S, "d0")
+    optimize_init_params(S, ln(0.05))
+
+    optimize_init_argument(S, 1,  y)
+    optimize_init_argument(S, 2,  z)
+    optimize_init_argument(S, 3,  side)
+    optimize_init_argument(S, 4,  bunch)
+    optimize_init_argument(S, 5,  Hstar)
+    optimize_init_argument(S, 6,  cutoff_orig)
+    optimize_init_argument(S, 7,  bw_orig)
+    optimize_init_argument(S, 8,  K)
+    optimize_init_argument(S, 9,  estimator)
+    optimize_init_argument(S, 10, normalized)
+    optimize_init_argument(S, 11, islog)
+    optimize_init_argument(S, 12, L)
+    optimize_init_argument(S, 13, H)
+
+    lndelta_hat = optimize(S)
+    delta_hat = exp(lndelta_hat)
+
+    beta_hat = profBeta23(
+        delta_hat,
+        y, z, side, bunch, Hstar,
+        cutoff_orig, bw_orig,
+        K, estimator, normalized, islog, L, H
+    )
+
+    if (has_tax == 1) {
+        elasticity = ln(1 + delta_hat) / (ln(1 - t0) - ln(1 - t1))
+    }
+    else {
+        elasticity = .
+    }
+
+    b = beta_hat, Hstar, delta_hat, elasticity
+
+    st_matrix("r_b_profile23", b)
+    st_matrix("r_V_profile23", J(cols(b), cols(b), .))
+}
+
+real scalar profQ23(
+    real scalar lndelta,
+    real colvector y,
+    real colvector z,
+    real colvector side,
+    real colvector bunch,
+    real scalar Hstar,
+    real scalar cutoff_orig,
+    real scalar bw_orig,
+    real scalar K,
+    real scalar estimator,
+    real scalar normalized,
+    real scalar islog,
+    real scalar L,
+    real scalar H
+)
+{
+    real scalar delta
+    real colvector yout, zout, sideout, ystack, resid
+    real matrix X, W, beta
+
+    delta = exp(lndelta)
+
+    yout    = select(y,     bunch :== 0)
+    zout    = select(z,     bunch :== 0)
+    sideout = select(side,  bunch :== 0)
+
+    X = makeX23(delta, zout, sideout, cutoff_orig, bw_orig, K, ///
+                estimator, normalized, islog, L, H)
+
+    ystack = select(yout, sideout :== -1) \ ///
+             select(yout, sideout :==  1) \ ///
+             Hstar
+
+    W = makeW(ystack)
+
+    beta = invsym(X' * W * X) * X' * W * ystack
+    resid = ystack - X * beta
+
+    return(resid' * W * resid)
+}
+
+
+real rowvector profBeta23(
+    real scalar delta,
+    real colvector y,
+    real colvector z,
+    real colvector side,
+    real colvector bunch,
+    real scalar Hstar,
+    real scalar cutoff_orig,
+    real scalar bw_orig,
+    real scalar K,
+    real scalar estimator,
+    real scalar normalized,
+    real scalar islog,
+    real scalar L,
+    real scalar H
+)
+{
+    real colvector yout, zout, sideout, ystack
+    real matrix X, W, beta
+
+    yout    = select(y,     bunch :== 0)
+    zout    = select(z,     bunch :== 0)
+    sideout = select(side,  bunch :== 0)
+
+    X = makeX23(delta, zout, sideout, cutoff_orig, bw_orig, K, ///
+                estimator, normalized, islog, L, H)
+
+    ystack = select(yout, sideout :== -1) \ ///
+             select(yout, sideout :==  1) \ ///
+             Hstar
+
+    W = makeW(ystack)
+
+    beta = invsym(X' * W * X) * X' * W * ystack
+
+    return(beta')
+}
 
 end
