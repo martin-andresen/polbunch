@@ -1,6 +1,6 @@
 // bunchcalc: Transforms estimates to h0,h1,B,excess_mass,shift,marginal_response,(elasticity)
 program bunchcalc, rclass
-	syntax, estimator(integer) cutoff(real) polynomial(integer) bw(real) h(integer) l(integer) [b0(string) 	t0(numlist min=1 max=1 <1) t1(numlist min=1 max=1 <1) constant nopositiveshift boot log nlcom(string)]
+	syntax, estimator(integer) cutoff(real) polynomial(integer) bw(real) h(integer) l(integer) [b0(string) 	t0(numlist min=1 max=1 <1) t1(numlist min=1 max=1 <1) constant nopositiveshift boot log nlcom(string) nonormalize]
 	
 	if "`positiveshift'"!="nopositiveshift" loc shift exp(_b[/lnshift])
 	else loc shift _b[/shift]
