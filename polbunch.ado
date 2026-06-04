@@ -164,19 +164,17 @@
 				if `estimator'==4 loc polynomial=0
 				
 				//NORMALIZE Z
-				tempvar znorm
-				loc z_orig = `z'
+				tempvar z_orig
+				gen double `z_orig'=`z' 
 				loc cutoff_orig = `cutoff'
 				loc bw_orig = `bw'
 				
 				if "`normalize'" != "nonormalize" {
-					gen double `znorm' = (`z' - `cutoff') / `bw'
-					local z `znorm'
+					replace `z' = (`z' - `cutoff') / `bw'
 					local cutoff = 0
 					local bw = 1
 				}
 				else {
-					local z `z'
 					local cutoff= `cutoff'
 					local bw = `bw'
 				}
@@ -604,10 +602,10 @@
 					}
 						if "`transform'"!="notransform" { //TRANSFORM ESTIMATES
 							if `bootreps'==1 {
-								bunchcalc, estimator(`estimator') polynomial(`polynomial') cutoff(`cutoff_orig') bw(`bw_orig') h(`H') l(`L') b0(`b0') t0(`t0') t1(`t1') `constant' `positiveshift' `log' nlcom(`nlcom')
+								bunchcalc, estimator(`estimator') polynomial(`polynomial') cutoff(`cutoff_orig') bw(`bw_orig') h(`H') l(`L') b0(`b0') t0(`t0') t1(`t1') `constant' `positiveshift' `log' nlcom(`nlcom') `normalize'
 								mat `V'=r(V)
 							}
-							else bunchcalc, estimator(`estimator') polynomial(`polynomial') cutoff(`cutoff_orig') bw(`bw_orig') h(`H') l(`L') b0(`b0') t0(`t0') t1(`t1') boot `constant' `positiveshift' `log' nlcom(`nlcom')
+							else bunchcalc, estimator(`estimator') polynomial(`polynomial') cutoff(`cutoff_orig') bw(`bw_orig') h(`H') l(`L') b0(`b0') t0(`t0') t1(`t1') boot `constant' `positiveshift' `log' nlcom(`nlcom') `normalize'
 							if r(exit)==1 {
 								noi di in red "Could not find solution to polynomial equation for the response of the marginal buncher in one or more bootstrap repetitions. You could consider trying the constant approximation using the option "constant", or the option "notransform" to report raw estimates and then manually convert those to objects of interest post-estimation (the latter being less prone to bias)."
 								exit 301
@@ -815,13 +813,13 @@ real matrix varcorrect(real matrix X, real matrix fw, real matrix e, real scalar
 }
 
 
-real scalar eresp(real scalar B, real scalar tau, real matrix cf, real scalar bw)
+real scalar eresp(real scalar B, real scalar tau, real matrix cf, real scalar bw, real scalar xscale)
 {
     real matrix integral, roots, realroots, out
 
     if (cols(cf) == 1) {
         if (cf[1] <= 0) return(.)
-        return((B * bw) / cf[1])
+        return(((B * bw) / cf[1]) * xscale)
     }
 
     integral = polyinteg(cf, 1)
@@ -832,7 +830,6 @@ real scalar eresp(real scalar B, real scalar tau, real matrix cf, real scalar bw
     out = sort(select(realroots, realroots :> tau)', 1)'
 
     if (cols(out) == 0) return(.)
-    else return(out[1] - tau)
+    else return((out[1] - tau) * xscale)
 }
-
 end

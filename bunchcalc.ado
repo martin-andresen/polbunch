@@ -5,6 +5,24 @@ program bunchcalc, rclass
 	if "`positiveshift'"!="nopositiveshift" loc shift exp(_b[/lnshift])
 	else loc shift _b[/shift]
 	
+	// cutoff() and bw() are always passed in original units.
+	// If normalized, the fitted polynomial is in x = (z-cutoff)/bw units.
+	// Then the estimation-scale cutoff/bw are 0/1, and xscale converts
+	// marginal response back to original z units.
+	local cutoff_orig = `cutoff'
+	local bw_orig     = `bw'
+
+	if "`normalize'" == "nonormalize" {
+		local cutoff_est = `cutoff_orig'
+		local bw_est     = `bw_orig'
+		local xscale     = 1
+	}
+	else {
+		local cutoff_est = 0
+		local bw_est     = 1
+		local xscale     = `bw_orig'
+	}
+
 	//b0 (constant in h0)
 	if "`b0'"!=""&`estimator'>0 {
 		if "`positiveshift'"!="nopositiveshift" loc b0=subinstr("`b0'","{lnshift}","_b[/lnshift]",.)
@@ -70,23 +88,23 @@ program bunchcalc, rclass
 		loc nlcom `nlcom' (`B')
 		loc m `b0'
 		forvalues k=1/`polynomial' {
-			loc m `m' + _b[/b`k']*`cutoff'^(`k')
+			loc m `m' + _b[/b`k']*`cutoff_est'^(`k')
 		}
 		loc nlcom `nlcom' ((`B')/(`m')) //excess mass
 		
-		if "`constant'"!=""	loc deltaz (`bw'*(`B')/(`m'))
+		if "`constant'"!=""	loc deltaz (`bw_orig'*(`B')/(`m'))
 		
 		if `estimator'==3&"`constant'"=="" {
-			loc deltaz `shift'*`cutoff'
+			loc deltaz `shift'*`cutoff_orig'
 			loc nlcom `nlcom' (`shift') (`deltaz')
 			if "`t0'"!=""&"`t1'"!=""  loc nlcom `nlcom' (ln(1+`shift')/(ln(1-(`t0'))-ln(1-(`t1'))))
 			}
 		else if "`constant'"!="" {
-			if "`log'"=="" loc nlcom `nlcom' (`deltaz'/`cutoff') (`deltaz')
-			else loc nlcom `nlcom' (exp(`deltaz'+`cutoff')/exp(`cutoff')) (`deltaz')
+			if "`log'"=="" loc nlcom `nlcom' (`deltaz'/`cutoff_orig') (`deltaz')
+			else loc nlcom `nlcom' (exp(`deltaz'+`cutoff')/exp(`cutoff_orig')) (`deltaz')
 			if "`t0'"!=""&"`t1'"!="" { //elasticity
-				if "`log'"=="" loc nlcom `nlcom' (ln(1+ `deltaz'/`cutoff')/(ln(1-(`t0'))-ln(1-(`t1')))) 
-				else loc nlcom `nlcom' ((ln(exp(`cutoff'+`deltaz'))-`cutoff')/(ln(1-(`t0'))-ln(1-(`t1'))))
+				if "`log'"=="" loc nlcom `nlcom' (ln(1+ `deltaz'/`cutoff_orig')/(ln(1-(`t0'))-ln(1-(`t1')))) 
+				else loc nlcom `nlcom' ((ln(exp(`cutoff'+`deltaz'))-`cutoff_orig')/(ln(1-(`t0'))-ln(1-(`t1'))))
 			}
 		}
 	}
@@ -106,14 +124,14 @@ program bunchcalc, rclass
 			forvalues k=1/`polynomial' {
 				mat `h0'=`h0',_b[/b`k']
 			}
-			mata: st_numscalar("eresp",eresp(`=`B'',`cutoff',st_matrix("`h0'"),`bw'))
+			mata: st_numscalar("eresp",eresp(`=`B'',`cutoff_est',st_matrix("`h0'"),`bw_est',`xscale'))
 			if eresp==. loc exit=1
 			
-			if "`log'"=="" mat `b'=`b',`=eresp/`cutoff'',eresp
+			if "`log'"=="" mat `b'=`b',`=eresp/`cutoff_orig'',eresp
 			else mat `b'=`b',`=exp(eresp+`cutoff')/exp(`cutoff')',eresp
 			if "`t0'"!=""&"`t1'"!="" { //elasticity
-				if "`log'"=="" mat `b'=`b',`=ln(1+ eresp/`cutoff')/(ln(1-(`t0'))-ln(1-(`t1')))'
-				else mat `b'=`b',`=(ln(exp(`cutoff'+eresp))-`cutoff')/(ln(1-(`t0'))-ln(1-(`t1')))'
+				if "`log'"=="" mat `b'=`b',`=ln(1+ eresp/`cutoff_orig')/(ln(1-(`t0'))-ln(1-(`t1')))'
+				else mat `b'=`b',`=(ln(exp(`cutoff'+eresp))-`cutoff_orig')/(ln(1-(`t0'))-ln(1-(`t1')))'
 			}
 
 			if "`t0'"!=""&"`t1'"!="" loc extra=3
@@ -133,13 +151,13 @@ program bunchcalc, rclass
 			forvalues k=1/`polynomial' {
 				mat `h0'=`h0',_b[/b`k']
 			}
-			mata: st_numscalar("eresp",eresp(`=`B'',`cutoff',st_matrix("`h0'"),`bw'))
+			mata: st_numscalar("eresp",eresp(`=`B'',`cutoff_est',st_matrix("`h0'"),`bw_est',`xscale'))
 			if eresp==. loc exit=1
-			if "`log'"=="" mat `b'=`b',`=eresp/`cutoff'',eresp
+			if "`log'"=="" mat `b'=`b',`=eresp/`cutoff_orig'',eresp
 			else mat `b'=`b',`=exp(eresp+`cutoff')/exp(`cutoff')',eresp
 			if "`t0'"!=""&"`t1'"!="" { //elasticity
-				if "`log'"=="" mat `b'=`b',`=ln(1+ eresp/`cutoff')/(ln(1-(`t0'))-ln(1-(`t1')))'
-				else mat `b'=`b',`=(ln(exp(`cutoff'+eresp))-`cutoff')/(ln(1-(`t0'))-ln(1-(`t1')))'
+				if "`log'"=="" mat `b'=`b',`=ln(1+ eresp/`cutoff_orig')/(ln(1-(`t0'))-ln(1-(`t1')))'
+				else mat `b'=`b',`=(ln(exp(`cutoff'+eresp))-`cutoff_orig')/(ln(1-(`t0'))-ln(1-(`t1')))'
 			}
 
 		}
