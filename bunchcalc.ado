@@ -1,179 +1,313 @@
-// bunchcalc: Transforms estimates to h0,h1,B,excess_mass,shift,marginal_response,(elasticity)
 program bunchcalc, rclass
-	syntax, estimator(integer) cutoff(real) polynomial(integer) bw(real) h(integer) l(integer) [b0(string) 	t0(numlist min=1 max=1 <1) t1(numlist min=1 max=1 <1) constant nopositiveshift boot log nlcom(string) nonormalize]
-	
-	if "`positiveshift'"!="nopositiveshift" loc shift exp(_b[/lnshift])
-	else loc shift _b[/shift]
-	
-	// cutoff() and bw() are always passed in original units.
-	// If normalized, the fitted polynomial is in x = (z-cutoff)/bw units.
-	// Then the estimation-scale cutoff/bw are 0/1, and xscale converts
-	// marginal response back to original z units.
-	local cutoff_orig = `cutoff'
-	local bw_orig     = `bw'
+    syntax [anything], estimator(integer) cutoff(real) polynomial(integer) bw(real) ///
+        z(name) h(integer) l(integer) ///
+        [t0(numlist min=1 max=1 <1) t1(numlist min=1 max=1 <1) ///
+         boot log nonormalize constant]
 
-	if "`normalize'" == "nonormalize" {
-		local cutoff_est = `cutoff_orig'
-		local bw_est     = `bw_orig'
-		local xscale     = 1
-	}
-	else {
-		local cutoff_est = 0
-		local bw_est     = 1
-		local xscale     = `bw_orig'
-	}
+    local nlcom `"`anything'"'
 
-	//b0 (constant in h0)
-	if "`b0'"!=""&`estimator'>0 {
-		if "`positiveshift'"!="nopositiveshift" loc b0=subinstr("`b0'","{lnshift}","_b[/lnshift]",.)
-		else loc b0=subinstr("`b0'","{shift}","_b[/shift]",.)
-		forvalues k=1/`=`polynomial'' {
-			loc b0=subinstr("`b0'","{b`k'}","_b[/b`k']",.)
-		}
-		forvalues b=1/`=`h'+`l'' {
-			loc b0=subinstr("`b0'","{bunch`b'}","_b[/bunch`b']",.)
-		}
-	}
-	
-	//number bunchers
-	loc B=0
-	forvalues b=1/`=`h'+`l'' {
-		loc B `B'+_b[/bunch`b']
-		}
-	
-	//compute nlcom string
-	if "`nlcom'"=="" {
-		//bk (parameters in h0)
-		forvalues k=1/`=`polynomial'' {
-			loc nlcom `nlcom' (_b[/b`k'])
-		}
-		loc nlcom `nlcom' (`b0')
-		
-		//gk (parameters in h1)
-		forvalues k=1/`polynomial' {
-			if `estimator'==0 loc nlcom `nlcom' (_b[/g`k'])
-			else if `estimator'==1 loc nlcom `nlcom' (_b[/b`k'])
-			else if `estimator'==2 loc nlcom `nlcom' (_b[/b`k']/(1+`shift'))
-			else if "`log'"=="" loc nlcom `nlcom' (_b[/b`k']*(1+`shift')^(`=`k'+1'))
-			else {
-					loc str _b[/b`k']
-					if (`polynomial'>`k') {
-						forvalues n=`=`k'+1'/`=`polynomial'' {
-							loc str `str' +_b[/b`n']*comb(`n',`k')*ln(1+`shift')^(`n'-`k')
-						}
-					}
-				loc nlcom `nlcom' (`str')
-				}
-			}
-		
-		//g0 (constant in h1)
-		if `estimator'==0 loc nlcom `nlcom' (_b[/g0])
-		else if `estimator'==1 loc nlcom `nlcom' (`b0')
-		else if `estimator'==2 loc nlcom `nlcom' ((`b0')/(1+`shift'))
-		else if "`log'"=="" loc nlcom `nlcom' ((`b0')*(1+`shift')) 
-		else {
-			loc str `b0'
-			forvalues n=1/`=`polynomial'' {
-					loc str `str' +_b[/b`n']*ln(1+`shift')^`n'
-				}
-				loc nlcom `nlcom' (`str')
-		}
-		
-		//delta from chetty estimator
-		if `estimator'==2 {
-			loc nlcom `nlcom' (`shift')
-		}
+    local cutoff_orig = `cutoff'
+    local bw_orig     = `bw'
 
-		//number bunchers
-		loc nlcom `nlcom' (`B')
-		loc m `b0'
-		forvalues k=1/`polynomial' {
-			loc m `m' + _b[/b`k']*`cutoff_est'^(`k')
-		}
-		loc nlcom `nlcom' ((`B')/(`m')) //excess mass
-		
-		if "`constant'"!=""	loc deltaz (`bw_orig'*(`B')/(`m'))
-		
-		if `estimator'==3&"`constant'"=="" {
-			loc deltaz `shift'*`cutoff_orig'
-			loc nlcom `nlcom' (`shift') (`deltaz')
-			if "`t0'"!=""&"`t1'"!=""  loc nlcom `nlcom' (ln(1+`shift')/(ln(1-(`t0'))-ln(1-(`t1'))))
-			}
-		else if "`constant'"!="" {
-			if "`log'"=="" loc nlcom `nlcom' (`deltaz'/`cutoff_orig') (`deltaz')
-			else loc nlcom `nlcom' (exp(`deltaz'+`cutoff')/exp(`cutoff_orig')) (`deltaz')
-			if "`t0'"!=""&"`t1'"!="" { //elasticity
-				if "`log'"=="" loc nlcom `nlcom' (ln(1+ `deltaz'/`cutoff_orig')/(ln(1-(`t0'))-ln(1-(`t1')))) 
-				else loc nlcom `nlcom' ((ln(exp(`cutoff'+`deltaz'))-`cutoff_orig')/(ln(1-(`t0'))-ln(1-(`t1'))))
-			}
-		}
-	}
-			
-			
-	/// TRANSFORM ESTIMATES
-	tempname b
-	if "`boot'"=="" {
-		tempname V
-		nlcom `nlcom'
-		mat `b'=r(b)
-		mat `V'=r(V)
-		if `estimator'<3&"`constant'"=="" {
-			//calculate shift/MR/el without variance and add to b,V
-			tempname h0
-			mat `h0'=`b0'
-			forvalues k=1/`polynomial' {
-				mat `h0'=`h0',_b[/b`k']
-			}
-			mata: st_numscalar("eresp",eresp(`=`B'',`cutoff_est',st_matrix("`h0'"),`bw_est',`xscale'))
-			if eresp==. loc exit=1
-			
-			if "`log'"=="" mat `b'=`b',`=eresp/`cutoff_orig'',eresp
-			else mat `b'=`b',`=exp(eresp+`cutoff')/exp(`cutoff')',eresp
-			if "`t0'"!=""&"`t1'"!="" { //elasticity
-				if "`log'"=="" mat `b'=`b',`=ln(1+ eresp/`cutoff_orig')/(ln(1-(`t0'))-ln(1-(`t1')))'
-				else mat `b'=`b',`=(ln(exp(`cutoff'+eresp))-`cutoff_orig')/(ln(1-(`t0'))-ln(1-(`t1')))'
-			}
+    if "`nonormalize'" == "nonormalize" {
+        local cutoff_est = `cutoff_orig'
+        local bw_est     = `bw_orig'
+        local xscale     = 1
+    }
+    else {
+        local cutoff_est = 0
+        local bw_est     = 1
+        local xscale     = `bw_orig'
+    }
 
-			if "`t0'"!=""&"`t1'"!="" loc extra=3
-			else loc extra=2
-			mat `V'=[`V', J(rowsof(`V'),`extra',0) \ J(`extra',colsof(`V'),0) , J(`extra',`extra',0)]
-		}
-	}
-	else {
-		 loc nlcom2 `nlcom'
-		 while "`nlcom2'"!="" {
-			gettoken use nlcom2: nlcom2, match(parns)
-			mat `b'=nullmat(`b'),`=`use''
-		}
-		if `estimator'<3&"`constant'"=="" {
-			tempname h0
-			mat `h0'=`b0'
-			forvalues k=1/`polynomial' {
-				mat `h0'=`h0',_b[/b`k']
-			}
-			mata: st_numscalar("eresp",eresp(`=`B'',`cutoff_est',st_matrix("`h0'"),`bw_est',`xscale'))
-			if eresp==. loc exit=1
-			if "`log'"=="" mat `b'=`b',`=eresp/`cutoff_orig'',eresp
-			else mat `b'=`b',`=exp(eresp+`cutoff')/exp(`cutoff')',eresp
-			if "`t0'"!=""&"`t1'"!="" { //elasticity
-				if "`log'"=="" mat `b'=`b',`=ln(1+ eresp/`cutoff_orig')/(ln(1-(`t0'))-ln(1-(`t1')))'
-				else mat `b'=`b',`=(ln(exp(`cutoff'+eresp))-`cutoff_orig')/(ln(1-(`t0'))-ln(1-(`t1')))'
-			}
+    // polynomial term names
+    forvalues k = 1/`polynomial' {
+        local term`k' c.`z'
+        if `k' > 1 {
+            forvalues j = 2/`k' {
+                local term`k' `term`k''#c.`z'
+            }
+        }
+    }
 
+    // h0(cutoff)
+    local h0cut _b[h0:_cons]
+    forvalues k = 1/`polynomial' {
+        local h0cut `h0cut' + _b[h0:`term`k'']*`cutoff_est'^`k'
+    }
+
+    // B expression
+    if inlist(`estimator', 0, 1) {
+        local B 0
+        forvalues j = 1/`=`h'+`l'' {
+            local B `B' + _b[bunching:`j'.bunch]
+        }
+    }
+    else {
+        local ex_lo = `cutoff_est' + (-`l' + 1)*`bw_est'
+        local ex_hi = `cutoff_est' + (`h' + 1)*`bw_est'
+
+        local cfmass _b[h0:_cons]*(`ex_hi' - `ex_lo')
+        forvalues k = 1/`polynomial' {
+            local cfmass `cfmass' + ///
+                _b[h0:`term`k'']*((`ex_hi'^(`k'+1) - `ex_lo'^(`k'+1))/(`k'+1))
+        }
+
+        local B (_b[bunching:Hstar] - (`cfmass'))
+    }
+
+    // Build nlcom only if not supplied
+    if `"`nlcom'"' == "" {
+        local nlcom
+
+        // h0 coefficients
+        forvalues k = 1/`polynomial' {
+            local nlcom `nlcom' (h0_`k': _b[h0:`term`k''])
+        }
+        local nlcom `nlcom' (h0_cons: _b[h0:_cons])
+
+        // h1 coefficients
+        forvalues k = 1/`polynomial' {
+            if `estimator' == 0 {
+                local h1expr _b[h1:`term`k'']
+            }
+            else if `estimator' == 1 {
+                local h1expr _b[h0:`term`k'']
+            }
+            else if `estimator' == 2 {
+                local h1expr (_b[h0:`term`k'']/(1+_b[bunching:delta]))
+            }
+            else if "`log'" == "" {
+                local h1expr (_b[h0:`term`k'']*(1+_b[bunching:delta])^(`k'+1))
+            }
+            else {
+                local h1expr _b[h0:`term`k'']
+                if `polynomial' > `k' {
+                    forvalues n = `=`k'+1'/`polynomial' {
+                        local h1expr (`h1expr' + ///
+                            _b[h0:`term`n'']*comb(`n',`k')*ln(1+_b[bunching:delta])^(`n'-`k'))
+                    }
+                }
+            }
+            local nlcom `nlcom' (h1_`k': `h1expr')
+        }
+
+        // h1 constant
+        if `estimator' == 0 {
+            local h1cons _b[h1:_cons]
+        }
+        else if `estimator' == 1 {
+            local h1cons _b[h0:_cons]
+        }
+        else if `estimator' == 2 {
+            local h1cons (_b[h0:_cons]/(1+_b[bunching:delta]))
+        }
+        else if "`log'" == "" {
+            local h1cons (_b[h0:_cons]*(1+_b[bunching:delta]))
+        }
+        else {
+            local h1cons _b[h0:_cons]
+            forvalues n = 1/`polynomial' {
+                local h1cons (`h1cons' + _b[h0:`term`n'']*ln(1+_b[bunching:delta])^`n')
+            }
+        }
+        local nlcom `nlcom' (h1_cons: `h1cons')
+
+        // common bunching objects
+        local nlcom `nlcom' ///
+            (number_bunchers: `B') ///
+            (excess_mass: (`B')/(`h0cut'))
+
+        // shift/MR/elasticity: estimator 3 directly use delta
+        if inlist(`estimator', 3) {
+            local nlcom `nlcom' ///
+                (shift: _b[bunching:delta]) ///
+                (marginal_response: _b[bunching:delta]*`cutoff_orig')
+
+            if "`t0'" != "" & "`t1'" != "" {
+                local nlcom `nlcom' ///
+                    (elasticity: ln(1+_b[bunching:delta])/(ln(1-(`t0'))-ln(1-(`t1'))))
+            }
+        }
+
+        // constant approximation for estimator 0/1/2: algebraic, so use nlcom
+        if inlist(`estimator', 0, 1,2) & "`constant'" != "" {
+            local deltaz ((`B')*`bw_orig'/(`h0cut'))
+
+            if "`log'" == "" {
+                local shift_expr (`deltaz'/`cutoff_orig')
+                local mr_expr    (`deltaz')
+                local el_expr    (ln(1+`deltaz'/`cutoff_orig')/(ln(1-(`t0'))-ln(1-(`t1'))))
+            }
+            else {
+                local shift_expr (exp(`deltaz')-1)
+                local mr_expr    (`deltaz')
+                local el_expr    (`deltaz'/(ln(1-(`t0'))-ln(1-(`t1'))))
+            }
+
+            local nlcom `nlcom' ///
+                (shift: `shift_expr') ///
+                (marginal_response: `mr_expr')
+
+            if "`t0'" != "" & "`t1'" != "" {
+                local nlcom `nlcom' (elasticity: `el_expr')
+            }
+        }
+    }
+
+    tempname b V
+
+    // Evaluate algebraic transformations
+    if "`boot'" == "" {
+        quietly nlcom `nlcom'
+        matrix `b' = r(b)
+        matrix `V' = r(V)
+    }
+    else {
+        local nlcom2 `"`nlcom'"'
+        while `"`nlcom2'"' != "" {
+            gettoken use nlcom2 : nlcom2, match(parns)
+            matrix `b' = nullmat(`b'), `=`use''
+        }
+    }
+
+    // Estimator 0/1/2, non-constant: append eresp-based shift/MR/elasticity
+    if inlist(`estimator', 0, 1,2) & "`constant'" == "" {
+        tempname h0coef
+
+        matrix `h0coef' = J(1, `=`polynomial'+1', .)
+        forvalues k = 1/`polynomial' {
+            matrix `h0coef'[1,`k'] = _b[h0:`term`k'']
+        }
+        matrix `h0coef'[1,`=`polynomial'+1'] = _b[h0:_cons]
+
+        mata: st_numscalar("rhat", eresp(`=`B'', `cutoff_est', st_matrix("`h0coef'"), `bw_est', `xscale'))
+
+        if rhat == . {
+            return scalar exit = 1
+            exit
+        }
+
+        if "`log'" == "" {
+            matrix `b' = `b', `=rhat/`cutoff_orig'', rhat
+        }
+        else {
+            matrix `b' = `b', `=exp(rhat)-1', rhat
+        }
+
+        if "`t0'" != "" & "`t1'" != "" {
+            if "`log'" == "" {
+                matrix `b' = `b', `=ln(1+rhat/`cutoff_orig')/(ln(1-(`t0'))-ln(1-(`t1')))'
+            }
+            else {
+                matrix `b' = `b', `=rhat/(ln(1-(`t0'))-ln(1-(`t1')))'
+            }
+        }
+
+        // Manual delta-method VCV for appended objects
+        if "`boot'" == "" {
+            tempname Graw Gextra Vraw Vextra
+            matrix `Vraw' = e(V)
+            matrix `Graw' = J(1, colsof(e(b)), 0)
+
+            local r_est = rhat/`xscale'
+            local zu = `cutoff_est' + `r_est'
+
+            local hzu _b[h0:_cons]
+            forvalues k = 1/`polynomial' {
+                local hzu `hzu' + _b[h0:`term`k'']*(`zu'^`k')
+            }
+
+            // dr/dB in original units
+            local drdB = `xscale'*`bw_est'/(`hzu')
+
+            // dr/dbeta_k in original units
+            forvalues k = 1/`polynomial' {
+                local intk = ((`zu'^(`k'+1) - `cutoff_est'^(`k'+1))/(`k'+1))
+                local col = colnumb(e(b), "h0:`term`k''")
+                matrix `Graw'[1,`col'] = -`xscale'*`intk'/(`hzu')
+            }
+
+            local int0 = (`zu' - `cutoff_est')
+            local col = colnumb(e(b), "h0:_cons")
+            matrix `Graw'[1,`col'] = -`xscale'*`int0'/(`hzu')
+
+            // B=sum bunch dummies
+            forvalues j = 1/`=`l'+`h'' {
+                local col = colnumb(e(b), "bunching:`j'.bunch")
+                matrix `Graw'[1,`col'] = `drdB'
+            }
+
+            local nextra = 2
+            if "`t0'" != "" & "`t1'" != "" local nextra = 3
+
+            matrix `Gextra' = J(`nextra', colsof(e(b)), 0)
+
+            if "`log'" == "" {
+                matrix `Gextra'[1,1] = `Graw'/`cutoff_orig'
+                matrix `Gextra'[2,1] = `Graw'
+                if `nextra' == 3 {
+                    local A = ln(1-(`t0')) - ln(1-(`t1'))
+                    matrix `Gextra'[3,1] = (1/((`cutoff_orig' + rhat)*`A')) * `Graw'
+                }
+            }
+            else {
+                matrix `Gextra'[1,1] = exp(rhat)*`Graw'
+                matrix `Gextra'[2,1] = `Graw'
+                if `nextra' == 3 {
+                    local A = ln(1-(`t0')) - ln(1-(`t1'))
+                    matrix `Gextra'[3,1] = (1/`A') * `Graw'
+                }
+            }
+
+            matrix `Vextra' = `Gextra' * `Vraw' * `Gextra''
+
+            matrix `V' = ///
+                (`V', J(rowsof(`V'), `nextra', 0) \ ///
+                 J(`nextra', colsof(`V'), 0), `Vextra')
+        }
+    }
+
+    // Names
+    local cnames
+
+    forvalues k = 1/`polynomial' {
+        local cnames `cnames' h0:`term`k''
+    }
+    local cnames `cnames' h0:_cons
+
+    forvalues k = 1/`polynomial' {
+        local cnames `cnames' h1:`term`k''
+    }
+    local cnames `cnames' h1:_cons
+
+    local cnames `cnames' ///
+        bunching:number_bunchers ///
+        bunching:excess_mass
+	
+	if `estimator'==2 {
+		local cnames `cnames' bunching:delta
 		}
-	}
-	
-	//NAMES!!
-	return local nlcom "`nlcom'"
-	return matrix b=`b'
-	if "`exit'"=="" loc exit=0
-	return scalar exit=`exit'
-	if "`boot'"=="" {
-		return matrix V=`V'
-	}
-	
-	end
-	
+		
+	 local cnames `cnames' ///
+        bunching:shift ///
+        bunching:marginal_response
+
+    if "`t0'" != "" & "`t1'" != "" {
+        local cnames `cnames' bunching:elasticity
+    }
+
+    matrix colnames `b' = `cnames'
+    if "`boot'" == "" {
+        matrix colnames `V' = `cnames'
+        matrix rownames `V' = `cnames'
+    }
+
+    return local nlcom `"`nlcom'"'
+    return matrix b = `b'
+    if "`boot'" == "" return matrix V = `V'
+    return scalar exit = 0
+end
 
 mata:
 

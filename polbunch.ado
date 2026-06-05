@@ -217,11 +217,12 @@
 				loc numbins=r(N)
 				
 
-				//Evaluate multicollinearity
+				//Evaluate multicollinearity & estimate unrestricted model
 				if `polynomial'>0 {
 					loc nmiss=1
 					while `nmiss'>0 {
-						regress `y' 0.`dum'#(`rhsvars') 0.`dum' 1.`dum2'#(`rhsvars') 1.`dum2' b0.`bunch', nocons
+						loc unresmodel 0.`dum'#(`rhsvars') 0.`dum' 1.`dum2'#(`rhsvars') 1.`dum2' b0.`bunch'
+						regress `y' `unresmodel', nocons
 						loc nmiss=e(rank)<(`polynomial'+1)*2+`H'+`L'
 						if `nmiss'>0 {
 							loc note note
@@ -251,39 +252,112 @@
 					if "`note'"=="note" {
 						noi di as text "Note: Polynomial order lowered to `polynomial' because of multicollinearity problems with the specified polynomial."
 					}
-				}
-					
-				//NAMES and model string FOR UNRESTRICTED MODEL (as benchmark or main model if estimator==0)
-				forvalues bval=1/`=`H'+`L'' {
-					loc bunchvars `bunchvars' `bval'.`bunch'
-					}
-				if `polynomial' == 0 {
-					local unresmodel `y' 0.`dum' 1.`dum2' `bunchvars'
-				}
-				else {
-					local unresmodel `y' 0.`dum'#(`rhsvars') 0.`dum' ///
-						1.`dum2'#(`rhsvars') 1.`dum2' `bunchvars'
-				}
-
-				foreach l in b g {
-					forvalues k = 1/`polynomial' {
-						local newnames `newnames' /`l'`k'
-						if `estimator' == 1 & "`l'" == "b" {
-							local namesest1 `namesest1' /b`k'
-						}
-					}
-
-					local newnames `newnames' /`l'0
-					if `estimator' == 1 & "`l'" == "b" {
-						local namesest1 `namesest1' /b0
-					}
+				} else {
+					loc unresmodel 0.`dum' 1.`dum' b0.`bunch'
 				}
 				
-				forvalues bval=1/`=`H'+`L'' {
-					loc newnames `newnames' /bunch`bval'
-					loc namesest1 `namesest1' /bunch`bval'
+				//CHANGE NAMES for unrestricted model
+				tempname bu Vu
+				mat `bu'=e(b)
+				
+				if `polynomial'>0 {
+					forvalues k=1/`polynomial' {
+						if `k'==1 {
+							loc n c.`z'
+						}
+						else {
+							loc n ##c`z'
+						}
+						loc name `name'`n'
+						loc names `names' `name'
+						
+						loc coleq0 `coleq0' h0
+						loc coleq1 `coleq1' h1							
+					}
+					
+				loc names `names' _cons
+				loc coleq0 `coleq0' h0
+				loc coleq1 `coleq1' h1
+				
+				forvalues j=1/`=L'+`H'' {
+					loc bnames `bnames' `j'.bunch
+					loc buncheq `buncheq' bunching
+				}
+				
+				loc unresnames `names' `names' `bnames'
+				loc unreseqnames `coleq0' `coleq1' `buncheq'
+				
+				mat colnames `bu'=`unresnames'
+				mat coleq `bu'=`unreseqnames'
+								
+				//STARTING VALUES for estimators 2 and 3
+				if inlist(`estimator',2,3) {
+					// h0 coefficients from current e(b), in Mata/intbasis order:
+					// b1 b2 ... bK b0
+
+					if `polynomial' == 0 {
+						// only constant
+						matrix `h0coef' = `bu'[1, colnumb(`b', "h0:_cons")]
+					}
+					else {
+						// first get b1 ... bK
+						matrix `h0coef' = `bu'[1, 1..`polynomial']
+
+						// append b0 / constant
+						matrix `h0coef' = `h0coef', `bu'[1, colnumb(`b', "h0:_cons")]
+					}
+					
+					local B=0
+
+					forvalues j = 1/`=`L'+`H'' {
+						local B=`B' + `bu'[1,colnumb(`b', "bunch:`j'.bunch")]
+					}
+					
+					// Estimation-scale cutoff/bw
+					if "`normalize'" == "nonormalize" {
+						local cutoff_est = `cutoff_orig'
+						local bw_est     = `bw_orig'
+						quietly summarize `z', meanonly
+						local zmax_est = r(max) + `bw_orig'/2
+					}
+					else {
+						local cutoff_est = 0
+						local bw_est     = 1
+						quietly summarize `z', meanonly
+						local zmax_est = r(max) + 0.5
 					}
 
+					// Estimator-specific dstart
+					if `estimator' == 2 {
+						mata: st_numscalar("dstart", ///
+							(st_numscalar("`B'") * `bw_est') / ///
+							(intbasis(`cutoff_est', `zmax_est', `polynomial') * st_matrix("`h0coef'")') ///
+						)
+					}
+					else if `estimator' == 3 & "`log'" == "" {
+						mata: st_numscalar("dstart", ///
+							eresp(st_numscalar("`B'"), `cutoff_est', st_matrix("`h0coef'"), `bw_est', 1) ///
+							/ `cutoff_orig' ///
+						)
+					}
+					else if `estimator' == 3 & "`log'" == "log" {
+						mata: st_numscalar("dstart", ///
+							exp(eresp(st_numscalar("`B'"), `cutoff_est', st_matrix("`h0coef'"), `bw_est', 1)) - 1 ///
+						)
+					}
+
+					// fallback / bounds
+					if missing(dstart) | dstart <= 0 {
+						scalar dstart = 0.05
+					}
+					if dstart > 2 {
+						scalar dstart = 2
+					}
+
+					local dstart = scalar(dstart)
+				}
+					
+				//BOOTSTRAP SETUP
 				if `bootreps'>1 {
 					tempname p yorig
 					if "`bayes'"=="nobayes" gen double `p'=`y'/`N'
@@ -292,144 +366,10 @@
 						recast double `y'
 					}
 				}
-
-				// NAMES for final model
-				if "`transform'" != "notransform" {
-					if `estimator' != 2 {
-						local names `names' `names' number_bunchers excess_mass shift marginal_response
-					}
-					else {
-						local names `names' `names' delta number_bunchers excess_mass shift marginal_response
-					}
-
-					if "`t0'" != "" & "`t1'" != "" {
-						local names `names' elasticity
-					}
-				}
-				else {
-					tokenize `names'
-					local names
-					local bnames
-
-					forvalues i = 1/`L' {
-						local bnames `bnames' number_bunchers:`=`L'-`i'+1'.below
-					}
-
-					if `H' > 0 {
-						forvalues i = 1/`H' {
-							local bnames `bnames' number_bunchers:`i'.above
-						}
-					}
-
-					if `estimator' > 1 {
-						if `estimator' == 2 {
-							if "`positiveshift'" != "nopositiveshift" local names `names' delta:lndelta
-							else local names `names' delta:delta
-						}
-						else {
-							if "`positiveshift'" != "nopositiveshift" local names `names' shift:lnshift
-							else local names `names' shift:shift
-						}
-
-						if `polynomial' > 0 {
-							forvalues k = 1/`polynomial' {
-								local names `names' h0:``k''
-							}
-						}
-						local names `names' h0:_cons
-						local names `bnames' `names'
-					}
-					else {
-						// estimator 0 and 1: h0 coefficients
-						if `polynomial' > 0 {
-							forvalues k = 1/`polynomial' {
-								local names `names' h0:``k''
-							}
-						}
-						local names `names' h0:_cons
-
-						// estimator 0 only: h1 coefficients
-						if `estimator' == 0 {
-							if `polynomial' > 0 {
-								forvalues k = 1/`polynomial' {
-									local names `names' h1:``k''
-								}
-							}
-							local names `names' h1:_cons
-						}
-
-						local names `names' `bnames'
-					}
-					}							
-							
-				//BUILD TEST RESTRICITONS
-				if "`test'"!="notest" {
-
-				// Build symbolic restrictions g_k = f(b_k, shift)
-
-				if `estimator'==2 {
-
-					// shift identified from level ratio
-					loc shiftres (_b[/g0]/_b[/b0]-1)
-
-					forvalues k=0/`polynomial' {
-						loc rhs (_b[/b`k']/(1+`shiftres'))
-						loc teststr `teststr' (_b[/g`k'] = `rhs')
-					}
-
-				}
-				else if `estimator'==3 {
-
-					if "`log'"=="log" & `polynomial'>0 {
-						loc shiftres ///
-							(exp((_b[/g`=`polynomial'-1']-_b[/b`=`polynomial'-1']) ///
-							/(`polynomial'*_b[/b`polynomial']))-1)
-					}
-					else {
-						loc shiftres (_b[/g0]/_b[/b0]-1)
-					}
-
-					forvalues k=0/`polynomial' {
-
-						if "`log'"=="" {
-
-							// g_k = b_k (1+shift)^(k+1)
-
-							loc rhs (_b[/b`k']*(1+`shiftres')^`=`k'+1')
-
-						}
-						else {
-
-							// log-income case:
-							// g_k = sum_{n=k}^K b_n comb(n,k) ln(1+shift)^(n-k)
-
-							loc rhs _b[/b`k']
-
-							if `polynomial'>`k' {
-								forvalues n=`=`k'+1'/`polynomial' {
-									loc rhs ///
-									(`rhs' + ///
-									_b[/b`n']*comb(`n',`k')*ln(1+`shiftres')^`=`n'-`k'')
-								}
-							}
-						}
-
-						loc teststr `teststr' (_b[/g`k'] = `rhs')
-					}
-				}
-			}
-			else if `estimator'==1 {
-
-				if "`test'"!="notest" {
-					forvalues k=0/`polynomial' {
-						loc teststr `teststr' (_b[/b`k'] = _b[/g`k'])
-					}
-				}
-			}
-							
+						
 				
 				//ESTIMATION AND INFERENCE
-				tempname b V bu Vu tmpb
+				tempname b V bs tmpb
 				
 				if inlist(`bootreps',0,1) loc stop=0
 				else loc stop=`bootreps'
@@ -459,7 +399,48 @@
 					}
 					
 					//estimate unrestricted model
-					`noisily' reg `unresmodel', nocons
+					if `estimator'==0 { //UNRESTRICTED MODEL
+						if `s'>0 reg `unresmodel', nocons
+						if `bootreps'==1 {
+							varcorrect `unresmodel', `smallsample'
+							mat `V'=r(V)
+							mat `b'=`bu'
+							mat colnames `bu'=`newnames'	
+							mat colnames `V'=`unresnames'	
+							mat rownames `V'=`unresnames'
+							mat coleq `V'=`unreseqnames'
+							mat roweq `V'=`unreseqnames'
+							ereturn post `b' `V'
+							}
+						}
+						else if `estimator'==1 {
+							reg `y' `rhsvars' `cons' b0.`bunch', nocons
+							mat `b'=e(b)
+							mat colnames `b'=`names' `bunchnames'
+							mat coleq `b' = `coleq0 `buncheqnames'
+							if `bootreps'==1 {
+								varcorrect `y' `rhsvars' `cons' b0.`bunch', `smallsample'
+								mat `V'=r(V)
+								mat rownames `V'=`names' `bunchnames'
+								mat colnames `V'=`names' `bunchnames'
+								mat coleq `V'=`coleq0 `buncheqnames'
+								mat roweq `V'=`coleq0 `buncheqnames'
+								ereturn post `b' `V'
+								}
+							}
+						else if inlist(`estimator',2,3) { //USING THE PROFILING ESTIMATOR
+							profile23, ///
+								y(`y') z(`z') bunch(`bunch') relbin(`relbin') ///
+								cutoff_orig(`cutoff_orig') bw_orig(`bw_orig') //
+								polynomial(`polynomial') estimator(`estimator') ///
+								l(`L') h(`H') `var' ///
+								`log' `normalize
+							}
+						
+					}
+						
+						
+					
 					if `bootreps'==1 { //get variance for unrestricted model, perform test of model restrictions
 						varcorrect `unresmodel', `smallsample'
 						mat `Vu'=r(V)
@@ -679,7 +660,7 @@
 		end
 		
 program define varcorrect, rclass
-    syntax anything, [nl nosmallsample]
+    syntax anything, [nosmallsample]
 
     quietly {
         gettoken y anything : anything
@@ -692,28 +673,13 @@ program define varcorrect, rclass
         local N = r(sum)
         local k = e(df_m)
 
-        if "`nl'" == "nl" {
-            predictnl `res' = predict(), g(`g') iterate(1000)
-            replace `res' = -`res'
+        predict `res', residuals
+        return local xvars "`anything'"
 
-            unab gvars : `g'*
-            return local xvars "`gvars'"
-
-            mata: st_matrix("`V'", ///
-                varcorrect(st_data(., tokens(st_local("gvars"))), ///
-                           st_data(., "`y'"), ///
-                           st_data(., "`res'"), 0))
-        }
-        else {
-            predict `res', residuals
-            return local xvars "`anything'"
-
-            mata: st_matrix("`V'", ///
-                varcorrect(st_data(., tokens(st_local("anything"))), ///
-                           st_data(., "`y'"), ///
-                           st_data(., "`res'"), 0))
-        }
-
+        mata: st_matrix("`V'", ///
+             varcorrect(st_data(., tokens(st_local("anything"))), ///
+                          st_data(., "`y'"), ///
+                          st_data(., "`res'"), 0))
         if "`smallsample'" != "nosmallsample" {
             matrix `V' = (`N'/(`N'-1)) * ///
                 ((`N'*`numbins'-1)/(`N'*`numbins'-`k')) * `V'
@@ -743,7 +709,22 @@ program define profile23, eclass
         ("`var'" != "novar") ///
     )
 	
-	if "`var'"!="novar" ereturn post r_b_profile23 r_V_profile23
+	if `polynomial'>0 {
+		forvalues i=1/`polynomial' {
+			if `i'==1 loc n c.`z'
+			else loc n `n'#c.`z'
+			loc names `names' h0:`n'
+		}
+		loc names `names' h0:_cons shift:shift Hstar:Hstar
+	}
+	mat colnames r_b_profile23=`names'
+	
+	if "`var'"!="novar" {
+		mat colnames r_V_profile23 = `names'
+		mat rownames r_V_profile23 = `names'
+		ereturn post  r_b_profile23 r_V_profile23
+	}
+	
 	else  ereturn post r_b_profile23
 end
 
