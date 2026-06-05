@@ -488,19 +488,13 @@
 					if `s'==0 mat `bu'=e(b)
 					
 					//ESTIMATE RESTRICTED MODEL 
-					if inlist(`estimator',2,3) { //USING THE PROFILE ESTIMATOR
+					if inlist(`estimator',2,3) { //USING THE PROFILING ESTIMATOR
 						profile23, ///
 							y(`y') z(`z') bunch(`bunch') relbin(`relbin') ///
 							cutoff_orig(`cutoff_orig') bw_orig(`bw_orig') //
 							polynomial(`polynomial') estimator(`estimator') ///
 							l(`L') h(`H') ///
-							`log' `normalize'
-
-						mat `b' = r(b)
-						if `bootreps'==1 {
-							mat `V' = r(V)
-						}
-						ereturn post `b' `V'
+							`log' `normalize
 					}
 					else if `estimator'==1 { //With OLS
 						`noisily' reg `y' `rhsvars' `cons' `bunchvars', nocons
@@ -748,8 +742,9 @@ program define profile23, eclass
         `l', `h', ///
         ("`var'" != "novar") ///
     )
-
-    ereturn post r_b_profile23 r_V_profile23
+	
+	if "`var'"!="novar" ereturn post r_b_profile23 r_V_profile23
+	else  ereturn post r_b_profile23
 end
 
 mata:
