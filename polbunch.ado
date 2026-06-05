@@ -736,7 +736,7 @@ program define profile23, rclass
     syntax, y(name) z(name) relbin(name) bunch(name) ///
         cutoff_orig(real) bw_orig(real) ///
         polynomial(integer) estimator(integer) l(integer) h(integer) ///
-        [log nonormalize t0(real) t1(real)]
+        [log nonormalize]
 
     mata: profile23_run( ///
         "`y'", "`z'", "`relbin'", "`bunch'", ///
@@ -744,8 +744,7 @@ program define profile23, rclass
         `polynomial', `estimator', ///
         ("`nonormalize'" == ""), ///
         ("`log'" == "log"), ///
-        `l', `h', ///
-        ("`t0'" != ""), `t0', `t1' ///
+        `l', `h'
     )
 
     return matrix b = r_b_profile23
@@ -791,10 +790,7 @@ void profile23_run(
     real scalar normalized,
     real scalar islog,
     real scalar L,
-    real scalar H,
-    real scalar has_tax,
-    real scalar t0,
-    real scalar t1
+    real scalar H
 )
 {
     real colvector y, z, relbin, bunch, side
@@ -841,13 +837,6 @@ void profile23_run(
         cutoff_orig, bw_orig,
         K, estimator, normalized, islog, L, H
     )
-
-    if (has_tax == 1) {
-        elasticity = ln(1 + delta_hat) / (ln(1 - t0) - ln(1 - t1))
-    }
-    else {
-        elasticity = .
-    }
 
     b = beta_hat, Hstar, delta_hat, elasticity
 
@@ -936,4 +925,203 @@ real rowvector profBeta23(
     return(beta')
 }
 
+real matrix makeW(real colvector ystack)
+{
+    real colvector v
+
+    v = ystack
+    v = v :+ (v :<= 0)
+
+    return(diag(1 :/ v))
+}
+
+real matrix pbasis(real colvector z, real scalar K)
+{
+    real scalar j
+    real matrix X
+
+    X = J(rows(z), K+1, 1)
+
+    for (j=1; j<=K; j++) {
+        X[,j] = z:^j
+    }
+
+    X[,K+1] = 1
+
+    return(X)
+}
+
+
+real matrix pbasis(real colvector z, real scalar K)
+{
+    real scalar j
+    real matrix X
+
+    X = J(rows(z), K+1, 1)
+
+    for (j=1; j<=K; j++) {
+        X[,j] = z:^j
+    }
+
+    // constant last
+    X[,K+1] = J(rows(z), 1, 1)
+
+    return(X)
+}
+
+
+real rowvector pbasis_row(real scalar z, real scalar K)
+{
+    real scalar j
+    real rowvector x
+
+    x = J(1, K+1, 1)
+
+    for (j=1; j<=K; j++) {
+        x[j] = z^j
+    }
+
+    // constant last
+    x[K+1] = 1
+
+    return(x)
+}
+
+
+real rowvector intbasis(real scalar a, real scalar b, real scalar K)
+{
+    real scalar j
+    real rowvector r
+
+    r = J(1, K+1, .)
+
+    for (j=1; j<=K; j++) {
+        r[j] = (b^(j+1) - a^(j+1))/(j+1)
+    }
+
+    // constant last
+    r[K+1] = b - a
+
+    return(r)
+}
+
+
+real colvector transform_right_z(
+    real colvector zR,
+    real scalar delta,
+    real scalar cutoff_orig,
+    real scalar bw_orig,
+    real scalar normalized,
+    real scalar islog
+)
+{
+    if (islog == 1) {
+        return(zR :- ln(1 + delta))
+    }
+
+    if (normalized == 1) {
+        return(((cutoff_orig :+ bw_orig*zR) :/ (1+delta) :- cutoff_orig) :/ bw_orig)
+    }
+
+    return(zR :/ (1 + delta))
+}
+
+
+real scalar response_length(
+    real scalar delta,
+    real scalar cutoff_orig,
+    real scalar bw_orig,
+    real scalar normalized,
+    real scalar islog
+)
+{
+    if (islog == 1) {
+        return(ln(1 + delta))
+    }
+
+    if (normalized == 1) {
+        return(delta * cutoff_orig / bw_orig)
+    }
+
+    return(delta * cutoff_orig)
+}
+
+
+real matrix makeW(real colvector ystack)
+{
+    real colvector v
+
+    v = ystack
+    v = v :+ (v :<= 0)
+
+    return(diag(1 :/ v))
+}
+
+
+real matrix makeX23(
+    real scalar delta,
+    real colvector z,
+    real colvector side,
+    real scalar cutoff_orig,
+    real scalar bw_orig,
+    real scalar K,
+    real scalar estimator,
+    real scalar normalized,
+    real scalar islog,
+    real scalar L,
+    real scalar H
+)
+{
+    real scalar ex_lo, ex_hi, resp, cutoff_est
+    real colvector zL, zR, zR0
+    real matrix X0, X1, XB, X
+
+    zL = select(z, side :== -1)
+    zR = select(z, side :==  1)
+
+    // Left side: h0(z)
+    X0 = pbasis(zL, K)
+
+    // Right side
+    if (estimator == 2) {
+        // Chetty-style restriction: h1(z) = h0(z)/(1+delta)
+        X1 = pbasis(zR, K) / (1 + delta)
+    }
+    else {
+        // Theory-consistent restriction:
+        // h1(z) = h0(transformed z)/(1+delta)
+        zR0 = transform_right_z(zR, delta, cutoff_orig, bw_orig, normalized, islog)
+        X1 = pbasis(zR0, K) / (1 + delta)
+    }
+
+    // Excluded-region integral limits
+    if (normalized == 1) {
+        cutoff_est = 0
+        ex_lo = -L + 1
+        ex_hi =  H + 1
+    }
+    else {
+        cutoff_est = cutoff_orig
+        ex_lo = cutoff_orig + (-L + 1)*bw_orig
+        ex_hi = cutoff_orig + ( H + 1)*bw_orig
+    }
+
+    // Response length in the same units as z
+    resp = response_length(delta, cutoff_orig, bw_orig, normalized, islog)
+
+    if (estimator == 2) {
+        // Rectangle approximation for missing mass at cutoff
+        XB = intbasis(ex_lo, ex_hi, K) + resp * pbasis_row(cutoff_est, K)
+    }
+    else {
+        // Exact integral of h0 over missing interval
+        XB = intbasis(ex_lo, ex_hi, K) + intbasis(cutoff_est, cutoff_est + resp, K)
+    }
+
+    X = X0 \ X1 \ XB
+
+    return(X)
+}
+
+**# Bookmark #1
 end
