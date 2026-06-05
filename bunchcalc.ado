@@ -62,9 +62,9 @@ program bunchcalc, rclass
 
         // h0 coefficients
         forvalues k = 1/`polynomial' {
-            local nlcom `nlcom' (h0_`k': _b[h0:`term`k''])
+            local nlcom `nlcom' (_b[h0:`term`k''])
         }
-        local nlcom `nlcom' (h0_cons: _b[h0:_cons])
+        local nlcom `nlcom' (_b[h0:_cons])
 
         // h1 coefficients
         forvalues k = 1/`polynomial' {
@@ -89,7 +89,7 @@ program bunchcalc, rclass
                     }
                 }
             }
-            local nlcom `nlcom' (h1_`k': `h1expr')
+            local nlcom `nlcom' (`h1expr')
         }
 
         // h1 constant
@@ -111,22 +111,27 @@ program bunchcalc, rclass
                 local h1cons (`h1cons' + _b[h0:`term`n'']*ln(1+_b[bunching:delta])^`n')
             }
         }
-        local nlcom `nlcom' (h1_cons: `h1cons')
+        local nlcom `nlcom' (`h1cons')
 
         // common bunching objects
         local nlcom `nlcom' ///
-            (number_bunchers: `B') ///
-            (excess_mass: (`B')/(`h0cut'))
+            (`B') ///
+            ((`B')/(`h0cut'))
+			
+		if `estimator'==2 {
+			local nlcom `nlcom' ///
+			(_b[bunching:delta])
+		}
 
         // shift/MR/elasticity: estimator 3 directly use delta
-        if inlist(`estimator', 3) {
+        if `estimator'==3 {
             local nlcom `nlcom' ///
-                (shift: _b[bunching:delta]) ///
-                (marginal_response: _b[bunching:delta]*`cutoff_orig')
+                (_b[bunching:delta]) ///
+                (_b[bunching:delta]*`cutoff_orig')
 
             if "`t0'" != "" & "`t1'" != "" {
                 local nlcom `nlcom' ///
-                    (elasticity: ln(1+_b[bunching:delta])/(ln(1-(`t0'))-ln(1-(`t1'))))
+                    (ln(1+_b[bunching:delta])/(ln(1-(`t0'))-ln(1-(`t1'))))
             }
         }
 
@@ -146,8 +151,8 @@ program bunchcalc, rclass
             }
 
             local nlcom `nlcom' ///
-                (shift: `shift_expr') ///
-                (marginal_response: `mr_expr')
+                (`shift_expr') ///
+                (`mr_expr')
 
             if "`t0'" != "" & "`t1'" != "" {
                 local nlcom `nlcom' (elasticity: `el_expr')
@@ -244,11 +249,11 @@ program bunchcalc, rclass
             matrix `Gextra' = J(`nextra', colsof(e(b)), 0)
 
             if "`log'" == "" {
-                matrix `Gextra'[1,1] = `Graw'/`cutoff_orig'
-                matrix `Gextra'[2,1] = `Graw'
+				matrix `Gextra'[1,.] = `Graw'/`cutoff_orig'
+				matrix `Gextra'[2,.] = `Graw'
                 if `nextra' == 3 {
                     local A = ln(1-(`t0')) - ln(1-(`t1'))
-                    matrix `Gextra'[3,1] = (1/((`cutoff_orig' + rhat)*`A')) * `Graw'
+                    matrix `Gextra'[3,.] = (1/((`cutoff_orig' + rhat)*`A')) * `Graw'
                 }
             }
             else {
