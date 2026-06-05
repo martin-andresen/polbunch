@@ -28,7 +28,6 @@
 			]
 			
 			 quietly {
-			 	
 					if "`t0'"!="" {
 					if "`t1'"=="" {
 						noi di as error "If specifying one tax rate (options t0 or t1), specify both."
@@ -488,12 +487,11 @@
 					if `s'>0 mat `Vu'=nullmat(`Vu') \ e(b)
 					if `s'==0 mat `bu'=e(b)
 					
-					//ESTIMATE RESTRICTED MODEL
-					if inlist(`estimator',2,3) {
+					//ESTIMATE RESTRICTED MODEL 
+					if inlist(`estimator',2,3) { //USING THE PROFILE ESTIMATOR
 						profile23, ///
 							y(`y') z(`z') bunch(`bunch') relbin(`relbin') ///
-							cutoff_orig(`cutoff_orig') bw_orig(`bw_orig') ///
-							cutoff_est(`cutoff') bw_est(`bw') ///
+							cutoff_orig(`cutoff_orig') bw_orig(`bw_orig') //
 							polynomial(`polynomial') estimator(`estimator') ///
 							l(`L') h(`H') ///
 							`log' `normalize'
@@ -502,7 +500,6 @@
 						if `bootreps'==1 {
 							mat `V' = r(V)
 						}
-
 						ereturn post `b' `V'
 					}
 					else if `estimator'==1 { //With OLS
@@ -518,7 +515,13 @@
 							}
 						else ereturn post `b'
 					}
-						if "`transform'"!="notransform"&inlist(`estimator',1,0) { //TRANSFORM ESTIMATES
+					
+					////TRANSFORM ESTIMATES
+					
+					if "`transform'"!="notransform" {
+						
+						
+						inlist(`estimator',1,0) { //TRANSFORM ESTIMATES
 							local nlcomopt
 							if "`nlcom'" != "" local nlcomopt nlcom(`nlcom')
 
@@ -618,7 +621,6 @@
 
 				
 				//POST RESULTS
-				pause
 				mat colnames `b'=`names'
 				if `bootreps'>=1 {
 					mat colnames `V'=`names'
@@ -731,12 +733,11 @@ program define varcorrect, rclass
     }
 end
 
-
-program define profile23, rclass
+program define profile23, eclass
     syntax, y(name) z(name) relbin(name) bunch(name) ///
         cutoff_orig(real) bw_orig(real) ///
         polynomial(integer) estimator(integer) l(integer) h(integer) ///
-        [log nonormalize]
+        [log nonormalize novar]
 
     mata: profile23_run( ///
         "`y'", "`z'", "`relbin'", "`bunch'", ///
@@ -744,11 +745,11 @@ program define profile23, rclass
         `polynomial', `estimator', ///
         ("`nonormalize'" == ""), ///
         ("`log'" == "log"), ///
-        `l', `h'
+        `l', `h', ///
+        ("`var'" != "novar") ///
     )
 
-    return matrix b = r_b_profile23
-    return matrix V = r_V_profile23
+    ereturn post r_b_profile23 r_V_profile23
 end
 
 mata:
@@ -778,6 +779,44 @@ real matrix varcorrect(real matrix X, real matrix fw, real matrix e, real scalar
     return(bread * meat * bread)
 }
 
+real matrix varcorrect_collapsed(
+    real matrix G_stack,
+    real colvector fw_orig,
+    real colvector stack_id,
+    real colvector e_stack,
+    real scalar addcons
+)
+{
+    real scalar B_orig, M, N, i, s
+    real colvector e_i
+    real matrix G, meat, bread
+
+    G = G_stack
+
+    if (addcons == 1) {
+        G = G, J(rows(G), 1, 1)
+    }
+
+    B_orig = rows(fw_orig)
+    M      = rows(G)
+    N      = sum(fw_orig)
+
+    meat = J(cols(G), cols(G), 0)
+
+    for (i = 1; i <= B_orig; i++) {
+        s = stack_id[i]
+
+        e_i = e_stack
+        e_i[s] = e_i[s] + N
+
+        meat = meat + fw_orig[i] * (G' * e_i * e_i' * G)
+    }
+
+    bread = invsym(quadcross(G, G) :* N)
+
+    return(bread * meat * bread)
+}
+
 void profile23_run(
     string scalar yvar,
     string scalar zvar,
@@ -790,12 +829,17 @@ void profile23_run(
     real scalar normalized,
     real scalar islog,
     real scalar L,
-    real scalar H
+    real scalar H,
+    real scalar dovar
 )
 {
     real colvector y, z, relbin, bunch, side
-    real scalar Hstar, lndelta_hat, delta_hat, elasticity
+    real colvector yout, zout, sideout, ystack, resid
+    real colvector stack_id, fw_orig
+    real scalar Hstar, lndelta_hat, delta_hat
+    real scalar i, idx, nleft, nright
     real rowvector beta_hat, b
+    real matrix X, dX, G, Vout
     transmorphic S
 
     y      = st_data(., yvar)
@@ -829,7 +873,7 @@ void profile23_run(
     optimize_init_argument(S, 13, H)
 
     lndelta_hat = optimize(S)
-    delta_hat = exp(lndelta_hat)
+    delta_hat   = exp(lndelta_hat)
 
     beta_hat = profBeta23(
         delta_hat,
@@ -838,10 +882,67 @@ void profile23_run(
         K, estimator, normalized, islog, L, H
     )
 
-    b = beta_hat, Hstar, delta_hat, elasticity
+    b = beta_hat, delta_hat, Hstar
+
+    if (dovar == 1) {
+        yout    = select(y,    bunch :== 0)
+        zout    = select(z,    bunch :== 0)
+        sideout = select(side, bunch :== 0)
+
+        X = makeX23(delta_hat, zout, sideout, cutoff_orig, bw_orig, K, ///
+                    estimator, normalized, islog, L, H)
+
+        ystack = select(yout, sideout :== -1) \ ///
+                 select(yout, sideout :==  1) \ ///
+                 Hstar
+
+        resid = ystack - X * beta_hat'
+
+        dX = dXddelta23(delta_hat, zout, sideout, cutoff_orig, bw_orig, K, ///
+                        estimator, normalized, islog, L, H)
+
+        // Jacobian wrt beta, delta, Hstar
+        G = X, dX * beta_hat', J(rows(X), 1, 0)
+        G[rows(G), cols(G)] = 1
+
+        // Map original bins to stacked rows:
+        // outside-left bins first, outside-right bins second, excluded bins last.
+        nleft  = sum((bunch :== 0) :& (side :== -1))
+        nright = sum((bunch :== 0) :& (side :==  1))
+
+        stack_id = J(rows(y), 1, .)
+        idx = 0
+
+        for (i = 1; i <= rows(y); i++) {
+            if (bunch[i] == 0 & side[i] == -1) {
+                idx = idx + 1
+                stack_id[i] = idx
+            }
+        }
+
+        for (i = 1; i <= rows(y); i++) {
+            if (bunch[i] == 0 & side[i] == 1) {
+                idx = idx + 1
+                stack_id[i] = idx
+            }
+        }
+
+        for (i = 1; i <= rows(y); i++) {
+            if (bunch[i] > 0) {
+                stack_id[i] = nleft + nright + 1
+            }
+        }
+
+        fw_orig = y
+
+        Vout = varcorrect_collapsed(G, fw_orig, stack_id, resid, 0)
+    }
+    else {
+        Vout = J(cols(b), cols(b), .)
+    }
 
     st_matrix("r_b_profile23", b)
-    st_matrix("r_V_profile23", J(cols(b), cols(b), .))
+    st_matrix("r_V_profile23", Vout)
 }
 
 real scalar profQ23(
@@ -878,12 +979,10 @@ real scalar profQ23(
              select(yout, sideout :==  1) \ ///
              Hstar
 
-    W = makeW(ystack)
-
-    beta = invsym(X' * W * X) * X' * W * ystack
+    beta =  qrsolve(X, ystack)
     resid = ystack - X * beta
 
-    return(resid' * W * resid)
+    return(quadcross(resid,resid))
 }
 
 
@@ -905,7 +1004,7 @@ real rowvector profBeta23(
 )
 {
     real colvector yout, zout, sideout, ystack
-    real matrix X, W, beta
+    real matrix X, beta
 
     yout    = select(y,     bunch :== 0)
     zout    = select(z,     bunch :== 0)
@@ -918,39 +1017,40 @@ real rowvector profBeta23(
              select(yout, sideout :==  1) \ ///
              Hstar
 
-    W = makeW(ystack)
-
-    beta = invsym(X' * W * X) * X' * W * ystack
+    beta =  qrsolve(X, ystack)
 
     return(beta')
 }
 
-real matrix makeW(real colvector ystack)
+real matrix dXddelta23(
+    real scalar delta,
+    real colvector z,
+    real colvector side,
+    real scalar cutoff_orig,
+    real scalar bw_orig,
+    real scalar K,
+    real scalar estimator,
+    real scalar normalized,
+    real scalar islog,
+    real scalar L,
+    real scalar H
+)
 {
-    real colvector v
+    real scalar eps, dm, dp
+    real matrix Xp, Xm
 
-    v = ystack
-    v = v :+ (v :<= 0)
+    eps = max((1e-6, abs(delta)*1e-5))
+    dp  = delta + eps
+    dm  = max((delta - eps, 1e-10))
 
-    return(diag(1 :/ v))
+    Xp = makeX23(dp, z, side, cutoff_orig, bw_orig, K, ///
+                 estimator, normalized, islog, L, H)
+
+    Xm = makeX23(dm, z, side, cutoff_orig, bw_orig, K, ///
+                 estimator, normalized, islog, L, H)
+
+    return((Xp - Xm)/(dp - dm))
 }
-
-real matrix pbasis(real colvector z, real scalar K)
-{
-    real scalar j
-    real matrix X
-
-    X = J(rows(z), K+1, 1)
-
-    for (j=1; j<=K; j++) {
-        X[,j] = z:^j
-    }
-
-    X[,K+1] = 1
-
-    return(X)
-}
-
 
 real matrix pbasis(real colvector z, real scalar K)
 {
@@ -1047,17 +1147,6 @@ real scalar response_length(
 }
 
 
-real matrix makeW(real colvector ystack)
-{
-    real colvector v
-
-    v = ystack
-    v = v :+ (v :<= 0)
-
-    return(diag(1 :/ v))
-}
-
-
 real matrix makeX23(
     real scalar delta,
     real colvector z,
@@ -1072,7 +1161,7 @@ real matrix makeX23(
     real scalar H
 )
 {
-    real scalar ex_lo, ex_hi, resp, cutoff_est
+    real scalar ex_lo, ex_hi, resp, cutoff_est, zmax_est
     real colvector zL, zR, zR0
     real matrix X0, X1, XB, X
 
@@ -1084,38 +1173,100 @@ real matrix makeX23(
 
     // Right side
     if (estimator == 2) {
-        // Chetty-style restriction: h1(z) = h0(z)/(1+delta)
+
+        // Chetty-style coefficient restriction:
+        // g_k = b_k/(1+delta)
+
         X1 = pbasis(zR, K) / (1 + delta)
+
     }
     else {
+
         // Theory-consistent restriction:
-        // h1(z) = h0(transformed z)/(1+delta)
-        zR0 = transform_right_z(zR, delta, cutoff_orig, bw_orig, normalized, islog)
+        // h1(z)=h0(z/(1+delta))/(1+delta)
+
+        zR0 = transform_right_z(
+            zR,
+            delta,
+            cutoff_orig,
+            bw_orig,
+            normalized,
+            islog
+        )
+
         X1 = pbasis(zR0, K) / (1 + delta)
     }
 
-    // Excluded-region integral limits
+    // Estimation-scale limits
     if (normalized == 1) {
+
         cutoff_est = 0
+
         ex_lo = -L + 1
         ex_hi =  H + 1
+
+        // matches old:
+        // zmax = max(z)+bw/2
+        // with normalized bw=1
+        zmax_est = max(z) + 0.5
     }
     else {
+
         cutoff_est = cutoff_orig
+
         ex_lo = cutoff_orig + (-L + 1)*bw_orig
         ex_hi = cutoff_orig + ( H + 1)*bw_orig
+
+        zmax_est = max(z) + bw_orig/2
     }
 
-    // Response length in the same units as z
-    resp = response_length(delta, cutoff_orig, bw_orig, normalized, islog)
+    // Response length
+    resp = response_length(
+        delta,
+        cutoff_orig,
+        bw_orig,
+        normalized,
+        islog
+    )
 
     if (estimator == 2) {
-        // Rectangle approximation for missing mass at cutoff
-        XB = intbasis(ex_lo, ex_hi, K) + resp * pbasis_row(cutoff_est, K)
+
+        /*
+        Profile analogue of old NLS estimator 2:
+
+            B*bw = delta * ∫_{cutoff}^{zmax} h0(z) dz
+
+        Therefore
+
+            H* =
+                ∫excluded h0(z) dz
+                +
+                delta * ∫_{cutoff}^{zmax} h0(z) dz
+        */
+
+        XB =
+            intbasis(ex_lo, ex_hi, K)
+            +
+            delta * intbasis(cutoff_est, zmax_est, K)
+
     }
     else {
-        // Exact integral of h0 over missing interval
-        XB = intbasis(ex_lo, ex_hi, K) + intbasis(cutoff_est, cutoff_est + resp, K)
+
+        /*
+        Estimator 3:
+
+            H* =
+                ∫excluded h0(z) dz
+                +
+                ∫_{cutoff}^{cutoff+response} h0(z) dz
+        */
+
+        XB =
+            intbasis(ex_lo, ex_hi, K)
+            +
+            intbasis(cutoff_est,
+                     cutoff_est + resp,
+                     K)
     }
 
     X = X0 \ X1 \ XB
@@ -1123,5 +1274,4 @@ real matrix makeX23(
     return(X)
 }
 
-**# Bookmark #1
 end
