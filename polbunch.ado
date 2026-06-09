@@ -112,55 +112,86 @@
 					rename `bin' `z'
 				}
 				
+				if "`limits'" == "" {
+					local L = 1
+					local H = 0
+				}
+				else {
+					gettoken L H : limits
+				}
 
-			// limits option
-			if "`limits'"=="" {
-				loc L = 1
-				loc H = 0
-			}
-			else gettoken L H : limits
+				tempvar zleft zright relbin crossbin edgehit inbunch
 
-			// For pre-binned data, limits are numbers of whole bins below/above cutoff.
-			// Do not split bins.  relbin = -1 is closest bin below cutoff;
-			// relbin = 0 is first bin at or above cutoff.
-			tempvar zleft zright relbin
-
-			if `nvars' == 2 {
 				gen double `zleft'  = `z' - `bw'/2
 				gen double `zright' = `z' + `bw'/2
 
-				gen int `relbin' = floor((`zleft' - `cutoff') / `bw') + 1
+				gen byte `edgehit' = ///
+					abs(`zleft'  - `cutoff') < 1e-8 | ///
+					abs(`zright' - `cutoff') < 1e-8
 
-				summarize `z' if inrange(`relbin', -`L' + 1, `H'), meanonly
-				local zL = r(min) - `bw'/2
-				local zH = r(max) + `bw'/2
-			}
-			else {
-				local zH = `cutoff' + `H'*`bw'
-				local zL = `cutoff' - `L'*`bw'
-			}
-							
-				//Put bins in e(table)
-				tempname table
-				mkmat `y' `z', matrix(`table')
-				mat colnames `table'= freq `z'
-				
-				//check if there are people on either side
-				count if `z'<`zL'
-				if r(N)==0 {
-					noi di as error "No individuals in sample allocates below the excluded region."
-					exit 301
-					}
-				
-				count if `z'>`zH'
-				if r(N)==0 {
-					if (`estimator'>0) {
-						noi di as error "No individuals in sample allocates above the excluded region."
+				quietly count if `edgehit'
+				local cutoff_on_edge = (r(N) > 0)
+
+				gen int `relbin' = .
+				gen byte `crossbin' = (`zleft' < `cutoff' & `zright' > `cutoff')
+
+				if `cutoff_on_edge' {
+					/*
+						cutoff is a bin edge:
+							relbin = -1 closest bin below cutoff
+							relbin =  1 closest bin above cutoff
+					*/
+					replace `relbin' = -ceil((`cutoff' - `zright')/`bw') if `zright' <= `cutoff'
+					replace `relbin' =  ceil((`zleft'  - `cutoff')/`bw') if `zleft'  >= `cutoff'
+
+					gen byte `inbunch' = ///
+						inrange(`relbin', -`L', -1) | ///
+						inrange(`relbin',  1,  `H')
+				}
+				else {
+					/*
+						cutoff lies inside exactly one bin:
+							relbin = 0 cutoff-containing bin
+							relbin = -1 closest whole bin below it
+							relbin =  1 closest whole bin above it
+
+						Exclude cutoff bin plus L whole bins below and H whole bins above.
+					*/
+					quietly count if `crossbin'
+					if r(N) != 1 {
+						noi di as error "Expected exactly one bin crossing cutoff(). Check bw(), cutoff(), and bin construction."
 						exit 301
 					}
-					}
-				
-				
+
+					quietly summarize `z' if `crossbin', meanonly
+					local zcross = r(mean)
+
+					replace `relbin' = round((`z' - `zcross')/`bw')
+
+					gen byte `inbunch' = inrange(`relbin', -`L', `H')
+				}
+
+				/*
+					Actual excluded-region edges from selected whole bins.
+				*/
+				quietly summarize `zleft' if `inbunch', meanonly
+				if r(N) == 0 {
+					noi di as error "No bins in the excluded region. Check limits(), cutoff(), and bw()."
+					exit 301
+				}
+				local zL_excl_orig = r(min)
+
+				quietly summarize `zright' if `inbunch', meanonly
+				local zH_excl_orig = r(max)
+
+				/*
+					Bunch indicator.
+				*/
+				egen `bunch' = group(`z') if `inbunch'
+				replace `bunch' = 0 if missing(`bunch')
+				quietly levelsof `bunch' if `bunch' > 0, local(bunchlevels)
+				local Nbunch : word count `bunchlevels'
+
 				//NORMALIZE Z
 				tempvar z_orig
 				gen double `z_orig'=`z' 
@@ -179,29 +210,82 @@
 					loc xscale = `bw'
 				}
 				
+				tempname table
+				mkmat `y' `z', matrix(`table')
+				mat colnames `table'= freq `z'
+
+				summarize `z', meanonly
+				local zbar_est = r(max) + 0.5*`bw_est'
+				
+				tempvar side
+				gen byte `side' = .
+				replace `side' = -1 if `bunch' == 0 & `zright' <= `cutoff'
+				replace `side' =  1 if `bunch' == 0 & `zleft'  >= `cutoff'
+
+				count if `bunch' == 0 & missing(`side')
+				if r(N) > 0 {
+					noi di as error "Some non-excluded bins cannot be classified as left or right of cutoff."
+					exit 301
+				}
+				
+				count if `side' == -1
+				if r(N) == 0 {
+					noi di as error "No bins below the excluded region."
+					exit 301
+				}
+
+				count if `side' == 1
+				if r(N) == 0 & `estimator' > 0 {
+					noi di as error "No bins above the excluded region."
+					exit 301
+				}
+								
 				//gen dummies
-				tempvar fw dupe dum dum2 bunch cons
-				gen byte `dum'=`z'>`cutoff'
-				gen byte `dum2'=`dum'
-				if `nvars' == 2 {
-					egen `bunch' = group(`z') if inrange(`relbin', -`L' + 1, `H')
-				}
-				else {
-					egen `bunch' = group(`z') if inrange(`z', `zL', `zH')
-				}
-				replace `bunch' = 0 if missing(`bunch')
+				tempvar fw dupe dum dum2 cons
+				gen byte `dum' = `z' > `cutoff_est'
+				gen byte `dum2' = `dum'
 				gen `cons'=1
 				count
 				loc numbins=r(N)
 				
 
 				//Evaluate multicollinearity & estimate unrestricted model
+				local rhsvars
+				local coleq0
+				local coleq1
+
+				if `polynomial' > 0 {
+					forvalues j = 1/`polynomial' {
+						if `j' == 1 {
+							local rhsvars c.`z'
+						}
+						else {
+							local rhsvars `rhsvars'##c.`z'
+						}
+
+						local coleq0 `coleq0' h0
+						local coleq1 `coleq1' h1
+					}
+
+					fvexpand `rhsvars'
+					local names `r(varlist)' _cons
+
+					local coleq0 `coleq0' h0
+					local coleq1 `coleq1' h1
+				}
+				else {
+					local rhsvars
+					local names _cons
+					local coleq0 h0
+					local coleq1 h1
+				}
+
 				if `polynomial'>0 {
 					loc nmiss=1
 					while `nmiss'>0 {
 						loc unresmodel 0.`dum'#(`rhsvars') 0.`dum' 1.`dum2'#(`rhsvars') 1.`dum2' b0.`bunch'
 						regress `y' `unresmodel', nocons
-						loc nmiss=e(rank)<(`polynomial'+1)*2+`H'+`L'
+						loc nmiss=e(rank)<(`polynomial'+1)*2+`Nbunch'
 						if `nmiss'>0 {
 							loc note note
 							loc polynomial=`polynomial'-1
@@ -238,7 +322,9 @@
 				tempname bu Vu
 				mat `bu'=e(b)
 				
-				forvalues j=1/`=L'+`H'' {
+				local bnames
+				local buncheq
+				forvalues j if local bunchlevels {
 					loc bnames `bnames' `j'.bunch
 					loc buncheq `buncheq' bunching
 				}
@@ -247,6 +333,16 @@
 				loc unreseqnames `coleq0' `coleq1' `buncheq'
 				mat colnames `bu'=`unresnames'
 				mat coleq `bu'=`unreseqnames'
+				
+				tempname h0coef h1coef
+			matrix `h0coef' = J(1, `polynomial' + 1, .)
+			matrix `h1coef' = J(1, `polynomial' + 1, .)
+
+			forvalues j = 1/`=`polynomial'+1' {
+				matrix `h0coef'[1,`j'] = `bu'[1,`j']
+				matrix `h1coef'[1,`j'] = `bu'[1,`=`polynomial'+1+`j'']
+			}
+
 								
 /*
 				Simple delta initializer from one beta/gamma coefficient relation.
@@ -362,7 +458,7 @@
 					
 					//estimate model
 					if `estimator'==0|"`test'"!="notest" { //UNRESTRICTED MODEL
-						if `s'>0 reg `unresmodel', nocons
+						if `s'>0 reg `y' `unresmodel', nocons
 						if `bootreps'==1 {
 							varcorrect `unresmodel', `smallsample'
 							mat `V'=r(V)
@@ -395,10 +491,15 @@
 							}
 						else if inlist(`estimator',2,3) { //USING THE PROFILING ESTIMATOR
 							if `bootreps'==1 loc vce vce
-							bunch_profile23 `y' `z', ///
+							bunch_profile23 `y' `z' `side' `bunch', ///
 								estimator(`estimator') k(`polynomial') ///
 								cutoff_orig(`cutoff_orig') bw_orig(`bw_orig') ///
-								l(`L') h(`H') `log' `normalize' `vce' initdelta(`dstart') zbar_est(`zbar_est')
+								l(`L') h(`H') ///
+								`log' `normalize' `vce' ///
+								initdelta(`dstart') ///
+								zbar_est(`zbar_est') ///
+								zl_excl_orig(`zL_excl_orig') ///
+								zh_excl_orig(`zH_excl_orig')
 							}
 						
 					////TRANSFORM ESTIMATES
@@ -406,7 +507,10 @@
 						if `bootreps'!=1 loc nograd nograd
 						quietly summarize `y' if `bunch' > 0, meanonly
 						local Hstar_obs = r(sum)
-						
+						local taxopts
+						if "`t0'" != "" & "`t1'" != "" {
+							local taxopts t0(`t0') t1(`t1')
+						}
 						bunch_transform, ///
 							estimator(`estimator') ///
 							k(`polynomial') ///
@@ -417,9 +521,17 @@
 							xscale(`xscale') ///
 							l(`L') ///
 							h(`H') ///
+							zl_excl_orig(`zL_excl_orig') ///
+							zh_excl_orig(`zH_excl_orig') ///
+							`log' ///
 							`constant' ///
-							t0(`t0') t1(`t1') `nograd' Hstar(`Hstar_obs')
-							
+							`taxopts' ///
+							`nograd' ///
+							`normalize' ///
+							zbar_est(`zbar_est') ///
+							hstar_obs(`Hstar_obs') ///
+							`bmodel'
+													
 							matrix `b' = e(b)
 							capture matrix `V' = e(V)
 						}
@@ -476,8 +588,8 @@
 				ereturn scalar polynomial=`polynomial'
 				ereturn scalar bandwidth=`bw'
 				ereturn scalar cutoff=`cutoff'
-				ereturn scalar lower_limit=`zL'
-				ereturn scalar upper_limit=`zH'
+				ereturn scalar lower_limit=`zL_excl_orig'
+				ereturn scalar upper_limit=`zH_excl_orig'
 				ereturn local normalize="`normalize'"
 				if `bootreps'>0 ereturn local cmd "polbunch"
 				ereturn local cmdname "polbunch"
@@ -558,11 +670,11 @@ program define bunch_profile23, eclass
         L(integer) ///
         H(integer) ///
 		zbar_est(real) ///
-        [ nonormalize LOG VCE initdelta(real 0.05) ]
+        [ nonormalize LOG VCE initdelta(real 0.05) ZL_EXCL_ORIG(real) ZH_EXCL_ORIG(real)]
 
     gettoken yvar rest : varlist
     gettoken zvar rest : rest
-	gettoken relbin bunch : rest
+	gettoken sidevar bunch : rest
 
     if !inlist(`estimator', 2, 3) {
         di as err "estimator() must be 2 or 3"
@@ -575,39 +687,38 @@ program define bunch_profile23, eclass
     local islog0      = ("`log'"        != "")
     local dovar0      = ("`vce'"        != "")
 
-    tempvar y_t z_t relbin_t bunch_t
+    tempvar y_t z_t side_t bunch_t
 
     gen double `y_t' = `yvar' if `touse'
     gen double `z_t' = `zvar' if `touse'
-	gen double `relbin_t' = `relbin' if `touse'
+	gen double `side_t' = `sidevar' if `touse'
     gen double `bunch_t' = `bunch' if `touse'
 	
     tempname b V Gstack mustack minusmustack stackid
 
-    mata: profile23_run( ///
-        "`y_t'", ///
-        "`z_t'", ///
-        "`relbin_t'", ///
-        "`bunch_t'", ///
-        `cutoff_orig', ///
-        `bw_orig', ///
-        `k', ///
-        `estimator', ///
-        `normalized0', ///
-        `islog0', ///
-        `l', ///
-        `h', ///
-        `dovar0', ///
-		`initdelta', ///
-		`zbar_est'
-    )
-
+	mata: profile23_run( ///
+		"`y_t'", ///
+		"`z_t'", ///
+		"`side_t'", ///
+		"`bunch_t'", ///
+		`cutoff_orig', ///
+		`bw_orig', ///
+		`k', ///
+		`estimator', ///
+		`normalized0', ///
+		`islog0', ///
+		`zl_excl_orig', ///
+		`zh_excl_orig', ///
+		`zbar_est', ///
+		`dovar0', ///
+		`initdelta' ///
+	)
     matrix `b' = r_b_profile23
     matrix `V' = r_V_profile23
 
     /*
         Raw e(b) order from profile23_run():
-            beta_1 ... beta_K beta_cons delta B
+            beta_1 ... beta_K beta_cons delta
 
         Desired names:
             h0:`zvar'
@@ -620,27 +731,23 @@ program define bunch_profile23, eclass
 
     local cnames
 
-    forvalues j = 1/`k' {
-        if `j' == 1 {
-            local term "`zvar'"
-        }
-        else {
-            local term "c.`zvar'"
-            forvalues r = 2/`j' {
-                local term "`term'#c.`zvar'"
-            }
-        }
+	forvalues j = 1/`k' {
+		local term "c.`zvar'"
+		if `j' > 1 {
+			forvalues r = 2/`j' {
+				local term "`term'#c.`zvar'"
+			}
+		}
+		local cnames `cnames' `term'
+	}
 
-        local cnames `cnames' `term'
-    }
-
-    local cnames `cnames' _cons delta B
+    local cnames `cnames' _cons delta
 
     local eqnames
     forvalues j = 1/`k' {
         local eqnames `eqnames' h0
     }
-    local eqnames `eqnames' h0 bunching bunching
+    local eqnames `eqnames' h0 bunching
 
     matrix colnames `b' = `cnames'
     matrix coleq    `b' = `eqnames'
@@ -696,9 +803,11 @@ program define bunch_transform, eclass
         BWOrig(real) ///
         BWEst(real) ///
         XSCALE(real) ///
-        L(integer) ///
-        H(integer) ///
-        [ LOG CONSTANT T0(real) T1(real) NOGRAD nonormalize zbar_est Hstar_obs(real) Bmodel]
+        ZL_EXCL_ORIG(real) ///
+        ZH_EXCL_ORIG(real) ///
+		L(integer) ///
+		H(integer) ///
+        [ LOG CONSTANT T0(real) T1(real) NOGRAD nonormalize ZBAR_EST(real 0) HSTAR_OBS(real 0) BMODEL]
 
     /* Existing e(b) is required */
     capture confirm matrix e(b)
@@ -713,7 +822,7 @@ program define bunch_transform, eclass
 
     /* Use delta-method VCE only if e(V) exists and novce is not specified */
     local dograd = 0
-    if "`novce'" == "" {
+    if "`grad'" != "nograd" {
         capture confirm matrix e(V)
         if !_rc {
             matrix `Vtheta' = e(V)
@@ -745,33 +854,37 @@ program define bunch_transform, eclass
 
     /* Call Mata transform */
 	local dograd="`grad'"!="nograd"
-	local Btype2=("`Bmodel'"=="Bmodel")
-    mata: bunch_transform( ///
-        st_matrix("`theta'"), ///
-        `estimator', ///
-        `k', ///
-        `cutoff_orig', ///
-        `cutoff_est', ///
-        `bw_orig', ///
-        `bw_est', ///
-        `xscale', ///
-        `l', ///
-        `h', ///
-        `islog', ///
-        `constant', ///
-        `hastax0', ///
-        `t0', ///
-        `t1', ///
-        `dograd', ///
+	local Btype2 = 1
+	if "`bmodel'" != "" local Btype2 = 0
+	mata: bunch_transform( ///
+		st_matrix("`theta'"), ///
+		`estimator', ///
+		`k', ///
+		`cutoff_orig', ///
+		`cutoff_est', ///
+		`bw_orig', ///
+		`bw_est', ///
+		`xscale', ///
+		`l', ///
+		`h', ///
+		`islog', ///
+		`constant', ///
+		`hastax0', ///
+		`t0', ///
+		`t1', ///
+		`dograd', ///
+		`normalized0', ///
 		`zbar_est', ///
-		`normalized0' ///
-		`Btype2' ///
-    )
+		`hstar_obs', ///
+		`Btype2', ///
+		`zl_excl_orig', ///
+		`zh_excl_orig' ///
+	)
 
-    matrix `bnew' = r(b_bunchcalc)
+    matrix `bnew' = b_bunchcalc
 
     if `dograd' {
-        matrix `Gnew' = r(G_bunchcalc)
+        matrix `Gnew' = G_bunchcalc
 
         if colsof(`Gnew') != colsof(`theta') {
             di as err "conformability error: colsof(G) != colsof(e(b))"
@@ -1262,27 +1375,27 @@ real rowvector cf_mass_row23(
     real scalar estimator,
     real scalar normalized,
     real scalar islog,
-    real scalar L,
-    real scalar H
+    real scalar zL_excl_orig,
+    real scalar zH_excl_orig
 )
 {
     real scalar ex_lo, ex_hi, cutoff_est, bw_est
     real rowvector Rlo, Rhi
     struct hcoef_out scalar h1map
 
-    if (normalized == 1) {
-        cutoff_est = 0
-        bw_est     = 1
-        ex_lo      = -L + 1
-        ex_hi      =  H + 1
-    }
-    else {
-        cutoff_est = cutoff_orig
-        bw_est     = bw_orig
-        ex_lo      = cutoff_orig + (-L + 1)*bw_orig
-        ex_hi      = cutoff_orig + ( H + 1)*bw_orig
-    }
-
+	if (normalized == 1) {
+		cutoff_est = 0
+		bw_est     = 1
+		ex_lo      = (zL_excl_orig - cutoff_orig) / bw_orig
+		ex_hi      = (zH_excl_orig - cutoff_orig) / bw_orig
+	}
+	else {
+		cutoff_est = cutoff_orig
+		bw_est     = bw_orig
+		ex_lo      = zL_excl_orig
+		ex_hi      = zH_excl_orig
+	}
+	
     Rlo = intbasis(ex_lo, cutoff_est, K)
 
     if (estimator == 2) {
@@ -1308,8 +1421,8 @@ real rowvector d_cf_mass_row23_ddelta(
     real scalar estimator,
     real scalar normalized,
     real scalar islog,
-    real scalar L,
-    real scalar H
+    real scalar zL_excl_orig,
+    real scalar zH_excl_orig
 )
 {
     real scalar eps, dp, dm
@@ -1319,8 +1432,8 @@ real rowvector d_cf_mass_row23_ddelta(
     dp  = delta + eps
     dm  = max((delta - eps, 1e-10))
 
-    Rp = cf_mass_row23(dp, z, cutoff_orig, bw_orig, K, estimator, normalized, islog, L, H)
-    Rm = cf_mass_row23(dm, z, cutoff_orig, bw_orig, K, estimator, normalized, islog, L, H)
+    Rp = cf_mass_row23(dp, z, cutoff_orig, bw_orig, K, estimator, normalized, islog, zL_excl_orig, zH_excl_orig)
+    Rm = cf_mass_row23(dm, z, cutoff_orig, bw_orig, K, estimator, normalized, islog, zL_excl_orig, zH_excl_orig)
 
     return((Rp - Rm)/(dp - dm))
 }
@@ -1330,27 +1443,25 @@ real rowvector h0_excluded_row(
     real scalar bw_orig,
     real scalar K,
     real scalar normalized,
-    real scalar L,
-    real scalar H
+    real scalar zL_excl_orig,
+    real scalar zH_excl_orig
 )
 {
     real scalar ex_lo, ex_hi, bw_est
 
     if (normalized == 1) {
-        ex_lo  = -L + 1
-        ex_hi  = H + 1
         bw_est = 1
+        ex_lo  = (zL_excl_orig - cutoff_orig) / bw_orig
+        ex_hi  = (zH_excl_orig - cutoff_orig) / bw_orig
     }
     else {
-        ex_lo  = cutoff_orig + (-L + 1)*bw_orig
-        ex_hi  = cutoff_orig + ( H + 1)*bw_orig
         bw_est = bw_orig
+        ex_lo  = zL_excl_orig
+        ex_hi  = zH_excl_orig
     }
 
     return(intbasis(ex_lo, ex_hi, K) / bw_est)
 }
-
-
 // -----------------------------------------------------------------------------
 // Conditional design/profile objective
 // -----------------------------------------------------------------------------
@@ -1367,8 +1478,8 @@ struct design23_out scalar make_design23(
     real scalar estimator,
     real scalar normalized,
     real scalar islog,
-    real scalar L,
-    real scalar H,
+    real scalar zL_excl_orig,
+    real scalar zH_excl_orig,
     real scalar zbar_est,
     real scalar dograd
 )
@@ -1391,7 +1502,7 @@ struct design23_out scalar make_design23(
 
     h1 = h1design23(delta, zR, cutoff_orig, bw_orig, K, estimator, normalized, islog, dograd)
 
-    Xcf = cf_mass_row23(delta, z, cutoff_orig, bw_orig, K, estimator, normalized, islog, L, H)
+    Xcf = cf_mass_row23(delta, z, cutoff_orig, bw_orig, K, estimator, normalized, islog, zL_excl_orig, zH_excl_orig)
     Xbmod = bmodel_row23(delta, cutoff_orig, bw_orig, K, estimator, normalized, islog, zbar_est)
 
     Xmass = Xcf + Xbmod
@@ -1401,7 +1512,7 @@ struct design23_out scalar make_design23(
     if (dograd) {
         dX0 = J(rows(zL), Kb, 0)
 
-        dXcf = d_cf_mass_row23_ddelta(delta, z, cutoff_orig, bw_orig, K, estimator, normalized, islog, L, H)
+        dXcf = d_cf_mass_row23_ddelta(delta, z, cutoff_orig, bw_orig, K, estimator, normalized, islog, zL_excl_orig, zH_excl_orig)
         dXbmod = d_bmodel_row23_ddelta(delta, cutoff_orig, bw_orig, K, estimator, normalized, islog, zbar_est)
 
         dXmass = dXcf + dXbmod
@@ -1428,8 +1539,8 @@ real rowvector profBeta23(
     real scalar estimator,
     real scalar normalized,
     real scalar islog,
-    real scalar L,
-    real scalar H,
+    real scalar zL_excl_orig,
+    real scalar zH_excl_orig,
     real scalar zbar_est
 )
 {
@@ -1446,7 +1557,7 @@ real rowvector profBeta23(
         select(yout, sideout :==  1) \
         Hstar_obs
 
-    D = make_design23(delta, zout, sideout, cutoff_orig, bw_orig, K, estimator, normalized, islog, L, H, zbar_est, 0)
+    D = make_design23(delta, zout, sideout, cutoff_orig, bw_orig, K, estimator, normalized, islog, zL_excl_orig, zH_excl_orig, zbar_est, 0)
 
     beta = qrsolve(D.Xb, ystack)
 
@@ -1467,8 +1578,8 @@ real scalar profQ23(
     real scalar estimator,
     real scalar normalized,
     real scalar islog,
-    real scalar L,
-    real scalar H,
+    real scalar zL_excl_orig,
+    real scalar zH_excl_orig,
     real scalar zbar_est
 )
 {
@@ -1488,7 +1599,7 @@ real scalar profQ23(
         select(yout, sideout :==  1) \
         Hstar_obs
 
-    D = make_design23(delta, zout, sideout, cutoff_orig, bw_orig, K, estimator, normalized, islog, L, H, zbar_est, 0)
+    D = make_design23(delta, zout, sideout, cutoff_orig, bw_orig, K, estimator, normalized, islog, zL_excl_orig, zH_excl_orig, zbar_est, 0)
 
     beta  = qrsolve(D.Xb, ystack)
     resid = ystack - D.Xb * beta
@@ -1511,8 +1622,8 @@ struct stack23_out scalar profile23_stack(
     real scalar estimator,
     real scalar normalized,
     real scalar islog,
-    real scalar L,
-    real scalar H,
+    real scalar zL_excl_orig,
+    real scalar zH_excl_orig,
     real scalar zbar_est,
     real scalar dograd
 )
@@ -1532,7 +1643,7 @@ struct stack23_out scalar profile23_stack(
         select(yout, sideout :==  1) \
         Hstar_obs
 
-    D = make_design23(delta, zout, sideout, cutoff_orig, bw_orig, K, estimator, normalized, islog, L, H, zbar_est, dograd)
+    D = make_design23(delta, zout, sideout, cutoff_orig, bw_orig, K, estimator, normalized, islog, zL_excl_orig, zH_excl_orig, zbar_est, dograd)
 
     out.X  = D.Xb
     out.mu = D.Xb * beta'
@@ -1702,7 +1813,9 @@ void bunch_transform(
     real scalar normalized,
     real scalar zbar_est,
     real scalar Hstar_obs,
-    real scalar Btype2
+    real scalar Btype2,
+	real scalar zL_excl_orig,
+	real scalar zH_excl_orig
 )
 {
     struct hcoef_out scalar h1
@@ -1744,7 +1857,12 @@ void bunch_transform(
     }
 
     // ALLOCATE OUTPUT
-    Nbunch = L + H
+    if (estimator == 0 | estimator == 1) {
+		Nbunch = cols(bunch)
+	}
+	else {
+		Nbunch = 0
+	}
 
     nout =
         2*Kb +                                      // h0,h1
@@ -1818,7 +1936,7 @@ void bunch_transform(
         }
         else if (Btype2 == 1) {
             /* Estimator 2, Chetty-style reduced-form B: B_reduced = Hstar_obs - int_{lower}^{upper} h0(z) dz / bw */
-            RB = h0_excluded_row(cutoff_orig, bw_orig, K, normalized, L, H)
+            RB = h0_excluded_row(cutoff_orig, bw_orig, K, normalized, zL_excl_orig, zH_excl_orig)
 
             B = Hstar_obs - RB * beta'
             b[1,oB] = B
@@ -1984,7 +2102,7 @@ void bunch_transform(
 void profile23_run(
     string scalar yvar,
     string scalar zvar,
-    string scalar relbinvar,
+    string scalar sidevar,
     string scalar bunchvar,
     real scalar cutoff_orig,
     real scalar bw_orig,
@@ -1992,14 +2110,14 @@ void profile23_run(
     real scalar estimator,
     real scalar normalized,
     real scalar islog,
-    real scalar L,
-    real scalar H,
+    real scalar zL_excl_orig,
+    real scalar zH_excl_orig,
     real scalar zbar_est,
     real scalar dovar,
     real scalar initdelta
 )
 {
-    real colvector y, z, relbin, bunch, side
+    real colvector y, z, side, bunch
     real scalar Kb, Hstar_obs, lndelta_hat, delta_hat
     real rowvector beta_hat, b
     real matrix Vout
@@ -2008,14 +2126,11 @@ void profile23_run(
 
     Kb = K + 1
 
-    y      = st_data(., yvar)
-    z      = st_data(., zvar)
-    relbin = st_data(., relbinvar)
-    bunch  = st_data(., bunchvar)
+	y     = st_data(., yvar)
+	z     = st_data(., zvar)
+	side  = st_data(., sidevar)
+	bunch = st_data(., bunchvar)
 
-    side = J(rows(y), 1, .)
-    side[relbin :< -L + 1] = -1
-    side[relbin :>  H]     =  1
 
     Hstar_obs = sum(select(y, bunch :> 0))
 
@@ -2039,20 +2154,20 @@ void profile23_run(
     optimize_init_argument(S, 9,  estimator)
     optimize_init_argument(S, 10, normalized)
     optimize_init_argument(S, 11, islog)
-    optimize_init_argument(S, 12, L)
-    optimize_init_argument(S, 13, H)
+    optimize_init_argument(S, 12, zL_excl_orig)
+    optimize_init_argument(S, 13, zH_excl_orig)
     optimize_init_argument(S, 14, zbar_est)
 
     lndelta_hat = optimize(S)
     delta_hat   = exp(lndelta_hat)
 
-    beta_hat = profBeta23(delta_hat, y, z, side, bunch, Hstar_obs, cutoff_orig, bw_orig, K, estimator, normalized, islog, L, H, zbar_est)
+    beta_hat = profBeta23(delta_hat, y, z, side, bunch, Hstar_obs, cutoff_orig, bw_orig, K, estimator, normalized, islog,zL_excl_orig, zH_excl_orig, zbar_est)
 
     // Raw structural parameter order: beta_1 ... beta_K beta_cons delta.
     b = beta_hat, delta_hat
 
     if (dovar == 1) {
-        st = profile23_stack(y, z, side, bunch, beta_hat, delta_hat, Hstar_obs, cutoff_orig, bw_orig, K, estimator, normalized, islog, L, H, zbar_est, 1)
+        st = profile23_stack(y, z, side, bunch, beta_hat, delta_hat, Hstar_obs, cutoff_orig, bw_orig, K, estimator, normalized, islog, zL_excl_orig, zH_excl_orig, zbar_est, 1)
 
         Vout = varcorrect_collapsed(st.G, st.fw_orig, st.stack_id, st.minus_mu, 0)
     }
