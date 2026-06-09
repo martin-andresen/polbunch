@@ -1782,22 +1782,6 @@ real matrix varcorrect_collapsed(
     }
 
     bread = pinv(quadcross(G, G) :* N)
-
-			st_numscalar("debug_N", N)
-		st_numscalar("debug_min_fw", min(fw_orig))
-		st_numscalar("debug_max_fw", max(fw_orig))
-		st_numscalar("debug_missing_fw", sum(fw_orig :>= .))
-
-		st_numscalar("debug_missing_meat", sum(meat :>= .))
-		st_numscalar("debug_missing_bread", sum(bread :>= .))
-		st_numscalar("debug_rank_bread_arg", rank(quadcross(G, G) :* N))
-		st_numscalar("debug_cols_bread_arg", cols(quadcross(G, G) :* N))
-
-		st_matrix("debug_bread_arg", quadcross(G, G) :* N)
-		st_matrix("debug_meat", meat)
-		st_matrix("debug_bread", bread)
-		st_matrix("debug_Vout", bread * meat * bread)
-		
     return(bread * meat * bread)
 }
 
@@ -2261,16 +2245,7 @@ void profile23_run(
 
     if (dovar == 1) {
         st = profile23_stack(y, z, side, bunch, beta_hat, delta_hat, Hstar_obs, cutoff_orig, bw_orig, K, estimator, normalized, islog, zL_excl_orig, zH_excl_orig, zbar_est, 1)
-		st_numscalar("debug_rows_G", rows(st.G))
-		st_numscalar("debug_cols_G", cols(st.G))
-		st_numscalar("debug_rank_G", rank(st.G))
-		st_numscalar("debug_rows_stackid", rows(st.stack_id))
-		st_numscalar("debug_missing_stackid", sum(st.stack_id :>= .))
-		st_numscalar("debug_missing_G", sum(st.G :>= .))
-		st_numscalar("debug_missing_minusmu", sum(st.minus_mu :>= .))
-		
-
-        Vout = varcorrect_collapsed(st.G, st.fw_orig, st.stack_id, st.minus_mu, 0)
+		Vout = varcorrect_collapsed(st.G, st.fw_orig, st.stack_id, st.minus_mu, 0)
 
     }
     else {
