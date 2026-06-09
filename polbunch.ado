@@ -255,13 +255,9 @@
 				local coleq1
 
 				if `polynomial' > 0 {
-					forvalues j = 1/`polynomial' {
-						if `j' == 1 {
-							local rhsvars c.`z'
-						}
-						else {
-							local rhsvars `rhsvars'##c.`z'
-						}
+					forvalues i = 1/`polynomial' {
+						if `i' == 1 local rhsvars c.`z'
+						else local rhsvars `rhsvars'##c.`z'
 
 						local coleq0 `coleq0' h0
 						local coleq1 `coleq1' h1
@@ -269,16 +265,14 @@
 
 					fvexpand `rhsvars'
 					local names `r(varlist)' _cons
-
-					local coleq0 `coleq0' h0
-					local coleq1 `coleq1' h1
 				}
 				else {
 					local rhsvars
 					local names _cons
-					local coleq0 h0
-					local coleq1 h1
 				}
+
+				local coleq0 `coleq0' h0
+				local coleq1 `coleq1' h1
 
 				if `polynomial'>0 {
 					loc nmiss=1
@@ -295,20 +289,31 @@
 								}
 							
 							//NEW NAMES
-							loc coleq0 
-							loc coleq1 
-							forvalues i=1/`polynomial' { 
-								if `i'==1 loc rhsvars  c.`z'
-								else loc rhsvars `rhsvars'##c.`z'
-								loc coleq0 `coleq0' h0
-								loc coleq1 `coleq1' h1
+							local rhsvars
+							local coleq0
+							local coleq1
+
+							if `polynomial' > 0 {
+								forvalues i = 1/`polynomial' {
+									if `i' == 1 local rhsvars c.`z'
+									else local rhsvars `rhsvars'##c.`z'
+
+									local coleq0 `coleq0' h0
+									local coleq1 `coleq1' h1
+								}
+
+								fvexpand `rhsvars'
+								local names `r(varlist)' _cons
 							}
-					
-							loc coleq0 `coleq0' h0
-							loc coleq1 `coleq1' h1
+							else {
+								local rhsvars
+								local names _cons
+							}
+
+							local coleq0 `coleq0' h0
+							local coleq1 `coleq1' h1
+
 							
-							fvexpand `rhsvars'
-							loc names `r(varlist)' _cons
 							}
 						}
 					if "`note'"=="note" {
@@ -324,7 +329,7 @@
 				
 				local bnames
 				local buncheq
-				forvalues j if local bunchlevels {
+				forvalues j of local bunchlevels {
 					loc bnames `bnames' `j'.bunch
 					loc buncheq `buncheq' bunching
 				}
@@ -460,7 +465,7 @@
 					if `estimator'==0|"`test'"!="notest" { //UNRESTRICTED MODEL
 						if `s'>0 reg `y' `unresmodel', nocons
 						if `bootreps'==1 {
-							varcorrect `unresmodel', `smallsample'
+							varcorrect `y' `unresmodel', `smallsample'
 							mat `V'=r(V)
 							mat `b'=`bu'
 							mat colnames `V'=`unresnames'	
@@ -670,7 +675,9 @@ program define bunch_profile23, eclass
         L(integer) ///
         H(integer) ///
 		zbar_est(real) ///
-        [ nonormalize LOG VCE initdelta(real 0.05) ZL_EXCL_ORIG(real) ZH_EXCL_ORIG(real)]
+		ZL_EXCL_ORIG(real) ///
+		ZH_EXCL_ORIG(real) ///
+        [ nonormalize LOG VCE initdelta(real 0.05) ]
 
     gettoken yvar rest : varlist
     gettoken zvar rest : rest
@@ -726,7 +733,6 @@ program define bunch_profile23, eclass
             ...
             h0:_cons
             bunching:delta
-            bunching:B
     */
 
     local cnames
@@ -853,7 +859,6 @@ program define bunch_transform, eclass
     local has_esample = !_rc
 
     /* Call Mata transform */
-	local dograd="`grad'"!="nograd"
 	local Btype2 = 1
 	if "`bmodel'" != "" local Btype2 = 0
 	mata: bunch_transform( ///
@@ -1171,9 +1176,13 @@ struct hcoef_out scalar h1coef_map(
     }
     else if (estimator == 3) {
         if (islog == 0) {
-            pow   = (2..(K+1)), 1
-            scale = (1 + delta) :^ pow
-
+           if (K == 0) {
+				pow = 1
+			}
+			else {
+				pow = (2..(K+1)), 1
+			}
+			scale = (1 + delta) :^ pow
             out.gamma = beta :* scale
 
             if (dograd) {
