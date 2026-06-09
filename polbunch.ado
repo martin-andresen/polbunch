@@ -118,6 +118,8 @@
 				}
 				else {
 					gettoken L H : limits
+					local L = real("`L'")
+					local H = real("`H'")
 				}
 
 				tempvar zleft zright relbin crossbin edgehit inbunch
@@ -187,6 +189,7 @@
 				/*
 					Bunch indicator.
 				*/
+				tempvar bunch
 				egen `bunch' = group(`z') if `inbunch'
 				replace `bunch' = 0 if missing(`bunch')
 				quietly levelsof `bunch' if `bunch' > 0, local(bunchlevels)
@@ -330,7 +333,7 @@
 				
 				local bnames
 				local buncheq
-				forvalues j of local bunchlevels {
+				foreach j of local bunchlevels {
 					loc bnames `bnames' `j'.bunch
 					loc buncheq `buncheq' bunching
 				}
@@ -474,7 +477,6 @@
 							mat coleq `V'=`unreseqnames'
 							mat roweq `V'=`unreseqnames'
 							ereturn post `b' `V'
-							est sto saveunres
 							}
 						else if `s'>0&`bootreps'>1 { //collect unrestricted estimates for BS
 							mat `bus'=nullmat(`bus') \ e(b)
@@ -506,6 +508,9 @@
 								zbar_est(`zbar_est') ///
 								zl_excl_orig(`zL_excl_orig') ///
 								zh_excl_orig(`zH_excl_orig')
+								
+								matrix `b' = e(b)
+								capture matrix `V' = e(V)
 							}
 						
 					////TRANSFORM ESTIMATES
@@ -517,27 +522,27 @@
 						if "`t0'" != "" & "`t1'" != "" {
 							local taxopts t0(`t0') t1(`t1')
 						}
-						bunch_transform, ///
+						bunch_transform `z', ///
 							estimator(`estimator') ///
 							k(`polynomial') ///
-							cutoff_orig(`cutoff_orig') ///
-							cutoff_est(`cutoff_est') ///
-							bw_orig(`bw_orig') ///
-							bw_est(`bw_est') ///
+							cutofforig(`cutoff_orig') ///
+							cutoffest(`cutoff_est') ///
+							bworig(`bw_orig') ///
+							bwest(`bw_est') ///
 							xscale(`xscale') ///
-							l(`L') ///
-							h(`H') ///
-							zl_excl_orig(`zL_excl_orig') ///
-							zh_excl_orig(`zH_excl_orig') ///
+							low(`L') ///
+							high(`H') ///
+							zlexcl(`zL_excl_orig') ///
+							zhexcl(`zH_excl_orig') ///
 							`log' ///
 							`constant' ///
 							`taxopts' ///
 							`nograd' ///
 							`normalize' ///
-							zbar_est(`zbar_est') ///
-							hstar_obs(`Hstar_obs') ///
-							`bmodel'
-													
+							zbar(`zbar_est') ///
+							massobs(`Hstar_obs') ///
+							`bmodel'			
+							
 							matrix `b' = e(b)
 							capture matrix `V' = e(V)
 						}
@@ -671,13 +676,13 @@ program define bunch_profile23, eclass
     syntax varlist(min=4 max=4 numeric) [if] [in] , ///
         ESTimator(integer) ///
         K(integer) ///
-        CUTOFFOrig(real) ///
-        BWOrig(real) ///
+        CUTOFF_orig(real) ///
+        BW_orig(real) ///
         L(integer) ///
         H(integer) ///
 		zbar_est(real) ///
-		ZL_EXCL_ORIG(real) ///
-		ZH_EXCL_ORIG(real) ///
+		zl_excl_orig(real) ///
+		zh_excl_orig(real) ///
         [ nonormalize LOG VCE initdelta(real 0.05) ]
 
     gettoken yvar rest : varlist
@@ -723,6 +728,7 @@ program define bunch_profile23, eclass
 	)
     matrix `b' = r_b_profile23
     matrix `V' = r_V_profile23
+
 
     /*
         Raw e(b) order from profile23_run():
@@ -802,19 +808,28 @@ end
 program define bunch_transform, eclass
     version 16.0
 
-    syntax , ///
+    syntax varname, ///
         ESTimator(integer) ///
         K(integer) ///
-        CUTOFFOrig(real) ///
-        CUTOFFEst(real) ///
-        BWOrig(real) ///
-        BWEst(real) ///
+        CUTOFFORIG(real) ///
+        CUTOFFEST(real) ///
+        BWORIG(real) ///
+        BWEST(real) ///
         XSCALE(real) ///
-        ZL_EXCL_ORIG(real) ///
-        ZH_EXCL_ORIG(real) ///
-		L(integer) ///
-		H(integer) ///
-        [ LOG CONSTANT T0(real) T1(real) NOGRAD nonormalize ZBAR_EST(real 0) HSTAR_OBS(real 0) BMODEL]
+        ZLEXCL(real) ///
+        ZHEXCL(real) ///
+        LOW(integer) ///
+        HIGH(integer) ///
+        [ LOG CONSTANT T0(numlist min=1 max=1) T1(numlist min=1 max=1) NOGRAD nonormalize ZBAR(real 0) MASSOBS(real 0) BMODEL ]
+
+		loc z `varlist'
+		
+    if "`t0'" != "" {
+        local t0 : word 1 of `t0'
+    }
+    if "`t1'" != "" {
+        local t1 : word 1 of `t1'
+    }
 
     /* Existing e(b) is required */
     capture confirm matrix e(b)
@@ -824,10 +839,11 @@ program define bunch_transform, eclass
     }
 
     tempname theta Vtheta bnew Gnew Vnew
-	local hastax = "`t0'"!=""&"`t1'"!=""
+    local hastax = "`t0'" != "" & "`t1'" != ""
+
     matrix `theta' = e(b)
 
-    /* Use delta-method VCE only if e(V) exists and novce is not specified */
+    /* Use delta-method VCE only if e(V) exists and nograd is not specified */
     local dograd = 0
     if "`grad'" != "nograd" {
         capture confirm matrix e(V)
@@ -838,14 +854,14 @@ program define bunch_transform, eclass
     }
 
     /* Flags */
-    local islog    = ("`log'"      != "")
-    local constant = ("`constant'" != "")
-    local hastax0  = ("`hastax'"   != "")
-	local normalized0 = ("`normalize'"!="nonormalize")
+    local islog       = ("`log'"      != "")
+    local constant0   = ("`constant'" != "")
+    local hastax0     = ("`hastax'"   != "")
+    local normalized0 = ("`normalize'" != "nonormalize")
 
     if `hastax0' {
         if "`t0'" == "" | "`t1'" == "" {
-            di as err "options t0() and t1() are required when hastax is specified"
+            di as err "options t0() and t1() are required when tax options are used"
             exit 198
         }
     }
@@ -860,32 +876,33 @@ program define bunch_transform, eclass
     local has_esample = !_rc
 
     /* Call Mata transform */
-	local Btype2 = 1
-	if "`bmodel'" != "" local Btype2 = 0
-	mata: bunch_transform( ///
-		st_matrix("`theta'"), ///
-		`estimator', ///
-		`k', ///
-		`cutoff_orig', ///
-		`cutoff_est', ///
-		`bw_orig', ///
-		`bw_est', ///
-		`xscale', ///
-		`l', ///
-		`h', ///
-		`islog', ///
-		`constant', ///
-		`hastax0', ///
-		`t0', ///
-		`t1', ///
-		`dograd', ///
-		`normalized0', ///
-		`zbar_est', ///
-		`hstar_obs', ///
-		`Btype2', ///
-		`zl_excl_orig', ///
-		`zh_excl_orig' ///
-	)
+    local Btype2 = 1
+    if "`bmodel'" != "" local Btype2 = 0
+
+    mata: bunch_transform( ///
+        st_matrix("`theta'"), ///
+        `estimator', ///
+        `k', ///
+        `cutofforig', ///
+        `cutoffest', ///
+        `bworig', ///
+        `bwest', ///
+        `xscale', ///
+        `low', ///
+        `high', ///
+        `islog', ///
+        `constant0', ///
+        `hastax0', ///
+        `t0', ///
+        `t1', ///
+        `dograd', ///
+        `normalized0', ///
+        `zbar', ///
+        `massobs', ///
+        `Btype2', ///
+        `zlexcl', ///
+        `zhexcl' ///
+    )
 
     matrix `bnew' = b_bunchcalc
 
@@ -905,80 +922,78 @@ program define bunch_transform, eclass
         matrix `Vnew' = `Gnew' * `Vtheta' * `Gnew''
     }
 
-	/* Coefficient names with equations */
-	local cnames
+    /* Coefficient names with equations */
+    local cnames
 
-	forvalues j = 1/`k' {
-		local cnames `cnames' p`j'
-	}
-	local cnames `cnames' _cons
+    forvalues j = 1/`k' {
+		if `j'==1 loc term c.`z'
+		else loc term `term'#c.`z'
+        local cnames `cnames' `term'
+    }
+    local cnames `cnames' _cons
 
-	forvalues j = 1/`k' {
-		local cnames `cnames' p`j'
-	}
-	local cnames `cnames' _cons
 
-	local cnames `cnames' ///
-		number_bunchers ///
-		excess_mass
+    local cnames `cnames' `cnames' ///
+        number_bunchers ///
+        excess_mass
 
-	if (`estimator' == 2 | (`estimator' == 3 & `constant')) {
-		local cnames `cnames' delta
-	}
+    if (`estimator' == 2 | (`estimator' == 3 & `constant0')) {
+        local cnames `cnames' delta
+    }
 
-	local cnames `cnames' ///
-		shift ///
-		marginal_response
+    local cnames `cnames' ///
+        shift ///
+        marginal_response
 
-	if `hastax0' {
-		local cnames `cnames' elasticity
-	}
+    if `hastax0' {
+        local cnames `cnames' elasticity
+    }
 
-	if wordcount("`cnames'") != colsof(`bnew') {
-		di as err "internal error: coefficient names do not match transformed b"
-		di as err "number of names = " wordcount("`cnames'")
-		di as err "colsof(b)       = " colsof(`bnew')
-		exit 503
-	}
+    if wordcount("`cnames'") != colsof(`bnew') {
+        di as err "internal error: coefficient names do not match transformed b"
+        di as err "number of names = " wordcount("`cnames'")
+        di as err "colsof(b)       = " colsof(`bnew')
+        exit 503
+    }
 
-	matrix colnames `bnew' = `cnames'
+    matrix colnames `bnew' = `cnames'
 
-	/* Equation names */
-	local eqnames
+    /* Equation names */
+    local eqnames
 
-	forvalues j = 1/`k' {
-		local eqnames `eqnames' h0
-	}
-	local eqnames `eqnames' h0
+    forvalues j = 1/`k' {
+        local eqnames `eqnames' h0
+    }
+    local eqnames `eqnames' h0
 
-	forvalues j = 1/`k' {
-		local eqnames `eqnames' h1
-	}
-	local eqnames `eqnames' h1
+    forvalues j = 1/`k' {
+        local eqnames `eqnames' h1
+    }
+    local eqnames `eqnames' h1
 
-	local eqnames `eqnames' bunching bunching
+    local eqnames `eqnames' bunching bunching
 
-	if (`estimator' == 2 | (`estimator' == 3 & `constant')) {
-		local eqnames `eqnames' bunching
-	}
+    if (`estimator' == 2 | (`estimator' == 3 & `constant0')) {
+        local eqnames `eqnames' bunching
+    }
 
-	local eqnames `eqnames' bunching bunching
+    local eqnames `eqnames' bunching bunching
 
-	if `hastax0' {
-		local eqnames `eqnames' bunching
-	}
+    if `hastax0' {
+        local eqnames `eqnames' bunching
+    }
 
-	matrix coleq `bnew' = `eqnames'
+    matrix coleq `bnew' = `eqnames'
 
-	if `dograd' {
-		matrix rownames `Vnew' = `cnames'
-		matrix colnames `Vnew' = `cnames'
-		matrix roweq    `Vnew' = `eqnames'
-		matrix coleq    `Vnew' = `eqnames'
+    if `dograd' {
+        matrix rownames `Vnew' = `cnames'
+        matrix colnames `Vnew' = `cnames'
+        matrix roweq    `Vnew' = `eqnames'
+        matrix coleq    `Vnew' = `eqnames'
 
-		matrix rownames `Gnew' = `cnames'
-		matrix roweq    `Gnew' = `eqnames'
-	}
+        matrix rownames `Gnew' = `cnames'
+        matrix roweq    `Gnew' = `eqnames'
+    }
 
     /* Post transformed results */
     if `dograd' {
@@ -1005,15 +1020,15 @@ program define bunch_transform, eclass
 
     ereturn scalar estimator   = `estimator'
     ereturn scalar K           = `k'
-    ereturn scalar cutoff_orig = `cutoff_orig'
-    ereturn scalar cutoff_est  = `cutoff_est'
-    ereturn scalar bw_orig     = `bw_orig'
-    ereturn scalar bw_est      = `bw_est'
+    ereturn scalar cutoff_orig = `cutofforig'
+    ereturn scalar cutoff_est  = `cutoffest'
+    ereturn scalar bw_orig     = `bworig'
+    ereturn scalar bw_est      = `bwest'
     ereturn scalar xscale      = `xscale'
-    ereturn scalar L           = `l'
-    ereturn scalar H           = `h'
+    ereturn scalar L           = `low'
+    ereturn scalar H           = `high'
     ereturn scalar islog       = `islog'
-    ereturn scalar constant    = `constant'
+    ereturn scalar constant    = `constant0'
     ereturn scalar hastax      = `hastax0'
 
     if `hastax0' {
@@ -1659,7 +1674,7 @@ struct stack23_out scalar profile23_stack(
     out.mu = D.Xb * beta'
 
     // varcorrect_collapsed() expects this, not ordinary residuals
-    out.minus_mu = -out.mu
+    out.minus_mu = out.ystack - out.mu
 
     if (dograd) {
         // columns: beta, delta
@@ -1695,7 +1710,8 @@ struct stack23_out scalar profile23_stack(
         }
     }
 
-    out.fw_orig = y
+	out.fw_orig = y
+	_editmissing(out.fw_orig, 0)
 
     return(out)
 }
@@ -1765,8 +1781,23 @@ real matrix varcorrect_collapsed(
         }
     }
 
-    bread = invsym(quadcross(G, G) :* N)
+    bread = pinv(quadcross(G, G) :* N)
 
+			st_numscalar("debug_N", N)
+		st_numscalar("debug_min_fw", min(fw_orig))
+		st_numscalar("debug_max_fw", max(fw_orig))
+		st_numscalar("debug_missing_fw", sum(fw_orig :>= .))
+
+		st_numscalar("debug_missing_meat", sum(meat :>= .))
+		st_numscalar("debug_missing_bread", sum(bread :>= .))
+		st_numscalar("debug_rank_bread_arg", rank(quadcross(G, G) :* N))
+		st_numscalar("debug_cols_bread_arg", cols(quadcross(G, G) :* N))
+
+		st_matrix("debug_bread_arg", quadcross(G, G) :* N)
+		st_matrix("debug_meat", meat)
+		st_matrix("debug_bread", bread)
+		st_matrix("debug_Vout", bread * meat * bread)
+		
     return(bread * meat * bread)
 }
 
@@ -2109,6 +2140,53 @@ void bunch_transform(
 // Top-level profile estimator
 // -----------------------------------------------------------------------------
 
+void profQ23_opt(
+    real scalar todo,
+    real rowvector p,
+    real colvector y,
+    real colvector z,
+    real colvector side,
+    real colvector bunch,
+    real rowvector pars,
+    real scalar val,
+    real rowvector grad,
+    real matrix hess
+)
+{
+    real scalar Hstar_obs, cutoff_orig, bw_orig, K
+    real scalar estimator, normalized, islog
+    real scalar zL_excl_orig, zH_excl_orig, zbar_est
+
+    Hstar_obs    = pars[1]
+    cutoff_orig  = pars[2]
+    bw_orig      = pars[3]
+    K            = pars[4]
+    estimator    = pars[5]
+    normalized   = pars[6]
+    islog        = pars[7]
+    zL_excl_orig = pars[8]
+    zH_excl_orig = pars[9]
+    zbar_est     = pars[10]
+
+    val = profQ23(
+        p[1],
+        y,
+        z,
+        side,
+        bunch,
+        Hstar_obs,
+        cutoff_orig,
+        bw_orig,
+        K,
+        estimator,
+        normalized,
+        islog,
+        zL_excl_orig,
+        zH_excl_orig,
+        zbar_est
+    )
+}
+
 void profile23_run(
     string scalar yvar,
     string scalar zvar,
@@ -2129,7 +2207,7 @@ void profile23_run(
 {
     real colvector y, z, side, bunch
     real scalar Kb, Hstar_obs, lndelta_hat, delta_hat
-    real rowvector beta_hat, b
+    real rowvector beta_hat, b, pars, phat
     real matrix Vout
     transmorphic S
     struct stack23_out scalar st
@@ -2147,28 +2225,33 @@ void profile23_run(
     if (initdelta <= 0 | initdelta >= .) {
         initdelta = 0.05
     }
+	
+	pars = (
+		Hstar_obs,
+		cutoff_orig,
+		bw_orig,
+		K,
+		estimator,
+		normalized,
+		islog,
+		zL_excl_orig,
+		zH_excl_orig,
+		zbar_est
+	)
 
-    S = optimize_init()
-    optimize_init_evaluator(S, &profQ23())
-    optimize_init_evaluatortype(S, "d0")
-    optimize_init_params(S, ln(initdelta))
+	S = optimize_init()
+	optimize_init_evaluator(S, &profQ23_opt())
+	optimize_init_evaluatortype(S, "d0")
+	optimize_init_params(S, ln(initdelta))
 
-    optimize_init_argument(S, 1,  y)
-    optimize_init_argument(S, 2,  z)
-    optimize_init_argument(S, 3,  side)
-    optimize_init_argument(S, 4,  bunch)
-    optimize_init_argument(S, 5,  Hstar_obs)
-    optimize_init_argument(S, 6,  cutoff_orig)
-    optimize_init_argument(S, 7,  bw_orig)
-    optimize_init_argument(S, 8,  K)
-    optimize_init_argument(S, 9,  estimator)
-    optimize_init_argument(S, 10, normalized)
-    optimize_init_argument(S, 11, islog)
-    optimize_init_argument(S, 12, zL_excl_orig)
-    optimize_init_argument(S, 13, zH_excl_orig)
-    optimize_init_argument(S, 14, zbar_est)
+	optimize_init_argument(S, 1, y)
+	optimize_init_argument(S, 2, z)
+	optimize_init_argument(S, 3, side)
+	optimize_init_argument(S, 4, bunch)
+	optimize_init_argument(S, 5, pars)
 
-    lndelta_hat = optimize(S)
+	phat         = optimize(S)
+	lndelta_hat = phat[1]
     delta_hat   = exp(lndelta_hat)
 
     beta_hat = profBeta23(delta_hat, y, z, side, bunch, Hstar_obs, cutoff_orig, bw_orig, K, estimator, normalized, islog,zL_excl_orig, zH_excl_orig, zbar_est)
@@ -2178,8 +2261,17 @@ void profile23_run(
 
     if (dovar == 1) {
         st = profile23_stack(y, z, side, bunch, beta_hat, delta_hat, Hstar_obs, cutoff_orig, bw_orig, K, estimator, normalized, islog, zL_excl_orig, zH_excl_orig, zbar_est, 1)
+		st_numscalar("debug_rows_G", rows(st.G))
+		st_numscalar("debug_cols_G", cols(st.G))
+		st_numscalar("debug_rank_G", rank(st.G))
+		st_numscalar("debug_rows_stackid", rows(st.stack_id))
+		st_numscalar("debug_missing_stackid", sum(st.stack_id :>= .))
+		st_numscalar("debug_missing_G", sum(st.G :>= .))
+		st_numscalar("debug_missing_minusmu", sum(st.minus_mu :>= .))
+		
 
         Vout = varcorrect_collapsed(st.G, st.fw_orig, st.stack_id, st.minus_mu, 0)
+
     }
     else {
         Vout = J(cols(b), cols(b), .)
