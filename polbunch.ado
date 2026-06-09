@@ -319,7 +319,8 @@
 					if "`note'"=="note" {
 						noi di as text "Note: Polynomial order lowered to `polynomial' because of multicollinearity problems with the specified polynomial."
 					}
-				} else {
+				} 
+				else {
 					loc unresmodel 0.`dum' 1.`dum' b0.`bunch'
 				}
 				
