@@ -154,6 +154,11 @@
 						local L = real("`L'")
 						local H = real("`H'")
 					}
+					
+					if `estimator' == 4 & `H' == 0 {
+						noi di as text "Note: estimator(4) with no excluded bins above the cutoff uses little or no h1 information in the raw excess-mass estimate, unlike the classic Saez trapezoid estimator."
+					}
+					
 
 					tempvar zleft zright relbin crossbin edgehit inbunch
 
@@ -676,10 +681,31 @@
 						di "`e(title)'"
 						eret di
 						if `dotest' {
-							di "Test of model assumptions: {col 42}Chi2(`df') test statistic {col 72}`: di %12.4f `chi2''"
-							di "{col 42}p-value {col 72}`: di %12.4f `p_mod''"
-							di "{hline 83}"
+							tempname b
+							matrix `b' = e(b)
+
+							local stub = strlen("`e(depvar)'")
+
+							local cn : colnames `b'
+							local eq : coleq `b'
+
+							foreach x of local cn {
+								local stub = max(`stub', strlen("`x'"))
 							}
+
+							foreach x of local eq {
+								local stub = max(`stub', strlen("`x'"))
+							}
+
+							local stub = max(`stub', 12)
+							local W = `stub' + 67
+							di as txt "Test of model assumptions:" ///
+								_col(`=`W'-35') "Chi2(`df') test statistic" ///
+								_col(`=`W'-10') as res %10.4f `chi2'
+							di as txt _col(`=`W'-35') as txt "p-value" ///
+								_col(`=`W'-10') as res %10.4f `p_mod'
+							di as txt "{hline `W'}"
+						}
 						if inlist(`estimator',1,2) {
 							di "Note: Estimator is not consistent with iso-elastic labor supply model and thus biased."
 						}
@@ -1288,16 +1314,16 @@ program define saez_transform, eclass
         ereturn scalar t1 = `t1'
     }
 end
-
-	program define bunch_saez, eclass
+cap program drop bunch_saez
+program define bunch_saez, eclass
     version 16.0
 
-    syntax varlist(min=4 max=4 numeric) [if] [in] , ///
+    syntax varlist(min=4 max=4 numeric) [if] [in], ///
         CUTOFF_orig(real) ///
         BW_orig(real) ///
-        zl_excl_orig(real) ///
-        zh_excl_orig(real) ///
-        [ VCE ]
+        ZL_excl_orig(real) ///
+        ZH_excl_orig(real) ///
+        [VCE]
 
     gettoken yvar rest : varlist
     gettoken zvar rest : rest
@@ -1309,27 +1335,65 @@ end
 
     quietly count if `touse' & `bunchvar' == 0 & missing(`sidevar')
     if r(N) > 0 {
-        di as err "Non-excluded bins have missing side."
-        exit 301
+        di as err "Some non-excluded bins cannot be classified as left or right of cutoff."
+        exit 498
     }
 
     quietly count if `touse' & `bunchvar' == 0 & `sidevar' == -1
     if r(N) == 0 {
-        di as err "No reference bins below the excluded region."
-        exit 301
+        di as err "no left reference bins found for Saez estimator"
+        exit 498
     }
 
     quietly count if `touse' & `bunchvar' == 0 & `sidevar' == 1
     if r(N) == 0 {
-        di as err "No reference bins above the excluded region."
-        exit 301
+        di as err "no right reference bins found for Saez estimator"
+        exit 498
     }
 
-	quietly count if `touse' & `bunchvar' > 0
-	local width_excl = r(N)
+    quietly count if `touse' & `bunchvar' > 0
+    if r(N) == 0 {
+        di as err "no excluded/bunching bins found for Saez estimator"
+        exit 498
+    }
 
-	local a0 = 0.5 * `width_excl'
-	local a1 = 0.5 * `width_excl'
+    local width_excl = r(N)
+
+    /*
+        Saez counterfactual weights inside the excluded region.
+
+        a0 is the width, in bins, of the excluded interval below the cutoff.
+        a1 is the width, in bins, of the excluded interval above the cutoff.
+
+        This gives:
+            Hstar = a0*h0 + a1*h1 + B
+        hence:
+            B = Hstar - a0*h0 - a1*h1
+
+        For symmetric excluded regions this collapses to:
+            a0 = a1 = 0.5*width_excl.
+    */
+    local a0 = (`cutoff_orig' - `zl_excl_orig') / `bw_orig'
+    local a1 = (`zh_excl_orig' - `cutoff_orig') / `bw_orig'
+
+    if `a0' < -1e-8 | `a1' < -1e-8 {
+        di as err "invalid Saez excluded-region weights"
+        di as err "a0 = " %12.8f `a0' ", a1 = " %12.8f `a1'
+        exit 498
+    }
+
+    if abs((`a0' + `a1') - `width_excl') > 1e-6 {
+        di as err "internal error: Saez weights do not sum to excluded-region width"
+        di as err "a0 + a1 = " %12.8f (`a0' + `a1') ///
+            ", excluded bins = " %12.8f `width_excl'
+        exit 498
+    }
+
+    /*
+        Clean tiny floating-point artifacts.
+    */
+    if abs(`a0') < 1e-10 local a0 = 0
+    if abs(`a1') < 1e-10 local a1 = 0
 
     local dovar0 = ("`vce'" != "")
 
@@ -1338,16 +1402,9 @@ end
     gen double `side_t'  = `sidevar'  if `touse'
     gen double `bunch_t' = `bunchvar' if `touse'
 
-    tempname b V Gstack mustack minusmustack stackid
+    mata: saez_run("`y_t'", "`side_t'", "`bunch_t'", `a0', `a1', `dovar0')
 
-    mata: saez_run( ///
-        "`y_t'", ///
-        "`side_t'", ///
-        "`bunch_t'", ///
-        `a0', ///
-        `a1', ///
-        `dovar0' ///
-    )
+    tempname b V Gstack mustack minusmustack stackid
 
     matrix `b' = r_b_saez
     matrix colnames `b' = _cons _cons B
@@ -1355,7 +1412,6 @@ end
 
     if `dovar0' {
         matrix `V' = r_V_saez
-
         matrix rownames `V' = _cons _cons B
         matrix colnames `V' = _cons _cons B
         matrix roweq    `V' = h0 h1 bunching
@@ -1364,22 +1420,23 @@ end
         ereturn post `b' `V', esample(`touse')
         ereturn local vcetype "Collapsed sandwich"
 
-        matrix `Gstack'       = r_G_saez
-        matrix `mustack'      = r_mu_saez
-        matrix `minusmustack' = r_minus_mu_saez
-        matrix `stackid'      = r_stack_id_saez
+        capture matrix `Gstack' = r_G_saez
+        if !_rc ereturn matrix G_stack = `Gstack'
 
-        ereturn matrix G_stack        = `Gstack'
-        ereturn matrix mu_stack       = `mustack'
-        ereturn matrix minus_mu_stack = `minusmustack'
-        ereturn matrix stack_id       = `stackid'
+        capture matrix `mustack' = r_mu_saez
+        if !_rc ereturn matrix mu_stack = `mustack'
+
+        capture matrix `minusmustack' = r_minus_mu_saez
+        if !_rc ereturn matrix minus_mu_stack = `minusmustack'
+
+        capture matrix `stackid' = r_stack_id_saez
+        if !_rc ereturn matrix stack_id = `stackid'
     }
     else {
         ereturn post `b', esample(`touse')
     }
 
     ereturn local cmd "bunch_saez"
-    ereturn local depvar "`yvar'"
     ereturn scalar estimator = 4
     ereturn scalar cutoff_orig = `cutoff_orig'
     ereturn scalar bw_orig = `bw_orig'
@@ -3902,5 +3959,6 @@ void saez_transform_mata(
         st_matrix("G_saezcalc", J(0,0,.))
     }
 }
+
 
 	end

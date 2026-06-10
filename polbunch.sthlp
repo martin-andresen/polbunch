@@ -107,6 +107,12 @@ for log earnings, it is additive in log earnings. The structural shift parameter
 not run the model-restriction test. With {opt notransform}, it reports {cmd:h0:_cons}, {cmd:h1:_cons}, and {cmd:bunching:B}. With the default transformation, it reports the reference heights, the number of bunchers, excess mass, and, 
 when the trapezoid response equation can be solved, the shift, marginal response, and elasticity.
 
+{pstd}
+For estimators 2 and 3, {cmd:polbunch} uses a profile implementation of the corresponding nonlinear least-squares estimator. For any candidate value of the structural shift parameter, the remaining polynomial coefficients enter the model linearly 
+and are therefore estimated by least squares. The command then minimizes the resulting profiled sum of squared residuals over the structural parameter only. This recovers the same minimum and the same parameter estimates as the full nonlinear 
+least-squares problem, but avoids repeatedly optimizing over all polynomial coefficients jointly. In practice, the profile formulation is faster, less sensitive to starting values, and more numerically stable, especially for higher-order polynomials 
+or when the restricted model is tightly parameterized.
+{p_end}
 
 {marker transform}{...}
 {title:Transformed parameters}
