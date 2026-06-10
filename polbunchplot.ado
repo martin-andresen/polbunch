@@ -118,6 +118,7 @@ program polbunchplot
         if e(estimator)==4 {
 			local h0c = _b[h0:_cons]
 			local h1c = _b[h1:_cons]
+			local linemax=min(`xmax',`MR')
 
 			local htrap `h0c' + ///
 				((`h1c' - `h0c') / (`upper_plot' - `lower_plot')) * ///
@@ -126,7 +127,7 @@ program polbunchplot
 			twoway ///
 				(bar freq `z_orig', barwidth(`bw_plot') color(navy%50) base(0)) ///
 				(function y=`h0c', range(`xmin' `lower_plot') lcolor(maroon) lpattern(solid)) ///
-				(function y=`htrap', range(`lower_plot' `upper_plot') lcolor(maroon) lpattern(shortdash)) ///
+				(function y=`htrap', range(`lower_plot' `linemax') lcolor(maroon) lpattern(shortdash)) ///
 				(function y=`h1c', range(`upper_plot' `xmax') lcolor(navy) lpattern(solid)), ///
 				xline(`cutoff_plot', lcolor(maroon) lpattern(dash)) ///
 				xline(`lower_plot',  lcolor(black)  lpattern(dash)) ///

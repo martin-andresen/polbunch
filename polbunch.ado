@@ -985,7 +985,7 @@
 			matrix `Gnew' = G_bunchcalc
 
 			if colsof(`Gnew') != colsof(`theta') {
-				di as err "conformability error: colsof(G) != colsof(e(b))"
+				noi di as err "conformability error: colsof(G) != colsof(e(b))"
 				exit 503
 			}
 
@@ -1196,6 +1196,11 @@ program define saez_transform, eclass
 
     matrix `bnew' = b_saezcalc
     local hasresp = scalar(b_saezcalc_hasresp)
+	
+	if !`hasresp' {
+     noi di as text "Note: Saez response not reported because the trapezoid response equation has no real solution. " ///
+					"The estimated bunching mass is too large relative to h0, h1, and the excluded-region width."
+	}
 
     if `dograd' {
         matrix `Gnew' = G_saezcalc
