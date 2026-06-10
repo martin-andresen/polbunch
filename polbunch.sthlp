@@ -5,8 +5,7 @@
 {title:Title}
 
 {p2colset 5 14 16 2}{...}
-{p2col:{cmd:polbunch} {hline 2}}Efficient and theoretically consistent polynomial bunching estimation
-{p_end}
+{p2col:{cmd:polbunch} {hline 2}}Polynomial bunching estimation with model-restricted and comparison estimators{p_end}
 {p2colreset}{...}
 
 
@@ -14,153 +13,211 @@
 {title:Syntax}
 
 {p 8 13 2}
-{cmd:polbunch} [{freqvar}] {zvar} {ifin}{cmd:,} cutoff(#) [ {it:options}]
+{cmd:polbunch} [{it:freqvar}] {it:zvar} {ifin}{cmd:,} {opt cut:off(#)} [{it:options}]
+
+{pstd}
+When one variable is specified, {it:zvar} is interpreted as individual-level earnings or log earnings, and {opt bw(#)} is required. When two variables are specified, {it:freqvar} is interpreted as bin counts and {it:zvar} as bin midpoints; in that case the bandwidth is inferred from the bin spacing and {opt bw()} may not be specified.
 
 
-{synoptset 25 tabbed}{...}
+{synoptset 28 tabbed}{...}
 {synopthdr}
 {synoptline}
-{syntab:Options}
-{synopt:{opt cut:off(#)}} is required and specifies the kink point. {p_end}
-{synopt:{opt pol:ynomial(#)}} specifies the degree of the polynomial, default is 7. {p_end}
-{synopt:{opt est:imator(#)}} specifies the estimator - the default is 3, the efficient and consistent polynomial bunching estimator. {p_end}
-{synopt:{opt boot:reps(#)}} specifies the number of bootstrap repetitions. The default of 1 implies analytic standard errors, 0 implies no standard errors.{p_end}
-{synopt:{opt log}} specifies that the earnings variable is in logs{p_end}
-{synopt:{opt t0}} specifies the linear tax rate below the cutoff{p_end}
-{synopt:{opt t1}} specifies the linear tax rate above the cutoff{p_end}
-{synopt:{opt lim:its(numlist)}} specifies how many bins are excluded below the cutoff (1st number) and how many above (2nd number), the default is 1 0.{p_end}
-{synopt:{opt constant}} uses the constant approximation to calculate the response of the marginal buncher and the elasticity.{p_end}
-{synopt:{opt notransform}}reports the coefficients of the estimation model rather than transforming these to bunching estimates.{p_end}
-{synopt:{opt nopositiveshift}}does not restrict the shift parameter to be positive.{p_end}
-{synopt:{opt initvals(string)}}specifies initial values for the NLS procedure. By default polbunch finds reasonable feasible values from an initial OLS regression.{p_end}
-{synopt:{opt nodrop}} implies that polbunch does not drop the leftmost and rightmost bin when these appear to be cut by sample selection.{p_end}
-{synopt:{opt noi:sily}} display intermediate output such as iteration logs.{p_end}
-{synopt:{opt nodots}} suppress dots indicating bootstrap progress{p_end}
-{synopt:{opt notest}} do not test model assumptions{p_end}
+{syntab:Main}
+{synopt:{opt cut:off(#)}}required; specifies the kink point or bunching point{p_end}
+{synopt:{opt bw(#)}}bin width; required with individual-level data and not allowed with pre-binned data{p_end}
+{synopt:{opt pol:ynomial(#)}}degree of the counterfactual polynomial; default is {cmd:polynomial(7)}{p_end}
+{synopt:{opt lim:its(numlist)}}two integers specifying the number of excluded bins below and above the cutoff; default is {cmd:limits(1 0)}{p_end}
+{synopt:{opt est:imator(#)}}estimator to use; default is {cmd:estimator(3)}{p_end}
+{synopt:{opt log}}specifies that the running variable is in logs{p_end}
+{synopt:{opt t0(#)}}linear tax rate below the cutoff{p_end}
+{synopt:{opt t1(#)}}linear tax rate above the cutoff{p_end}
 
+{syntab:Reporting and transformations}
+{synopt:{opt notransform}}report raw estimating-equation coefficients rather than transformed bunching parameters{p_end}
+{synopt:{opt constant}}use the constant-density approximation when transforming bunching into a response and elasticity{p_end}
+{synopt:{opt Bmodel}}for estimator 2, report excess mass using the model-implied bunching mass rather than the observed excluded-bin mass{p_end}
+
+{syntab:Estimation controls}
+{synopt:{opt init:vals(string)}}initial values for nonlinear estimation; by default {cmd:polbunch} constructs feasible starting values{p_end}
+{synopt:{opt positive}}restrict the structural shift parameter to be positive; by default estimator 3 allows shifts greater than -1{p_end}
+{synopt:{opt nonormalize}}estimate on the original running-variable scale instead of normalizing bin centers by the cutoff and bin width{p_end}
+{synopt:{opt nozero}}with individual-level data, do not fill empty bins with zero counts before estimation{p_end}
+{synopt:{opt nodrop}}do not drop endpoint bins that appear to be cut by sample selection{p_end}
+
+{syntab:Inference and diagnostics}
+{synopt:{opt boot:reps(#)}}number of binned bootstrap repetitions; {cmd:bootreps(1)} gives analytic standard errors, {cmd:bootreps(0)} suppresses internal variance estimation{p_end}
+{synopt:{opt notest}}do not test model restrictions against the unrestricted polynomial model{p_end}
+{synopt:{opt saveunres(name)}}store the unrestricted comparison model used for the restriction test{p_end}
+{synopt:{opt noi:sily}}display intermediate output, including iteration logs where available{p_end}
+{synopt:{opt nodots}}suppress bootstrap progress dots{p_end}
+{synopt:{opt nosmallsample}}omit the small-sample adjustment in the analytic variance correction{p_end}
 {synoptline}
 {p2colreset}{...}
-{p 4 6 2}
+
 
 {marker description}{...}
 {title:Description}
 
 {pstd}
-{cmd:polbunch} performs polynomial bunching estimation using OLS and nonlinear least squares.
+{cmd:polbunch} estimates bunching at a kink or notch using polynomial approximations to the counterfactual density. The command supports individual-level data, which it first collapses into bins, and already binned data, where the first variable is the bin count and the second variable is the bin midpoint.
 
-There are two different ways to use polbunch. If one variable is specified, polbunch interprets this as data containing individual level data on earnings. 
-The option bw() must then be specified, and polbunch collapses the data to bins before performing bunching estimation. During this step, the leftmost and 
-rightmost bins are dropped if polbunch finds that there is limited coverage in these bins, unless the option nodrop is specified. If two variables are 
-specified, polbunch interprets this as data being already binned, and take the first variable to contain the bin counts and the second to containt the 
-bin midpoints. Option bw() cannot be specified, and will be determined by polbunch from the bin widths. 
+{pstd}
+With individual-level data, {cmd:polbunch} forms bins of width {opt bw(#)} around the cutoff. Values exactly at the cutoff are assigned to the lower bin. Empty bins inside the observed support are filled with zero counts unless {opt nozero} is specified. This makes the individual-level and pre-binned workflows comparable when they use the same support. If the support of the individual-level data is much wider than the support of a pre-binned input, the estimates may differ because the polynomial is fit over a different range of bins; use {it:if} or {it:in} to impose the desired estimation window.
 
-Polbunch implements four different bunching estimators, but beware that these are supported for comparison to alternative estimators in the litterature, 
-and besides the default, the other alternatives are neither consistent with theory, unbiased or efficient. The default choise of estimator(3) implements 
-the theoretically consistent and efficient polynomial bunching estimator of Andresen (2025). Like most bunching estimators, this relies on very strong 
-structural assumptions, including the correct specification of the iso-elastic labor suppply model and a counterfactual density that is well approximated 
-by the specified polynomial.
+{pstd}
+By default, {cmd:polbunch} normalizes the estimation scale to
 
-Alternative estimators include 
-- 0 for the unbiased, but inefficient estimator that only relies on data to the left of the cutoff to estimate the counterfactual density.
-- 1 for the biased and inconsistent estimator that ignores the intensive margin response to the higher tax rate above non-bunching agents above the cutoff
-- 2 for the adjustment procedure of Chetty et. al. (2011).
-- 3 for the default, the efficient and theoretically consistent estimator of Andresen (2025)
+{p 12 12 2}
+{it:z_est} = ({it:z_orig} - {it:cutoff})/{it:bw}.
 
-After having constructed the binned data, polbunch proceeds by estimating a regression of the bin counts on separate polynomials below and above the cutoff
- and a series of fixed effects for each bin in the excluded region. If estimator(0) is specified, the results are posted based on this regression.
+{pstd}
+This normalization improves numerical conditioning. The stored frequency table includes both the estimation-scale bin center and the original-scale bin center used for plotting. Specify {opt nonormalize} to estimate on the original scale.
 
-If one of the more restrictive estimators 1-3 are specified, polbunch then tests the restrictions imposed on this unrestricted model by that estimator, 
-and reports the Chi2 test statistic and associated p-value, unless the option "notest" is specified. This may be interpreted as a joint test of whether 
-the restrictions implicitly imposed by the estimator is consistent with the coefficients on the separately estimated polynomials from the unrestricted model, 
-and the parametric polynomial assumption itself. Polbunch then estimates the corresponding restricted model using nonlinear least squares, based on initial
- values from the linear regression.
-
-If the option notransform is specified, polbunch reports the parameters of the estimating equation, which depends on the estimator. Otherwise, and as a 
-default, polbunch transforms the reported estimates and report the parameters of h0 (the density of earnings under the low tax), h1 (the density of 
-earnings under the high tax) and various bunching parameters. These include the number of bunchers, the excess mass, the proportional shift parameter, 
-the response of the marginal buncher and, if t0() and t1() are specified, the elasticity.
-
-Inference for the reported parameters is based on the analytical standard errors (the default, if bootreps(1)) or the binned bootstrap procedure 
-(if bootreps>=2) developed by Andresen (2025), unless the bootreps(0) option is specified, which omits the calculation of variance of the estimated 
-results. This may be useful if the user wish to perform a regular bootstrap procedure with the {cmd: bootstrap} prefix or during simulation exercises
- where only the parameters are of interest. 
-
-See {cmd: polbunchplot} for a companion command to plot estimated densities and results from polbunch.
+{pstd}
+The option {opt limits(L H)} defines the excluded bunching region. If the cutoff lies inside a bin, that cutoff-crossing bin is included in the excluded region together with {it:L} bins below and {it:H} bins above. If the cutoff lies exactly on a bin edge, there is no cutoff-crossing bin; the command excludes {it:L} bins below and {it:H} bins above the edge. Non-excluded control bins are classified as left or right according to the edges of the excluded region.
 
 
+{marker estimators}{...}
+{title:Estimators}
 
-{marker options}{...}
-{title:Details on selected options not discussed above}
+{pstd}
+{cmd:polbunch} implements five estimators. Estimators 0--3 use a unified polynomial/profile framework. Estimator 4 implements a separate Saez-style three-region trapezoid estimator.
 
-{cmd: constant} specifies that polbunch should use the constant approximation to estimate the response of the marginal buncher
- and the elasticity. This is innocuous if the true elasticity is small, the tax change is marginal or the true density is flat, 
- but otherwise may induce bias. The default is to solve the integral under the estimated density for the response of the marginal 
- buncher that exactly fits the number of bunchers under the counterfactual, which do not suffer from this approximation bias. 
- With this default method, however, analytical standard errors cannot be derived for the response of the margina buncher or the 
- elasticity, so that polbunch do not report standard errors for these parameters and the user needs to rely on the bootstrap 
- using the bootreps(#) option with #>2.
+{phang}
+{cmd:estimator(0)} estimates an unrestricted model with separate left- and right-side polynomials and a free bunching mass. This estimator is useful for diagnostics and for testing the restrictions imposed by estimators 1--3.
 
-{cmd: nopositiveshift} specifies that there should be no restriction on the shift parameter during estimation. By default, 
-this is restricted to be nonnegative, implying that the elasticity is also nonnegative. 
+{phang}
+{cmd:estimator(1)} imposes no intensive-margin adjustment above the cutoff. It sets the right-side counterfactual polynomial equal to the left-side polynomial. This estimator is generally biased under the isoelastic labor supply model.
 
-    {title:A note on standard errors}
+{phang}
+{cmd:estimator(2)} implements a Chetty et al. style adjustment. The right-side polynomial is proportional to the left-side polynomial and the bunching mass is tied to the implied missing area under the left-side counterfactual.
 
-The typical way of inference for bunching estimators is the bootstrap: Resampling individuals from the raw data, reconstructing the binned data and re-
-running the estimation many times to construct the variance-covariance matrix from the empirical covariance matrix of the bootstrapped estimates. {cmd: polbunch}
-supports this with Stata's bootstrap prefix: bootstrap, reps(B): polbunch (...=), bootreps(0), where the option bootreps(0) tells polbunch not to perform
-any internal bootstrap or variance estimation.
+{phang}
+{cmd:estimator(3)} is the default model-restricted polynomial bunching estimator. It imposes the density transformation implied by an isoelastic labor supply model. For level earnings, the right-side restriction is proportional in earnings; for log earnings, it is additive in log earnings. The structural shift parameter is allowed to be greater than -1 by default; specify {opt positive} to require a positive shift.
 
-While this solution works, it is slow in practice because the dataset needs to resampled at the individual level and then collapsed for each iteration. 
-Furthermore, in cases where only the binned data is available, this solution is infeasible. Therefore, polbunch implements two alternative methods
-for inference that works in binned data and is considerably faster than the bootstrap, proposed by Andresen (2025).
+{phang}
+{cmd:estimator(4)} implements a Saez-style trapezoid approximation. It estimates a left reference height, a right reference height, and the bunching mass directly. This estimator does not use the nonlinear profile restrictions and does not run the model-restriction test. With {opt notransform}, it reports {cmd:h0:_cons}, {cmd:h1:_cons}, and {cmd:bunching:B}. With the default transformation, it reports the reference heights, the number of bunchers, excess mass, and, when the trapezoid response equation can be solved, the shift, marginal response, and elasticity.
 
-First, if bootreps>1, polbunch performs the binned bootstrap procedure of Andresen (2025). Instead of resampling individuals, polbunch resamples
-the number of individuals in each bin from a series of binomial distributions, where the probabilities are equal to the observed shares of observations
-in the original data. This results in binned bootstrap resamples drawn from the same distribution as the classical bootstrap, works with binned data and
-is considerably faster in simulations.
 
-Second, if bootreps=1 and as the default, {cmd: polbunch} computes analytic standard errors as proposed by Andresen (2025). This procedure is motivated
-by the expanded specification with N x H observations, one observation for each individal for each bin, where the outcomes is a dummy for whether or not
-an individual belongs to a particular bin (multiplied by N). This specification exactly reproduces the estimates in the binned data, and with clustered
-standard errors provides consistent standard error estimates. As shown by Andresen (2025), this variance-variance matrix can be estimated without access
-to the expanded data, which makes estimating these standard errors very quick and also estimable on binned data.
+{marker transform}{...}
+{title:Transformed parameters}
 
-The crucial reason why these two procedures for inference work is that individuals within the same bin are - from the point of view of the estimator - 
-identical. This implies that these methods of inference cannot e.g. account for any other means of clustering at a level higher than individuals.
-Also, this relies on the bandwidth being fixed. If a user needs to cluster standard errors at a higher level than the individual, this can be achieved
-with the regular bootstrap as suggested above.
+{pstd}
+Unless {opt notransform} is specified, {cmd:polbunch} transforms the raw estimating-equation parameters into economically interpretable quantities. The transformed output may include the estimated counterfactual density under the low-tax regime {cmd:h0}, the density under the high-tax regime {cmd:h1}, the number of bunchers, excess mass, the proportional shift, the response of the marginal buncher, and, if {opt t0()} and {opt t1()} are specified, the elasticity.
+
+{pstd}
+For estimator 3, the response and elasticity are based on the model-implied density transformation. If {opt log} is specified, the response is a displacement in log earnings and the elasticity is the log response divided by the log net-of-tax-rate change. Without {opt log}, the level response is converted to a proportional shift before computing the elasticity.
+
+{pstd}
+For estimator 4, the Saez transformation first computes excess mass using the average of the two trapezoid endpoints. It then attempts to invert the trapezoid response equation. If the equation has no real positive solution, {cmd:polbunch} reports the reference heights, number of bunchers, and excess mass, but omits shift, marginal response, and elasticity and displays a note. This can occur, for example, when the estimated bunching mass is too large relative to the endpoint heights and excluded-region width.
+
+{pstd}
+The {opt constant} option uses a constant-density approximation when converting bunching to a response and elasticity. This approximation can be useful for comparison with older procedures but may be biased when the density changes substantially over the response region.
+
+
+{marker tests}{...}
+{title:Model-restriction tests}
+
+{pstd}
+For estimators 1--3, {cmd:polbunch} estimates the unrestricted estimator 0 model and tests the restrictions implied by the selected estimator, unless {opt notest} is specified or internal variance estimation is suppressed. The test is reported as a chi-squared statistic with a p-value. The test should be interpreted jointly as a test of the estimator's structural restrictions and the polynomial approximation used for the counterfactual density.
+
+{pstd}
+Estimator 4 is a separate Saez-style comparison estimator and does not impose the polynomial profile restrictions tested for estimators 1--3.
+
+
+{marker inference}{...}
+{title:Inference}
+
+{pstd}
+The default {cmd:bootreps(1)} computes analytic standard errors using the collapsed-data variance correction. This correction reproduces the variance that would be obtained from an expanded bin-indicator formulation without constructing the expanded data. It is available with binned data and is fast in simulations.
+
+{pstd}
+If {cmd:bootreps(}{it:B}{cmd:)} is specified with {it:B} > 1, {cmd:polbunch} performs the binned bootstrap. Instead of resampling individual observations directly, the command resamples bin counts from multinomial or binomial sampling probabilities implied by the observed binned distribution. This is designed to mimic the classical bootstrap while remaining feasible when only binned data are available.
+
+{pstd}
+Specify {cmd:bootreps(0)} to suppress internal variance estimation. This is useful in Monte Carlo exercises where only point estimates are needed, or when using Stata's {cmd:bootstrap} prefix around {cmd:polbunch}.
+
+{pstd}
+The analytic and binned-bootstrap procedures treat individuals within a bin as identical from the point of view of the estimator and assume the bandwidth and binning scheme are fixed. If inference must account for clustering at a higher level, use a resampling procedure outside {cmd:polbunch}.
+
+
+{marker options_detail}{...}
+{title:Details on selected options}
+
+{phang}
+{opt log} tells {cmd:polbunch} that the running variable is already in logs. It changes the model-implied response mapping and the elasticity transformation. It does not log-transform the variable for the user.
+
+{phang}
+{opt t0(#)} and {opt t1(#)} specify the tax rates below and above the cutoff. If one is specified, the other must also be specified. The rates must differ, and the current implementation is intended for convex kinks with {cmd:t1()>t0()}.
+
+{phang}
+{opt positive} restricts the estimator 3 structural shift to be positive. Without {opt positive}, estimator 3 allows negative shifts as long as {cmd:1 + delta > 0}.
+
+{phang}
+{opt nonormalize} leaves the running variable on its original scale during estimation. The default normalization usually improves numerical conditioning and should not change the population estimand.
+
+{phang}
+{opt nozero} affects only individual-level input. By default, after collapsing individual observations into bins, empty bins inside the observed support are retained as zero-count bins. {opt nozero} leaves such bins out of the estimation data.
+
+{phang}
+{opt Bmodel} affects transformed results for estimator 2. It requests the model-implied bunching mass rather than the observed excluded-bin mass when constructing transformed bunching quantities.
+
+{phang}
+{opt saveunres(name)} stores the unrestricted estimator 0 model used for the model-restriction test under the supplied name.
+
 
 {marker examples}{...}
 {title:Examples}
 
 {pstd}
-To provide examples, the {cmd:polbunchgendata} program simulates data on earnings
-based on a user-specified distribution of earnings in the low tax-regime and the 
-iso-elastic labor supply model.
-
-{pstd}
-Generate simulated data of 10,000 observations of log wages that would be distributed
-according to a triangular(0,3,0) distribution in the low-tax regime, where the
-earnings follow the optiomal choiced from the iso-elastic labor supply model, the 
-elasticity is 0.4 and the tax rates below and above the cutoff is t0=0.2 and t1=0.6{p_end}
+Generate simulated data from the companion data-generating command:{p_end}
 
 {phang2}{cmd:. polbunchgendata, obs(10000) t0(0.2) t1(0.6) el(0.4) cutoff(1)}{p_end}
 
 {pstd}
-Estimate bunching using the default estimator and a correctly specified polynomial of degree 1 and a bandwidth of 0.01.{p_end}
-{phang2}{cmd:. polbunch z, cutoff(1) bw(0.01) pol(1)}{p_end}
+Estimate bunching using the default estimator and a correctly specified first-degree polynomial with bandwidth 0.01:{p_end}
+
+{phang2}{cmd:. polbunch z, cutoff(1) bw(0.01) polynomial(1) t0(0.2) t1(0.6)}{p_end}
 
 {pstd}
-Instead use the (biased) esitmator of Chetty et. all.{p_end}
-{phang2}{cmd:. polbunch z, cutoff(1) bw(0.01) pol(1) estimator(2)}{p_end}
+Use the same estimator without transforming to economic bunching parameters:{p_end}
+
+{phang2}{cmd:. polbunch z, cutoff(1) bw(0.01) polynomial(1) estimator(3) notransform}{p_end}
 
 {pstd}
-Or the naive, biased esitmator that ignores intensive margin response above the threshold.{p_end}
-{phang2}{cmd:. polbunch z, cutoff(1) bw(0.01) pol(1) estimator(1)}{p_end}
+Estimate on the original running-variable scale rather than the normalized scale:{p_end}
+
+{phang2}{cmd:. polbunch z, cutoff(1) bw(0.01) polynomial(1) nonormalize}{p_end}
 
 {pstd}
-Use the binned bootstrap for inference.{p_end}
-{phang2}{cmd:. polbunch z, cutoff(1) bw(0.01) pol(1) bootreps(200)}{p_end}
+Compare with the Chetty-style adjustment estimator:{p_end}
+
+{phang2}{cmd:. polbunch z, cutoff(1) bw(0.01) polynomial(1) estimator(2)}{p_end}
+
+{pstd}
+Compare with the naive no-adjustment estimator:{p_end}
+
+{phang2}{cmd:. polbunch z, cutoff(1) bw(0.01) polynomial(1) estimator(1)}{p_end}
+
+{pstd}
+Compare with the Saez trapezoid estimator:{p_end}
+
+{phang2}{cmd:. polbunch z, cutoff(1) bw(0.01) estimator(4) t0(0.2) t1(0.6)}{p_end}
+
+{pstd}
+Use pre-binned data with bin counts {cmd:freq} and bin midpoints {cmd:zmid}:{p_end}
+
+{phang2}{cmd:. polbunch freq zmid, cutoff(1) polynomial(3)}{p_end}
+
+{pstd}
+Use the binned bootstrap for inference:{p_end}
+
+{phang2}{cmd:. polbunch z, cutoff(1) bw(0.01) polynomial(1) bootreps(200)}{p_end}
+
+{pstd}
+Suppress internal variance estimation, for example when using Stata's bootstrap prefix:{p_end}
+
+{phang2}{cmd:. bootstrap, reps(200): polbunch z, cutoff(1) bw(0.01) polynomial(1) bootreps(0)}{p_end}
 
 
 {marker saved_results}{...}
@@ -169,40 +226,45 @@ Use the binned bootstrap for inference.{p_end}
 {pstd}
 {cmd:polbunch} stores the following in {cmd:e()}:
 
-{synoptset 20 tabbed}{...}
-{p2col 5 20 24 2: Scalars}{p_end}
-{synopt:{cmd:e(N)}}number of observations used (after trimming unless nodrop specified){p_end}
-{synopt:{cmd:e(F_mod)}}F-test of model specification, if estimator>0{p_end}
-{synopt:{cmd:e(p_mod)}}p-value of test for model specification, if estimator>0{p_end}
-{synopt:{cmd:e(F_df1)}}degrees of freedom, F-test of model specification{p_end}
-{synopt:{cmd:e(F_df2)}}degrees of freedom, F-test of model specification{p_end}
+{synoptset 24 tabbed}{...}
+{p2col 5 24 28 2: Scalars}{p_end}
+{synopt:{cmd:e(N)}}number of observations represented by the estimation sample{p_end}
+{synopt:{cmd:e(estimator)}}estimator number{p_end}
 {synopt:{cmd:e(polynomial)}}degree of polynomial used{p_end}
-{synopt:{cmd:e(cutoff)}}kink position{p_end}
-{synopt:{cmd:e(bw)}}bandwidth{p_end}
-{synopt:{cmd:e(lower_limit)}}lower limit of excluded region{p_end}
-{synopt:{cmd:e(upper_limit)}}upper limit of excluded region{p_end}
-{synopt:{cmd:e(aic)}}Akaike Information Criterion{p_end}
-{synopt:{cmd:e(log)}}Whether the earnings variable was specified in logs{p_end}
-{synopt:{cmd:e(p_X)}}p-value for a test of observed heterogeneity -- the b_1-b_0 coefficients{p_end}
+{synopt:{cmd:e(cutoff)}}cutoff on the original scale{p_end}
+{synopt:{cmd:e(bw)}}bin width on the original scale{p_end}
+{synopt:{cmd:e(bandwidth)}}bin width on the original scale{p_end}
+{synopt:{cmd:e(lower_limit)}}lower edge of the excluded region on the original scale{p_end}
+{synopt:{cmd:e(upper_limit)}}upper edge of the excluded region on the original scale{p_end}
+{synopt:{cmd:e(log)}}1 if {opt log} was specified, 0 otherwise{p_end}
+{synopt:{cmd:e(chi2)}}chi-squared statistic for the model-restriction test, when computed{p_end}
+{synopt:{cmd:e(p_mod)}}p-value for the model-restriction test, when computed{p_end}
+{synopt:{cmd:e(df_mod)}}degrees of freedom for the model-restriction test, when computed{p_end}
+{synopt:{cmd:e(hasresp)}}for estimator 4 after transformation, 1 if the Saez response equation was solved and 0 otherwise{p_end}
 
-{synoptset 20 tabbed}{...}
-{p2col 5 20 24 2: Macros}{p_end}
-{synopt:{cmd:e(binname)}}name of the earnings variable{p_end}
+{synoptset 24 tabbed}{...}
+{p2col 5 24 28 2: Macros}{p_end}
 {synopt:{cmd:e(cmd)}}{cmd:polbunch}{p_end}
+{synopt:{cmd:e(cmdname)}}{cmd:polbunch}{p_end}
 {synopt:{cmd:e(cmdline)}}command as typed{p_end}
-{synopt:{cmd:e(depvar)}}freq (if no pre-binned data) or name of the dependent variable{p_end}
+{synopt:{cmd:e(depvar)}}dependent variable name in the estimation output{p_end}
 {synopt:{cmd:e(title)}}title in estimation output{p_end}
-{synopt:{cmd:e(properties)}}{cmd:b V}; {cmd:V}{p_end}
+{synopt:{cmd:e(binname)}}name of the running-variable/bin variable{p_end}
+{synopt:{cmd:e(normalize)}}normalization status{p_end}
+{synopt:{cmd:e(vcetype)}}variance-estimator label, when set{p_end}
+{synopt:{cmd:e(properties)}}usually {cmd:b V} when a variance matrix is posted{p_end}
 
-{synoptset 20 tabbed}{...}
-{p2col 5 20 24 2: Matrices}{p_end}
-{synopt:{cmd:e(b)}}coefficient vector, including counterfactual densities and bunching parameters{p_end}
-{synopt:{cmd:e(V)}}variance-covariance matrix of {cmd:b}.{p_end}
-{synopt:{cmd:e(table)}}table of frequencies.{p_end}
+{synoptset 24 tabbed}{...}
+{p2col 5 24 28 2: Matrices}{p_end}
+{synopt:{cmd:e(b)}}coefficient vector. With default transformation this contains density and bunching parameters; with {opt notransform} it contains raw estimating-equation coefficients{p_end}
+{synopt:{cmd:e(V)}}variance-covariance matrix of {cmd:e(b)}, when computed{p_end}
+{synopt:{cmd:e(table)}}table of binned frequencies and variables used for plotting and diagnostics{p_end}
+{synopt:{cmd:e(G)}}delta-method Jacobian for transformed parameters, when available{p_end}
 
-{synoptset 20 tabbed}{...}
-{p2col 5 20 24 2: Functions}{p_end}
-{synopt:{cmd:e(sample)}}marks estimation sample{p_end}
+{synoptset 24 tabbed}{...}
+{p2col 5 24 28 2: Functions}{p_end}
+{synopt:{cmd:e(sample)}}marks the estimation sample{p_end}
+
 
 {marker references}{...}
 {title:References}
@@ -211,27 +273,27 @@ Use the binned bootstrap for inference.{p_end}
 Andresen, Martin E. (2025). "A better polynomial bunching estimator", working paper.
 
 {phang}
-Kleven, Henrik Jacobsen (2016). "Bunching", Annual Review of Economics
+Kleven, Henrik Jacobsen (2016). "Bunching", {it:Annual Review of Economics}.
 
 {phang}
-Saez, Emmanuel (2010), "Do Taxpayers bunch at kink points?", American Economic Review
+Saez, Emmanuel (2010). "Do Taxpayers Bunch at Kink Points?", {it:American Economic Journal: Economic Policy}.
 
 {phang}
-Chetty, Raj, Friedman, John N., Olsen, Tore and Luigi Pistaferri (2011), "Adjustment Costs, Firm Responses, and Micro vs. Macro Labor Supply Elasticities: Evidence from Danish Tax Records", Quarterly Journal of Economics
+Chetty, Raj, John N. Friedman, Tore Olsen, and Luigi Pistaferri (2011). "Adjustment Costs, Firm Responses, and Micro vs. Macro Labor Supply Elasticities: Evidence from Danish Tax Records", {it:Quarterly Journal of Economics}.
 
 
-{title:Thanks for citing pol as follows}
-
-{pstd}
-Andresen, Martin E., (2025). "POLBUNCH: Stata module for the polynomial bunching estimator.". This version VERSION_DATE.{p_end}
+{title:Suggested citation}
 
 {pstd}
-where you can check your version date as follows:{p_end}
+Andresen, Martin E. (2025). "POLBUNCH: Stata module for the polynomial bunching estimator." This version VERSION_DATE.{p_end}
+
+{pstd}
+Check your installed version date with:{p_end}
 
 {phang2}{cmd:. which polbunch}{p_end}
 
-	 
-{marker Author}{...}
+
+{marker author}{...}
 {title:Author}
 
 {pstd}Martin Eckhoff Andresen{p_end}
@@ -240,6 +302,7 @@ where you can check your version date as follows:{p_end}
 {pstd}Oslo, Norway{p_end}
 {pstd}martin.eckhoff.andresen@gmail.com{p_end}
 
+
 {marker also_see}{...}
 {title:Also see}
 
@@ -247,4 +310,4 @@ where you can check your version date as follows:{p_end}
 Development version: net install polbunch, from("https://raw.githubusercontent.com/martin-andresen/polbunch/master/"){p_end}
 
 {p 7 14 2}
-Help:  {helpb polbunchplot}, {helpb polbunchgendata}{p_end}
+Help: {helpb polbunchplot}, {helpb polbunchgendata}{p_end}
