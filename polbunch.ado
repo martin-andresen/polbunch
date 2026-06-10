@@ -48,10 +48,12 @@
 						loc coeftabresults=c(coeftabresults)
 						set coeftabresults off
 					}
-					if !inlist(`estimator',0,1,2,3) {
-						noi di as error "Option estimator can take only values 0 (using data to the left only),  1 (no adjustment), 2 (Chetty et. al. adjustment) or 3 (theoretically consistent and efficient estimator)."
+					if !inlist(`estimator',0,1,2,3,4) {
+						noi di as error "Option estimator can take only values 0 (using data to the left only),  1 (no adjustment), 2 (Chetty et. al. adjustment),  3 (theoretically consistent and efficient estimator) or 4 (Saez trapezoid approximation)."
 						exit 301
 					}
+					
+					if `estimator'==4 loc polynomial=0
 
 					tempvar touse
 					marksample touse
@@ -325,90 +327,93 @@
 						}
 					} 
 					
-					tempname h0coefs h1coefs bu
-					mat `bu'=e(b)
-					mat `h0coefs'=`bu'[1,1..`polynomial']
-					mat `h1coefs'=`bu'[1,`=`polynomial'+1'..`=2*(`polynomial'+1)']
-									
-	/*
-					Simple delta initializer from one beta/gamma coefficient relation.
-					h0coef/h1coef ordering:
-						beta_1 ... beta_K beta_0
-				*/
-
-				scalar dstart = .
-				
-				if "`positive'" != "" {
-					local dstart_lower = 0
-					local dstart_default = 0.05
-					}
-				else {
-					local dstart_lower = -0.99
-					local dstart_default = 0
-					}
-
-				if `estimator' == 2 {
-					/*
-						Prefer constant if usable, otherwise first polynomial coefficient.
+					if inlist(`estimator',2,3) { //STARTING VALUES
+						tempname h0coefs h1coefs bu
+						mat `bu'=e(b)
+						mat `h0coefs'=`bu'[1,1..`polynomial']
+						mat `h1coefs'=`bu'[1,`=`polynomial'+1'..`=2*(`polynomial'+1)']
+										
+		/*
+						Simple delta initializer from one beta/gamma coefficient relation.
+						h0coef/h1coef ordering:
+							beta_1 ... beta_K beta_0
 					*/
-					local j = `=`polynomial' + 1'
 
-					if abs(`h1coefs'[1,`j']) > 1e-12 {
-						scalar dstart = `h0coefs'[1,`j'] / `h1coefs'[1,`j'] - 1
-					}
+					scalar dstart = .
+					
+					if "`positive'" != "" {
+						local dstart_lower = 0
+						local dstart_default = 0.05
+						}
+					else {
+						local dstart_lower = -0.99
+						local dstart_default = 0
+						}
 
-					if missing(dstart) | dstart <= 0 {
-						local j = 1
-						if `polynomial' >= 1 & abs(`h1coefs'[1,`j']) > 1e-12 {
+					if `estimator' == 2 {
+						/*
+							Prefer constant if usable, otherwise first polynomial coefficient.
+						*/
+						local j = `=`polynomial' + 1'
+
+						if abs(`h1coefs'[1,`j']) > 1e-12 {
 							scalar dstart = `h0coefs'[1,`j'] / `h1coefs'[1,`j'] - 1
 						}
-					}
-				}
-				else if `estimator' == 3 & "`log'" == "" {
-					/*
-						Level case:
-							gamma_j = beta_j * (1+delta)^(j+1)
 
-						Use first usable polynomial coefficient, not the constant.
-					*/
-					forvalues j = 1/`polynomial' {
 						if missing(dstart) | dstart <= 0 {
-							if abs(`h0coefs'[1,`j']) > 1e-12 & ///
-							   `h1coefs'[1,`j'] / `h0coefs'[1,`j'] > 0 {
-								scalar dstart = ///
-									(`h1coefs'[1,`j'] / `h0coefs'[1,`j'])^(1/(`j' + 1)) - 1
+							local j = 1
+							if `polynomial' >= 1 & abs(`h1coefs'[1,`j']) > 1e-12 {
+								scalar dstart = `h0coefs'[1,`j'] / `h1coefs'[1,`j'] - 1
 							}
 						}
 					}
-				}
-				else if `estimator' == 3 & "`log'" == "log" {
-					/*
-						Log case:
-							gamma_0 - beta_0 ~= beta_1 * ln(1+delta)
+					else if `estimator' == 3 & "`log'" == "" {
+						/*
+							Level case:
+								gamma_j = beta_j * (1+delta)^(j+1)
 
-						Requires polynomial >= 1 and beta_1 nonzero.
-					*/
-					if `polynomial' >= 1 & abs(`h0coef'[1,1]) > 1e-12 {
-						scalar dstart = exp( ///
-							(`h1coefs'[1,`=`polynomial' + 1'] - ///
-							 `h0coefs'[1,`=`polynomial' + 1']) / ///
-							 `h0coefs'[1,1] ///
-						) - 1
+							Use first usable polynomial coefficient, not the constant.
+						*/
+						forvalues j = 1/`polynomial' {
+							if missing(dstart) | dstart <= 0 {
+								if abs(`h0coefs'[1,`j']) > 1e-12 & ///
+								   `h1coefs'[1,`j'] / `h0coefs'[1,`j'] > 0 {
+									scalar dstart = ///
+										(`h1coefs'[1,`j'] / `h0coefs'[1,`j'])^(1/(`j' + 1)) - 1
+								}
+							}
+						}
 					}
-				}
+					else if `estimator' == 3 & "`log'" == "log" {
+						/*
+							Log case:
+								gamma_0 - beta_0 ~= beta_1 * ln(1+delta)
 
-				/*
-					Fallback / bounds.
-				*/
-				if missing(dstart) | dstart <= `dstart_lower' {
-					scalar dstart = 0.05
-				}
+							Requires polynomial >= 1 and beta_1 nonzero.
+						*/
+						if `polynomial' >= 1 & abs(`h0coef'[1,1]) > 1e-12 {
+							scalar dstart = exp( ///
+								(`h1coefs'[1,`=`polynomial' + 1'] - ///
+								 `h0coefs'[1,`=`polynomial' + 1']) / ///
+								 `h0coefs'[1,1] ///
+							) - 1
+						}
+					}
 
-				if dstart > 2 {
-					scalar dstart = 2
-				}
+					/*
+						Fallback / bounds.
+					*/
+					if missing(dstart) | dstart <= `dstart_lower' {
+						scalar dstart = 0.05
+					}
 
-				local dstart = scalar(dstart)
+					if dstart > 2 {
+						scalar dstart = 2
+					}
+
+					local dstart = scalar(dstart)
+					} 
+					else local dstart=0
 								
 					//BOOTSTRAP SETUP
 					if `bootreps'>1 {
@@ -453,21 +458,32 @@
 						
 						//estimate model: single stacked profile branch for estimators 0/1/2/3
 							if `bootreps'==1 local vce vce
-							bunch_profile `y' `z' `side' `bunch', ///
-								estimator(`estimator') k(`polynomial') ///
-								cutoff_orig(`cutoff_orig') bw_orig(`bw_orig') ///
-								l(`L') h(`H') ///
-								`log' `normalize' `vce' ///
-								initdelta(`dstart') ///
-								zbar_est(`zbar_est') ///
-								zl_excl_orig(`zL_excl_orig') ///
-								zh_excl_orig(`zH_excl_orig') `positive'
-								
+							
+							if `estimator' == 4 {
+								bunch_saez `y' `z' `side' `bunch', ///
+									cutoff_orig(`cutoff_orig') ///
+									bw_orig(`bw_orig') ///
+									zl_excl_orig(`zL_excl_orig') ///
+									zh_excl_orig(`zH_excl_orig') ///
+									`vce'
+							}
+							else {
+								bunch_profile `y' `z' `side' `bunch', ///
+									estimator(`estimator') k(`polynomial') ///
+									cutoff_orig(`cutoff_orig') bw_orig(`bw_orig') ///
+									l(`L') h(`H') ///
+									`log' `normalize' `vce' ///
+									initdelta(`dstart') ///
+									zbar_est(`zbar_est') ///
+									zl_excl_orig(`zL_excl_orig') ///
+									zh_excl_orig(`zH_excl_orig') `positive'
+							}
+
 							matrix `b' = e(b)
 							capture matrix `V' = e(V)
 							
 						////TRANSFORM ESTIMATES
-						if "`transform'"!="notransform" {
+						if "`transform'"!="notransform"& {
 							if `bootreps'!=1 loc nograd nograd
 							quietly summarize `y' if `bunch' > 0, meanonly
 							local Hstar_obs = r(sum)
@@ -475,26 +491,38 @@
 							if "`t0'" != "" & "`t1'" != "" {
 								local taxopts t0(`t0') t1(`t1')
 							}
-							bunch_transform `z', ///
-								estimator(`estimator') ///
-								k(`polynomial') ///
-								cutofforig(`cutoff_orig') ///
-								cutoffest(`cutoff_est') ///
-								bworig(`bw_orig') ///
-								bwest(`bw_est') ///
-								xscale(`xscale') ///
-								low(`L') ///
-								high(`H') ///
-								zlexcl(`zL_excl_orig') ///
-								zhexcl(`zH_excl_orig') ///
-								`log' ///
-								`constant' ///
-								`taxopts' ///
-								`grad' ///
-								`normalize' ///
-								zbar(`zbar_est') ///
-								massobs(`Hstar_obs') ///
-								`bmodel'			
+							if inlist(`estimator',0,1,2,3) {
+								bunch_transform `z', ///
+									estimator(`estimator') ///
+									k(`polynomial') ///
+									cutofforig(`cutoff_orig') ///
+									cutoffest(`cutoff_est') ///
+									bworig(`bw_orig') ///
+									bwest(`bw_est') ///
+									xscale(`xscale') ///
+									low(`L') ///
+									high(`H') ///
+									zlexcl(`zL_excl_orig') ///
+									zhexcl(`zH_excl_orig') ///
+									`log' ///
+									`constant' ///
+									`taxopts' ///
+									`grad' ///
+									`normalize' ///
+									zbar(`zbar_est') ///
+									massobs(`Hstar_obs') ///
+									`bmodel'			
+							}
+							else {
+									saez_transform, ///
+										cutofforig(`cutoff_orig') ///
+										bworig(`bw_orig') ///
+										zlexcl(`zL_excl_orig') ///
+										zhexcl(`zH_excl_orig') ///
+										`log' ///
+										`taxopts' ///
+										`nograd'
+							}
 								
 								matrix `b' = e(b)
 								capture matrix `V' = e(V)
@@ -503,7 +531,7 @@
 							//BOOTSTRAP WRAPUP: COLLECT ESTIMATES
 							if `bootreps'>1&`s'>0 mat `bs'=nullmat(`bs') \ e(b)
 							
-							if `estimator' > 0 & "`test'" != "notest" {
+							if inlist(`estimator'1,2,3) & "`test'" != "notest" {
 								bunch_profile `y' `z' `side' `bunch', ///
 									estimator(0) k(`polynomial') ///
 									cutoff_orig(`cutoff_orig') bw_orig(`bw_orig') ///
@@ -514,7 +542,6 @@
 									zl_excl_orig(`zL_excl_orig') ///
 									zh_excl_orig(`zH_excl_orig') `positive'
 								
-								noi eret di
 								if `s' == 0 {
 									tempname bu0
 									matrix `bu0' = e(b)
@@ -544,7 +571,7 @@
 						}
 							
 						//TEST RESTRICTIONS
-						if `estimator'>0&"`test'"!="notest" {
+						if inlist(`estimator',1,2,3)&"`test'"!="notest" {
 							ereturn post `bu0' `Vus'		
 							polbunch_waldtest, ///
 								estimator(`estimator') ///
@@ -571,7 +598,7 @@
 					restore
 					if `bootreps'>=1 eret post `b' `V', esample(`touse') depname(freq) obs(`N')
 					else eret post `b', esample(`touse') obs(`N') depname(freq)
-					if `estimator'>0&"`test'"!="notest"&`bootreps'>0 {
+					if inlist(`estimator',1,2,3)&"`test'"!="notest"&`bootreps'>0 {
 						estadd scalar chi2=`chi2'
 						estadd scalar p_mod=`p_mod'
 						estadd scalar df_mod=`df'
@@ -598,7 +625,7 @@
 						di _newline
 						di "`e(title)'"
 						eret di
-						if `estimator'>0&"`test'"!="notest"&`bootreps'>0 {
+						if inlist(`estimator',1,2,3)&"`test'"!="notest"&`bootreps'>0 {
 							di "Test of model assumptions: {col 42}Chi2(`df') test statistic {col 72}`: di %12.4f `chi2''"
 							di "{col 42}p-value {col 72}`: di %12.4f `p_mod''"
 							di "{hline 83}"
@@ -1050,6 +1077,262 @@
 			ereturn scalar t1 = `t1'
 		}
 	end
+	
+	cap program drop saez_transform
+program define saez_transform, eclass
+    version 16.0
+
+    syntax , ///
+        CUTOFFORIG(real) ///
+        BWORIG(real) ///
+        ZLEXCL(real) ///
+        ZHEXCL(real) ///
+        [ LOG T0(numlist min=1 max=1) T1(numlist min=1 max=1) NOGRAD ]
+
+    if "`t0'" != "" {
+        local t0 : word 1 of `t0'
+    }
+    if "`t1'" != "" {
+        local t1 : word 1 of `t1'
+    }
+
+    local hastax = ("`t0'" != "" & "`t1'" != "")
+    if `hastax' == 0 {
+        local t0 = 0
+        local t1 = 0
+    }
+
+    capture confirm matrix e(b)
+    if _rc {
+        di as err "e(b) not found"
+        exit 301
+    }
+
+    tempname theta Vtheta bnew Gnew Vnew
+    matrix `theta' = e(b)
+
+    if colsof(`theta') != 3 {
+        di as err "saez_transform expects raw theta = (h0:_cons, h1:_cons, bunching:B)"
+        exit 503
+    }
+
+    local dograd = 0
+    if "`nograd'" == "" {
+        capture confirm matrix e(V)
+        if !_rc {
+            matrix `Vtheta' = e(V)
+            local dograd = 1
+        }
+    }
+
+    local islog = ("`log'" != "")
+
+    tempvar touse
+    capture gen byte `touse' = e(sample)
+    local has_esample = !_rc
+
+    mata: saez_transform_mata( ///
+        st_matrix("`theta'"), ///
+        `cutofforig', ///
+        `bworig', ///
+        `zlexcl', ///
+        `zhexcl', ///
+        `islog', ///
+        `hastax', ///
+        `t0', ///
+        `t1', ///
+        `dograd' ///
+    )
+
+    matrix `bnew' = b_saezcalc
+    local hasresp = scalar(b_saezcalc_hasresp)
+
+    if `dograd' {
+        matrix `Gnew' = G_saezcalc
+
+        if colsof(`Gnew') != colsof(`theta') {
+            di as err "conformability error: colsof(G) != colsof(e(b))"
+            exit 503
+        }
+
+        matrix `Vnew' = `Gnew' * `Vtheta' * `Gnew''
+    }
+
+    local cnames _cons _cons number_bunchers excess_mass
+
+    if `hasresp' {
+        local cnames `cnames' shift marginal_response
+
+        if `hastax' {
+            local cnames `cnames' elasticity
+        }
+    }
+    else {
+        noi di as text "Note: Could not solve Saez trapezoid response equation."
+    }
+
+    local eqnames h0 h1 bunching bunching
+
+    if `hasresp' {
+        local eqnames `eqnames' bunching bunching
+
+        if `hastax' {
+            local eqnames `eqnames' bunching
+        }
+    }
+
+    if wordcount("`cnames'") != colsof(`bnew') {
+        di as err "internal error: coefficient names do not match transformed Saez b"
+        di as err "number of names = " wordcount("`cnames'")
+        di as err "colsof(b)       = " colsof(`bnew')
+        exit 503
+    }
+
+    matrix colnames `bnew' = `cnames'
+    matrix coleq    `bnew' = `eqnames'
+
+    if `dograd' {
+        matrix rownames `Vnew' = `cnames'
+        matrix colnames `Vnew' = `cnames'
+        matrix roweq    `Vnew' = `eqnames'
+        matrix coleq    `Vnew' = `eqnames'
+
+        matrix rownames `Gnew' = `cnames'
+        matrix roweq    `Gnew' = `eqnames'
+
+        if `has_esample' {
+            ereturn post `bnew' `Vnew', esample(`touse')
+        }
+        else {
+            ereturn post `bnew' `Vnew'
+        }
+
+        ereturn matrix G = `Gnew'
+        ereturn local vcetype "Delta method"
+    }
+    else {
+        if `has_esample' {
+            ereturn post `bnew', esample(`touse')
+        }
+        else {
+            ereturn post `bnew'
+        }
+    }
+
+    ereturn local cmd "saez_transform"
+    ereturn scalar estimator = 4
+    ereturn scalar cutoff_orig = `cutofforig'
+    ereturn scalar bw_orig = `bworig'
+    ereturn scalar zL_excl_orig = `zlexcl'
+    ereturn scalar zH_excl_orig = `zhexcl'
+    ereturn scalar islog = `islog'
+    ereturn scalar hastax = `hastax'
+    ereturn scalar hasresp = `hasresp'
+
+    if `hastax' {
+        ereturn scalar t0 = `t0'
+        ereturn scalar t1 = `t1'
+    }
+end
+
+	program define bunch_saez, eclass
+    version 16.0
+
+    syntax varlist(min=4 max=4 numeric) [if] [in] , ///
+        CUTOFF_orig(real) ///
+        BW_orig(real) ///
+        zl_excl_orig(real) ///
+        zh_excl_orig(real) ///
+        [ VCE ]
+
+    gettoken yvar rest : varlist
+    gettoken zvar rest : rest
+    gettoken sidevar rest : rest
+    gettoken bunchvar : rest
+
+    marksample touse, novarlist
+    replace `touse' = 0 if missing(`yvar') | missing(`zvar') | missing(`bunchvar')
+
+    quietly count if `touse' & `bunchvar' == 0 & missing(`sidevar')
+    if r(N) > 0 {
+        di as err "Non-excluded bins have missing side."
+        exit 301
+    }
+
+    quietly count if `touse' & `bunchvar' == 0 & `sidevar' == -1
+    if r(N) == 0 {
+        di as err "No reference bins below the excluded region."
+        exit 301
+    }
+
+    quietly count if `touse' & `bunchvar' == 0 & `sidevar' == 1
+    if r(N) == 0 {
+        di as err "No reference bins above the excluded region."
+        exit 301
+    }
+
+    local width_excl = (`zh_excl_orig' - `zl_excl_orig') / `bw_orig'
+    local a0 = 0.5 * `width_excl'
+    local a1 = 0.5 * `width_excl'
+
+    local dovar0 = ("`vce'" != "")
+
+    tempvar y_t side_t bunch_t
+    gen double `y_t'     = `yvar'     if `touse'
+    gen double `side_t'  = `sidevar'  if `touse'
+    gen double `bunch_t' = `bunchvar' if `touse'
+
+    tempname b V Gstack mustack minusmustack stackid
+
+    mata: saez_run( ///
+        "`y_t'", ///
+        "`side_t'", ///
+        "`bunch_t'", ///
+        `a0', ///
+        `a1', ///
+        `dovar0' ///
+    )
+
+    matrix `b' = r_b_saez
+    matrix colnames `b' = _cons _cons B
+    matrix coleq    `b' = h0 h1 bunching
+
+    if `dovar0' {
+        matrix `V' = r_V_saez
+
+        matrix rownames `V' = _cons _cons B
+        matrix colnames `V' = _cons _cons B
+        matrix roweq    `V' = h0 h1 bunching
+        matrix coleq    `V' = h0 h1 bunching
+
+        ereturn post `b' `V', esample(`touse')
+        ereturn local vcetype "Collapsed sandwich"
+
+        matrix `Gstack'       = r_G_saez
+        matrix `mustack'      = r_mu_saez
+        matrix `minusmustack' = r_minus_mu_saez
+        matrix `stackid'      = r_stack_id_saez
+
+        ereturn matrix G_stack        = `Gstack'
+        ereturn matrix mu_stack       = `mustack'
+        ereturn matrix minus_mu_stack = `minusmustack'
+        ereturn matrix stack_id       = `stackid'
+    }
+    else {
+        ereturn post `b', esample(`touse')
+    }
+
+    ereturn local cmd "bunch_saez"
+    ereturn local depvar "`yvar'"
+    ereturn scalar estimator = 4
+    ereturn scalar cutoff_orig = `cutoff_orig'
+    ereturn scalar bw_orig = `bw_orig'
+    ereturn scalar zL_excl_orig = `zl_excl_orig'
+    ereturn scalar zH_excl_orig = `zh_excl_orig'
+    ereturn scalar saez_a0 = `a0'
+    ereturn scalar saez_a1 = `a1'
+    ereturn scalar saez_width_excl = `width_excl'
+end
 
 	cap prog drop polbunch_waldtest
 	program define polbunch_waldtest, rclass
@@ -1250,6 +1533,92 @@
 		return(delta * cutoff_orig)
 	}
 
+
+	void saez_run(
+    string scalar yvar,
+    string scalar sidevar,
+    string scalar bunchvar,
+    real scalar a0,
+    real scalar a1,
+    real scalar dovar
+)
+{
+    real colvector y, side, bunch
+    real colvector yL, yR, ystack, stack_id, fw_orig, mu, minus_mu
+    real matrix X, Vout
+    real rowvector theta
+    real scalar nL, nR, Hstar_obs, i, idx, massrow
+
+    y     = st_data(., yvar)
+    side  = st_data(., sidevar)
+    bunch = st_data(., bunchvar)
+
+    yL = select(y, (bunch :== 0) :& (side :== -1))
+    yR = select(y, (bunch :== 0) :& (side :==  1))
+
+    nL = rows(yL)
+    nR = rows(yR)
+
+    Hstar_obs = sum(select(y, bunch :> 0))
+
+    ystack = yL \ yR \ Hstar_obs
+
+    X =
+        (J(nL, 1, 1), J(nL, 1, 0), J(nL, 1, 0)) \
+        (J(nR, 1, 0), J(nR, 1, 1), J(nR, 1, 0)) \
+        (a0,           a1,           1)
+
+    theta = qrsolve(X, ystack)'
+
+    mu       = X * theta'
+    minus_mu = ystack - mu
+
+    fw_orig = y
+    _editmissing(fw_orig, 0)
+
+    stack_id = J(rows(y), 1, .)
+
+    idx = 0
+
+    for (i = 1; i <= rows(y); i++) {
+        if (bunch[i] == 0 & side[i] == -1) {
+            idx = idx + 1
+            stack_id[i] = idx
+        }
+    }
+
+    for (i = 1; i <= rows(y); i++) {
+        if (bunch[i] == 0 & side[i] == 1) {
+            idx = idx + 1
+            stack_id[i] = idx
+        }
+    }
+
+    massrow = nL + nR + 1
+
+    for (i = 1; i <= rows(y); i++) {
+        if (bunch[i] > 0) {
+            stack_id[i] = massrow
+        }
+    }
+
+    if (dovar == 1) {
+        Vout = varcorrect_collapsed(X, fw_orig, stack_id, minus_mu, 0)
+    }
+    else {
+        Vout = J(3, 3, .)
+    }
+
+    st_matrix("r_b_saez", theta)
+    st_matrix("r_V_saez", Vout)
+
+    if (dovar == 1) {
+        st_matrix("r_G_saez", X)
+        st_matrix("r_mu_saez", mu)
+        st_matrix("r_minus_mu_saez", minus_mu)
+        st_matrix("r_stack_id_saez", stack_id)
+    }
+}
 
 	// -----------------------------------------------------------------------------
 	// h1 coefficient/design restrictions
@@ -3260,5 +3629,218 @@ real scalar delta_from_mass_e3(
 		st_numscalar("r(pb_df)", df)
 		st_numscalar("r(pb_delta_U)", delta)
 	}
+	
+	void saez_transform_mata(
+    real rowvector theta,
+    real scalar cutoff_orig,
+    real scalar bw_orig,
+    real scalar zL_excl_orig,
+    real scalar zH_excl_orig,
+    real scalar islog,
+    real scalar hastax,
+    real scalar t0,
+    real scalar t1,
+    real scalar dograd
+)
+{
+    real scalar h0, h1, B
+    real scalar W, slope, target, m, EM
+    real scalar MR, shift, elast, A
+    real scalar disc, denom, hasresp
+    real scalar oh0, oh1, oB, oEM, oshift, oMR, oe, nout
+
+    real rowvector b, dMR
+    real matrix G
+
+    h0 = theta[1]
+    h1 = theta[2]
+    B  = theta[3]
+
+    W = zH_excl_orig - zL_excl_orig
+
+    if (W <= 0 | W >= .) {
+        _error(3498, "invalid Saez excluded-region width")
+    }
+
+    /*
+        Transformed outputs:
+            h0:_cons
+            h1:_cons
+            bunching:number_bunchers
+            bunching:excess_mass
+            bunching:shift
+            bunching:marginal_response
+            bunching:elasticity, if tax options supplied
+    */
+    nout = 6 + hastax
+
+    b = J(1, nout, .)
+    if (dograd) {
+        G = J(nout, cols(theta), 0)
+    }
+
+    oh0    = 1
+    oh1    = 2
+    oB     = 3
+    oEM    = 4
+    oshift = 5
+    oMR    = 6
+    if (hastax) oe = 7
+
+    b[1, oh0] = h0
+    b[1, oh1] = h1
+    b[1, oB]  = B
+
+    if (dograd) {
+        G[oh0, 1] = 1
+        G[oh1, 2] = 1
+        G[oB,  3] = 1
+    }
+
+    /*
+        Saez/trapezoid excess-mass denominator:
+            m = average endpoint counterfactual height.
+    */
+    m = 0.5 * (h0 + h1)
+
+    EM = B / m
+    b[1, oEM] = EM
+
+    if (dograd) {
+        G[oEM, 1] = -0.5 * B / (m^2)
+        G[oEM, 2] = -0.5 * B / (m^2)
+        G[oEM, 3] =  1 / m
+    }
+
+    /*
+        Saez/trapezoid response inversion.
+
+        The local counterfactual density is linear:
+            h(r) = h0 + slope*r,
+            slope = (h1 - h0)/W.
+
+        Solve:
+            B*bw_orig = int_0^MR [h0 + slope*r] dr
+                      = h0*MR + 0.5*slope*MR^2.
+
+        MR is in original z units.
+    */
+    target = B * bw_orig
+    slope  = (h1 - h0) / W
+
+    hasresp = 1
+
+    if (target <= 0 | target >= . | h0 <= 0 | h0 >= .) {
+        hasresp = 0
+    }
+    else if (abs(slope) < 1e-12) {
+        MR = target / h0
+
+        if (dograd) {
+            dMR = J(1, cols(theta), 0)
+            dMR[1] = -target / (h0^2)
+            dMR[2] = 0
+            dMR[3] =  bw_orig / h0
+        }
+    }
+    else {
+        disc = h0^2 + 2 * slope * target
+
+        if (disc <= 0 | disc >= .) {
+            hasresp = 0
+        }
+        else {
+            MR = (-h0 + sqrt(disc)) / slope
+
+            if (MR <= 0 | MR >= .) {
+                hasresp = 0
+            }
+            else if (dograd) {
+                /*
+                    F = h0*MR + 0.5*slope*MR^2 - B*bw_orig = 0
+                    dF/dMR = h0 + slope*MR
+
+                    dslope/dh0 = -1/W
+                    dslope/dh1 =  1/W
+                */
+                denom = h0 + slope * MR
+
+                if (abs(denom) < 1e-12 | denom >= .) {
+                    hasresp = 0
+                }
+                else {
+                    dMR = J(1, cols(theta), 0)
+
+                    dMR[1] = -(MR + 0.5*(-1/W)*MR^2) / denom
+                    dMR[2] = -(      0.5*( 1/W)*MR^2) / denom
+                    dMR[3] =  bw_orig / denom
+                }
+            }
+        }
+    }
+
+    if (hasresp == 0) {
+        b = b[1, 1..oEM]
+
+        if (dograd) {
+            G = G[1..oEM, .]
+        }
+
+        st_numscalar("b_saezcalc_hasresp", 0)
+        st_matrix("b_saezcalc", b)
+
+        if (dograd) {
+            st_matrix("G_saezcalc", G)
+        }
+        else {
+            st_matrix("G_saezcalc", J(0,0,.))
+        }
+
+        return
+    }
+
+    b[1, oMR] = MR
+
+    if (islog == 0) {
+        shift = MR / cutoff_orig
+    }
+    else {
+        shift = exp(MR) - 1
+    }
+
+    b[1, oshift] = shift
+
+    if (dograd) {
+        G[oMR, .] = dMR
+
+        if (islog == 0) {
+            G[oshift, .] = dMR / cutoff_orig
+        }
+        else {
+            G[oshift, .] = exp(MR) * dMR
+        }
+    }
+
+    if (hastax) {
+        A = ln(1 - t0) - ln(1 - t1)
+
+        elast = ln(1 + shift) / A
+        b[1, oe] = elast
+
+        if (dograd) {
+            G[oe, .] = G[oshift, .] / ((1 + shift) * A)
+        }
+    }
+
+    st_numscalar("b_saezcalc_hasresp", 1)
+    st_matrix("b_saezcalc", b)
+
+    if (dograd) {
+        st_matrix("G_saezcalc", G)
+    }
+    else {
+        st_matrix("G_saezcalc", J(0,0,.))
+    }
+}
 
 	end
