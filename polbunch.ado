@@ -12,7 +12,6 @@
 				NOIsily ///
 				ESTimator(integer 3) /// Specify estimator - 3 = theoretically consistent efficient estimator, 2 = chetty, 1 = no adjustment, 0=data to the left only, 4=Saez three-region trapezoid approximaton
 				nodrop ///
-				INITvals(string) ///
 				notransform ///
 				positive ///
 				nonormalize ///
