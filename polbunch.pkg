@@ -9,6 +9,6 @@ f polbunch.ado
 f polbunchplot.ado
 f polbunch.sthlp
 f polbunchplot.sthlp
-f bunchcalc.ado
 f polbunchgendata.ado
 f polbunchgendata.sthlp
+f polbunchsim.ado
