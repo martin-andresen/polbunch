@@ -52,10 +52,7 @@
 					noi di as error "Option estimator can take only values 0 (using data to the left only),  1 (no adjustment), 2 (Chetty et. al. adjustment) or 3 (theoretically consistent and efficient estimator)."
 					exit 301
 				}
-				if "`test'" != "notest" {
-					noi di as text "Note: model-restriction tests are disabled in the unified stacked branch."
-					local test notest
-				}
+
 				tempvar touse
 				marksample touse
 				preserve
@@ -327,28 +324,11 @@
 						noi di as text "Note: Polynomial order lowered to `polynomial' because of multicollinearity problems with the specified polynomial."
 					}
 				} 
-				else {
-					loc unresmodel 0.`dum' 1.`dum' b0.`bunch'
-				}
 				
-				//CHANGE NAMES for unrestricted model
-				tempname bu Vu
+				tempname h0coefs h1coefs bu
 				mat `bu'=e(b)
-				
-				loc unresnames `names' `names'
-				loc unreseqnames `coleq0' `coleq1' 
-				mat colnames `bu'=`unresnames'
-				mat coleq `bu'=`unreseqnames'
-				
-				tempname h0coef h1coef
-				matrix `h0coef' = J(1, `polynomial' + 1, .)
-				matrix `h1coef' = J(1, `polynomial' + 1, .)
-
-				forvalues j = 1/`=`polynomial'+1' {
-					matrix `h0coef'[1,`j'] = `bu'[1,`j']
-					matrix `h1coef'[1,`j'] = `bu'[1,`=`polynomial'+1+`j'']
-				}
-
+				mat `h0coefs'=`bu'[1,1..`polynomial']
+				mat `h1coefs'=`bu'[1,`=`polynomial'+1'..`=2*(`polynomial'+1)']
 								
 /*
 				Simple delta initializer from one beta/gamma coefficient relation.
@@ -364,14 +344,14 @@
 				*/
 				local j = `=`polynomial' + 1'
 
-				if abs(`h1coef'[1,`j']) > 1e-12 {
-					scalar dstart = `h0coef'[1,`j'] / `h1coef'[1,`j'] - 1
+				if abs(`h1coefs'[1,`j']) > 1e-12 {
+					scalar dstart = `h0coefs'[1,`j'] / `h1coefs'[1,`j'] - 1
 				}
 
 				if missing(dstart) | dstart <= 0 {
 					local j = 1
-					if `polynomial' >= 1 & abs(`h1coef'[1,`j']) > 1e-12 {
-						scalar dstart = `h0coef'[1,`j'] / `h1coef'[1,`j'] - 1
+					if `polynomial' >= 1 & abs(`h1coefs'[1,`j']) > 1e-12 {
+						scalar dstart = `h0coefs'[1,`j'] / `h1coefs'[1,`j'] - 1
 					}
 				}
 			}
@@ -384,10 +364,10 @@
 				*/
 				forvalues j = 1/`polynomial' {
 					if missing(dstart) | dstart <= 0 {
-						if abs(`h0coef'[1,`j']) > 1e-12 & ///
-						   `h1coef'[1,`j'] / `h0coef'[1,`j'] > 0 {
+						if abs(`h0coefs'[1,`j']) > 1e-12 & ///
+						   `h1coefs'[1,`j'] / `h0coefs'[1,`j'] > 0 {
 							scalar dstart = ///
-								(`h1coef'[1,`j'] / `h0coef'[1,`j'])^(1/(`j' + 1)) - 1
+								(`h1coefs'[1,`j'] / `h0coefs'[1,`j'])^(1/(`j' + 1)) - 1
 						}
 					}
 				}
@@ -401,9 +381,9 @@
 				*/
 				if `polynomial' >= 1 & abs(`h0coef'[1,1]) > 1e-12 {
 					scalar dstart = exp( ///
-						(`h1coef'[1,`=`polynomial' + 1'] - ///
-						 `h0coef'[1,`=`polynomial' + 1']) / ///
-						 `h0coef'[1,1] ///
+						(`h1coefs'[1,`=`polynomial' + 1'] - ///
+						 `h0coefs'[1,`=`polynomial' + 1']) / ///
+						 `h0coefs'[1,1] ///
 					) - 1
 				}
 			}
@@ -513,6 +493,33 @@
 
 						//BOOTSTRAP WRAPUP: COLLECT ESTIMATES
 						if `bootreps'>1&`s'>0 mat `bs'=nullmat(`bs') \ e(b)
+						
+						if `estimator' > 0 & "`test'" != "notest" {
+							/*
+								Unrestricted model for testing. Do not transform.
+								This must be based on the same bootstrap sample.
+							*/
+							bunch_profile `y' `z' `side' `bunch', ///
+								estimator(0) k(`polynomial') ///
+								cutoff_orig(`cutoff_orig') bw_orig(`bw_orig') ///
+								l(`L') h(`H') ///
+								`log' `normalize' `grad' ///
+								initdelta(`dstart') ///
+								zbar_est(`zbar_est') ///
+								zl_excl_orig(`zL_excl_orig') ///
+								zh_excl_orig(`zH_excl_orig')
+
+							if `s' == 0 {
+								tempname bu0
+								matrix `bu0' = e(b)
+								if `bootreps'==1 matrix `Vus' = e(V)
+
+								local unres_cnames : colfullnames `bu0'
+							}
+							else if `s' > 0 & `bootreps' > 1 {
+								matrix `bus' = nullmat(`bus') \ e(b)
+							}
+						}
 						if `s' > 0 noi _dots `s' 0
 						
 					}
@@ -524,26 +531,32 @@
 						svmat `bs'
 						corr _all, cov
 						mat `V'=r(C)
-						if `estimator'>0&"`test'"!="notest" {
-							clear 
+						if `estimator' > 0 & "`test'" != "notest" {
+							clear
 							svmat `bus'
 							corr _all, cov
-							mat `Vus'=r(C)
+							matrix `Vus' = r(C)
 						}
 					}
-					
+						
 					//TEST RESTRICTIONS
 					if `estimator'>0&"`test'"!="notest" {
-						if `bootreps'>1 {
-							ereturn post `bu' `Vus'		
-							}
-						else {
-							est restore saveunres
-							}
-						testnl `teststr'
-						loc chi2=r(chi2)
-						loc p_mod=r(p)
-						loc df=r(df)
+						pause
+						ereturn post `bu' `Vus'		
+						polbunch_waldtest, ///
+							estimator(`estimator') ///
+							k(`polynomial') ///
+							cutofforig(`cutoff_orig') ///
+							cutoffest(`cutoff_est') ///
+							bworig(`bw_orig') ///
+							bwest(`bw_est') ///
+							zbar(`zbar_est') ///
+							`normalize' ///
+							`log'
+
+						local chi2  = r(chi2)
+						local p_mod = r(p)
+						local df    = r(df)
 						if "`saveunres'"!="" {
 							ereturn local cmd="polbunch"
 							est sto `saveunres'
@@ -1031,6 +1044,69 @@ program define bunch_transform, eclass
         ereturn scalar t1 = `t1'
     }
 end
+cap prog drop polbunch_waldtest
+program define polbunch_waldtest, rclass
+    version 16.0
+
+    syntax , ///
+        ESTimator(integer) ///
+        K(integer) ///
+        CUTOFFORIG(real) ///
+        CUTOFFEST(real) ///
+        BWORIG(real) ///
+        BWEST(real) ///
+        ZBAR(real) ///
+        [ nonormalize LOG ]
+
+    if !inlist(`estimator', 1, 2, 3) {
+        di as err "polbunch_waldtest only handles estimator(1), estimator(2), or estimator(3)"
+        exit 198
+    }
+
+    capture confirm matrix e(b)
+    if _rc {
+        di as err "e(b) not found; post unrestricted estimator(0) before calling polbunch_waldtest"
+        exit 301
+    }
+
+    capture confirm matrix e(V)
+    if _rc {
+        di as err "e(V) not found; model-restriction test requires unrestricted VCE"
+        exit 301
+    }
+
+    tempname b V
+    matrix `b' = e(b)
+    matrix `V' = e(V)
+
+    local normalized0 = ("`normalize'" != "nonormalize")
+    local islog0      = ("`log'" != "")
+
+    mata: polbunch_wald_from_unrestricted( ///
+        "`b'", ///
+        "`V'", ///
+        `estimator', ///
+        `cutofforig', ///
+        `bworig', ///
+        `cutoffest', ///
+        `bwest', ///
+        `k', ///
+        `normalized0', ///
+        `islog0', ///
+        `zbar' ///
+    )
+
+    return scalar chi2    = r(pb_wald)
+    return scalar p       = r(pb_p)
+    return scalar df      = r(pb_df)
+    return scalar delta_U = r(pb_delta_U)
+
+    if missing(r(chi2)) {
+        di as err "Could not compute model-restriction Wald statistic."
+        exit 498
+    }
+end
+
 
 mata:
 
@@ -2777,5 +2853,286 @@ void profile_run(
     }
 }
 
+real scalar delta_from_mass_e3(
+    real rowvector beta,
+    real scalar B,
+    real scalar cutoff_orig,
+    real scalar bw_orig,
+    real scalar cutoff_est,
+    real scalar bw_est,
+    real scalar K,
+    real scalar normalized,
+    real scalar islog
+)
+{
+    real scalar lo, hi, mid
+    real scalar Fhi, Fmid
+    real scalar r, iter
+    real rowvector R
+
+    if (B <= 0 | B >= .) return(.)
+
+    lo = 0
+    hi = 0.05
+
+    r = response_length(hi, cutoff_orig, bw_orig, normalized, islog)
+    R = intbasis(cutoff_est, cutoff_est + r, K) / bw_est
+    Fhi = R * beta' - B
+
+    while (Fhi <= 0 & hi < 100) {
+        hi = 2 * hi
+        r = response_length(hi, cutoff_orig, bw_orig, normalized, islog)
+        R = intbasis(cutoff_est, cutoff_est + r, K) / bw_est
+        Fhi = R * beta' - B
+    }
+
+    if (Fhi <= 0 | Fhi >= .) return(.)
+
+    for (iter = 1; iter <= 100; iter++) {
+        mid = (lo + hi) / 2
+        r = response_length(mid, cutoff_orig, bw_orig, normalized, islog)
+        R = intbasis(cutoff_est, cutoff_est + r, K) / bw_est
+        Fmid = R * beta' - B
+
+        if (Fmid >= 0) hi = mid
+        else lo = mid
+    }
+
+    return(hi)
+}
+void polbunch_wald_from_unrestricted(
+    string scalar bname,
+    string scalar Vname,
+    real scalar estimator,
+    real scalar cutoff_orig,
+    real scalar bw_orig,
+    real scalar cutoff_est,
+    real scalar bw_est,
+    real scalar K,
+    real scalar normalized,
+    real scalar islog,
+    real scalar zbar_est
+)
+{
+    real scalar Kb, B, delta, Rbeta, Fdelta
+    real scalar W, pval, df
+
+    real rowvector theta, beta, gamma
+    real rowvector R, Rbmod
+    real rowvector ddelta_dbeta, ddelta_dtheta
+
+    real matrix V, Gq, Vq
+    real colvector q
+
+    struct hcoef_out scalar hmap
+
+    Kb = K + 1
+
+    theta = st_matrix(bname)
+    V     = st_matrix(Vname)
+
+    beta  = theta[1, 1..Kb]
+    gamma = theta[1, (Kb+1)..(2*Kb)]
+    B     = theta[1, 2*Kb + 1]
+
+    /*
+        Initialize outputs as missing.
+    */
+    st_numscalar("r(pb_wald)", .)
+    st_numscalar("r(pb_p)", .)
+    st_numscalar("r(pb_df)", .)
+    st_numscalar("r(pb_delta_U)", .)
+
+    if (estimator == 1) {
+        /*
+            Estimator 1 restrictions:
+                gamma = beta
+
+            q = gamma - beta
+        */
+        q = (gamma - beta)'
+
+        Gq = J(Kb, 2*Kb + 1, 0)
+        Gq[., 1..Kb]           = -I(Kb)
+        Gq[., (Kb+1)..(2*Kb)]  =  I(Kb)
+
+        delta = .
+    }
+    else if (estimator == 2) {
+        /*
+            Estimator 2:
+                B = delta * int_{cutoff}^{zbar} h0(z) dz / bw
+                gamma = beta / (1 + delta)
+
+            Use the mass equation to define:
+                delta_U = B / (R * beta')
+        */
+
+        R = intbasis(cutoff_est, zbar_est, K) / bw_est
+        Rbeta = R * beta'
+
+        if (Rbeta <= 0 | Rbeta >= . | B >= .) return
+
+        delta = B / Rbeta
+
+        if (1 + delta <= 0 | delta >= .) return
+
+        q = (gamma - beta :/ (1 + delta))'
+
+        /*
+            delta = B / Rbeta
+            ddelta/dbeta = -B * R / Rbeta^2
+            ddelta/dB    = 1 / Rbeta
+        */
+        ddelta_dbeta = -B * R / (Rbeta^2)
+
+        ddelta_dtheta =
+            ddelta_dbeta,
+            J(1, Kb, 0),
+            1/Rbeta
+
+        /*
+            q_j = gamma_j - beta_j/(1+delta)
+
+            dq_j/dbeta =
+                -e_j/(1+delta)
+                + beta_j/(1+delta)^2 * ddelta/dbeta
+
+            dq_j/dgamma = e_j
+
+            dq_j/dB =
+                beta_j/(1+delta)^2 * ddelta/dB
+        */
+        Gq = J(Kb, 2*Kb + 1, 0)
+
+        Gq[., 1..Kb] =
+            -I(Kb)/(1 + delta) +
+            (beta' * ddelta_dtheta[1, 1..Kb]) / ((1 + delta)^2)
+
+        Gq[., (Kb+1)..(2*Kb)] = I(Kb)
+
+        Gq[., 2*Kb + 1] =
+            beta' * ddelta_dtheta[1, 2*Kb + 1] / ((1 + delta)^2)
+    }
+    else if (estimator == 3) {
+        /*
+            Estimator 3:
+                B = Bmodel(beta, delta)
+                gamma = gamma_map(beta, delta)
+
+            Use the mass equation to define delta_U implicitly.
+        */
+
+        delta = delta_from_mass_e3(
+            beta,
+            B,
+            cutoff_orig,
+            bw_orig,
+            cutoff_est,
+            bw_est,
+            K,
+            normalized,
+            islog
+        )
+
+        if (delta >= .) return
+
+        hmap = h1coef_map(
+            beta,
+            delta,
+            3,
+            K,
+            cutoff_orig,
+            bw_orig,
+            normalized,
+            islog,
+            1
+        )
+
+        q = (gamma - hmap.gamma)'
+
+        /*
+            F(beta,B,delta) = Bmodel(beta,delta) - B = 0
+
+            F_beta  = Rbmod
+            F_B     = -1
+            F_delta = dBmodel/ddelta
+
+            ddelta/dbeta = -F_beta/F_delta
+            ddelta/dB    =  1/F_delta
+        */
+        Rbmod = bmodel_row23(
+            delta,
+            cutoff_orig,
+            bw_orig,
+            K,
+            3,
+            normalized,
+            islog,
+            zbar_est
+        )
+
+        Fdelta =
+            d_bmodel_row23_ddelta(
+                delta,
+                cutoff_orig,
+                bw_orig,
+                K,
+                3,
+                normalized,
+                islog,
+                zbar_est
+            ) * beta'
+
+        if (abs(Fdelta) < 1e-12 | Fdelta >= .) return
+
+        ddelta_dbeta = -Rbmod / Fdelta
+
+        ddelta_dtheta =
+            ddelta_dbeta,
+            J(1, Kb, 0),
+            1/Fdelta
+
+        /*
+            q = gamma - gamma_map(beta, delta(beta,B))
+
+            dq/dbeta =
+                -dgamma/dbeta
+                -dgamma/ddelta * ddelta/dbeta
+
+            dq/dgamma = I
+
+            dq/dB =
+                -dgamma/ddelta * ddelta/dB
+        */
+        Gq = J(Kb, 2*Kb + 1, 0)
+
+        Gq[., 1..Kb] =
+            -hmap.dgamma_dbeta
+            - hmap.dgamma_ddelta * ddelta_dtheta[1, 1..Kb]
+
+        Gq[., (Kb+1)..(2*Kb)] = I(Kb)
+
+        Gq[., 2*Kb + 1] =
+            -hmap.dgamma_ddelta * ddelta_dtheta[1, 2*Kb + 1]
+    }
+    else {
+        _error(3498, "polbunch_wald_from_unrestricted only handles estimators 1, 2, and 3")
+    }
+
+    /*
+        Wald statistic.
+    */
+    Vq = Gq * V * Gq'
+
+    W = q' * pinv(Vq) * q
+    df = rows(q)
+    pval = chi2tail(df, W)
+
+    st_numscalar("r(pb_wald)", W)
+    st_numscalar("r(pb_p)", pval)
+    st_numscalar("r(pb_df)", df)
+    st_numscalar("r(pb_delta_U)", delta)
+}
 
 end

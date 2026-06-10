@@ -104,14 +104,16 @@ program polbunchplot
             local zhline xline(`upper_plot', lcolor(black) lpattern(dash))
         }
 
+		loc MR=`cutoff_plot'+_b[bunching:marginal_response]
         twoway ///
             (bar freq `z_orig', barwidth(`bw_plot') color(navy%50) base(0)) ///
             (function h0=`h0plot', range(`xmin' `lower_plot') lcolor(maroon) lpattern(solid)) ///
-            (function h0=`h0plot', range(`lower_plot' `cutoff_plot') lcolor(maroon) lpattern(shortdash)) ///
+            (function h0=`h0plot', range(`lower_plot' `MR') lcolor(maroon) lpattern(shortdash)) ///
             (function h1=`h1plot', range(`upper_plot' `xmax') lcolor(navy) lpattern(solid)) ///
 			(function h1=`h1plot', range(`cutoff_plot' `upper_plot') lcolor(navy) lpattern(shortdash)), ///
             xline(`cutoff_plot', lcolor(maroon) lpattern(dash)) ///
             xline(`lower_plot', lcolor(black) lpattern(dash)) ///
+			xline(`MR', lcolor(maroon) lpattern(longdash)) ///
             `zhline' ///
             graphregion(color(white)) ///
             plotregion(lcolor(black)) ///
