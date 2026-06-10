@@ -98,14 +98,51 @@ program polbunchplot
             replace freq = r(max) if freq > r(max)
         }
 
-        if "`log'" == "log" local yscale yscale(log)
+		su freq, meanonly
+		local ymax = 1.05*r(max)
+
+		local step = 10^floor(log10(`ymax'/5))
+		if `ymax'/`step' > 25 local step = 5*`step'
+		else if `ymax'/`step' > 10 local step = 2*`step'
+
+		local ytop = ceil(`ymax'/`step')*`step'
+
+		local yscale yscale(range(0 `ytop') `log') ylabel(0(`step')`ytop')
 
         if `upper_plot' > `cutoff_plot' {
             local zhline xline(`upper_plot', lcolor(black) lpattern(dash))
         }
 
-		loc MR=`cutoff_plot'+_b[bunching:marginal_response]
-        twoway ///
+		cap loc MR=`cutoff_plot'+_b[bunching:marginal_response]
+		if !mi(`MR') loc mrline xline(`MR', lcolor(maroon) lpattern(longdash))
+        if e(estimator)==4 {
+			local h0c = _b[h0:_cons]
+			local h1c = _b[h1:_cons]
+
+			local htrap `h0c' + ///
+				((`h1c' - `h0c') / (`upper_plot' - `lower_plot')) * ///
+				(x - `lower_plot')
+
+			twoway ///
+				(bar freq `z_orig', barwidth(`bw_plot') color(navy%50) base(0)) ///
+				(function y=`h0c', range(`xmin' `lower_plot') lcolor(maroon) lpattern(solid)) ///
+				(function y=`htrap', range(`lower_plot' `upper_plot') lcolor(maroon) lpattern(shortdash)) ///
+				(function y=`h1c', range(`upper_plot' `xmax') lcolor(navy) lpattern(solid)), ///
+				xline(`cutoff_plot', lcolor(maroon) lpattern(dash)) ///
+				xline(`lower_plot',  lcolor(black)  lpattern(dash)) ///
+				xline(`upper_plot',  lcolor(black)  lpattern(dash)) ///
+				graphregion(color(white)) ///
+				plotregion(lcolor(black)) ///
+				ytitle("Frequency") ///
+				xtitle("`zcol'") ///
+				`mrline' ///
+				legend(label(1 "Frequency") label(2 "Estimated h0") label(4 "Estimated h1") ///
+                   cols(3) order(1 2 4) pos(6)) ///
+				`yscale' ///
+				`graph_opts'
+		}
+		else {
+			twoway ///
             (bar freq `z_orig', barwidth(`bw_plot') color(navy%50) base(0)) ///
             (function h0=`h0plot', range(`xmin' `lower_plot') lcolor(maroon) lpattern(solid)) ///
             (function h0=`h0plot', range(`lower_plot' `MR') lcolor(maroon) lpattern(shortdash)) ///
@@ -113,7 +150,7 @@ program polbunchplot
 			(function h1=`h1plot', range(`cutoff_plot' `upper_plot') lcolor(navy) lpattern(shortdash)), ///
             xline(`cutoff_plot', lcolor(maroon) lpattern(dash)) ///
             xline(`lower_plot', lcolor(black) lpattern(dash)) ///
-			xline(`MR', lcolor(maroon) lpattern(longdash)) ///
+			`mrline' ///
             `zhline' ///
             graphregion(color(white)) ///
             plotregion(lcolor(black)) ///
@@ -123,7 +160,7 @@ program polbunchplot
                    cols(3) order(1 2 4) pos(6)) ///
             `yscale' ///
             `graph_opts'
-
+		}
         restore
     }
 

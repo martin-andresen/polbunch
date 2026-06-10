@@ -92,10 +92,10 @@
 						sum `y'
 						loc N=r(sum)
 					}
-					else { //collapse data
+					else { // collapse data
 						loc z `varlist'
-						tempvar bin y
-						
+						tempvar bin y binid u
+
 						if "`drop'"!="nodrop" {
 							su `z'
 							loc min=r(min)
@@ -107,14 +107,45 @@
 								drop if `z'>`cutoff'+floor((`max'-`cutoff')/`bw')*`bw'
 							}
 						}
+
 						count
-						loc N=r(N)
-						gen `bin'=ceil((`z'-`cutoff')/`bw')*`bw'+`cutoff'-`bw'/2
 						
-						collapse (count) `y'=`z', by(`bin')
-						rename `bin' `z'
+						loc N = r(N)
+						tempvar u
+						gen double `u' = (`z' - `cutoff') / `bw'
+
+						/*
+							Convention:
+							  z == cutoff belongs to binid 0,
+							  with center cutoff - bw/2.
+							This makes the default limits(1 0) exclude the bunching bin.
+						*/
+						gen long `binid' = ceil(`u')
+						replace `binid' = 0 if abs(`z' - `cutoff') < max(1e-12, abs(`bw')*1e-10)
+
+						collapse (count) `y'=`z', by(`binid')
+
+						if "`zero'" != "nozero" {
+							quietly summarize `binid', meanonly
+							local idmin = r(min)
+							local idmax = r(max)
+
+							tempfile collapsed
+							save `collapsed', replace
+
+							clear
+							set obs `=`idmax' - `idmin' + 1'
+							gen long `binid' = `idmin' + _n - 1
+
+							merge 1:1 `binid' using `collapsed', nogen
+							replace `y' = 0 if missing(`y')
+							sort `binid'
+						}
+
+						gen double `z' = `cutoff' + (`binid' - 0.5)*`bw'
 					}
-					
+				
+
 					if "`limits'" == "" {
 						local L = 1
 						local H = 0
@@ -139,15 +170,19 @@
 
 					gen int `relbin' = .
 					gen byte `crossbin' = (`zleft' < `cutoff' & `zright' > `cutoff')
-
+					
 					if `cutoff_on_edge' {
 						/*
 							cutoff is a bin edge:
 								relbin = -1 closest bin below cutoff
 								relbin =  1 closest bin above cutoff
 						*/
-						replace `relbin' = -ceil((`cutoff' - `zright')/`bw') if `zright' <= `cutoff'
-						replace `relbin' =  ceil((`zleft'  - `cutoff')/`bw') if `zleft'  >= `cutoff'
+
+						replace `relbin' = -round((`cutoff' - `zright')/`bw') - 1 ///
+							if `zright' <= `cutoff' + 1e-8
+
+						replace `relbin' =  round((`zleft' - `cutoff')/`bw') + 1 ///
+							if `zleft' >= `cutoff' - 1e-8
 
 						gen byte `inbunch' = ///
 							inrange(`relbin', -`L', -1) | ///
@@ -225,15 +260,18 @@
 					
 					tempvar side
 					gen byte `side' = .
-					replace `side' = -1 if `bunch' == 0 & `zright' <= `cutoff'
-					replace `side' =  1 if `bunch' == 0 & `zleft'  >= `cutoff'
+
+					local tol = max(1e-8, abs(`bw_orig')*1e-8)
+
+					replace `side' = -1 if `bunch' == 0 & `zright' <= `zL_excl_orig' + `tol'
+					replace `side' =  1 if `bunch' == 0 & `zleft'  >= `zH_excl_orig' - `tol'
 
 					count if `bunch' == 0 & missing(`side')
 					if r(N) > 0 {
-						noi di as error "Some non-excluded bins cannot be classified as left or right of cutoff."
+						noi di as error "Some non-excluded bins cannot be classified as left or right of excluded region."
+						noi list `z' `zleft' `zright' `relbin' `bunch' if `bunch' == 0 & missing(`side'), noobs
 						exit 301
 					}
-					
 					count if `side' == -1
 					if r(N) == 0 {
 						noi di as error "No bins below the excluded region."
@@ -391,7 +429,7 @@
 
 							Requires polynomial >= 1 and beta_1 nonzero.
 						*/
-						if `polynomial' >= 1 & abs(`h0coef'[1,1]) > 1e-12 {
+						if `polynomial' >= 1 & abs(`h0coefs'[1,1]) > 1e-12 {
 							scalar dstart = exp( ///
 								(`h1coefs'[1,`=`polynomial' + 1'] - ///
 								 `h0coefs'[1,`=`polynomial' + 1']) / ///
@@ -425,6 +463,7 @@
 						}
 					}
 							
+					local dotest = inlist(`estimator', 1, 2, 3) & "`test'" != "notest" &  `bootreps' > 0
 					
 					//ESTIMATION AND INFERENCE
 					tempname b V bs tmpb bus Vus bb VV
@@ -485,7 +524,7 @@
 						////TRANSFORM ESTIMATES
 						if "`transform'"!="notransform"& {
 							if `bootreps'!=1 loc nograd nograd
-							quietly summarize `y' if `bunch' > 0, meanonly
+							noi summarize `y' if `bunch' > 0, meanonly
 							local Hstar_obs = r(sum)
 							local taxopts
 							if "`t0'" != "" & "`t1'" != "" {
@@ -531,7 +570,9 @@
 							//BOOTSTRAP WRAPUP: COLLECT ESTIMATES
 							if `bootreps'>1&`s'>0 mat `bs'=nullmat(`bs') \ e(b)
 							
-							if inlist(`estimator'1,2,3) & "`test'" != "notest" {
+							
+							//TEST
+							if `dotest' {
 								bunch_profile `y' `z' `side' `bunch', ///
 									estimator(0) k(`polynomial') ///
 									cutoff_orig(`cutoff_orig') bw_orig(`bw_orig') ///
@@ -562,7 +603,7 @@
 							svmat `bs'
 							corr _all, cov
 							mat `V'=r(C)
-							if `estimator' > 0 & "`test'" != "notest" {
+							if `dotest' {
 								clear
 								svmat `bus'
 								corr _all, cov
@@ -571,8 +612,21 @@
 						}
 							
 						//TEST RESTRICTIONS
-						if inlist(`estimator',1,2,3)&"`test'"!="notest" {
-							ereturn post `bu0' `Vus'		
+						if `dotest' {
+							capture confirm matrix `bu0'
+							if _rc {
+								di as err "Internal error: unrestricted coefficient vector bu0 not found."
+								exit 498
+							}
+
+							capture confirm matrix `Vus'
+							if _rc {
+								di as err "Internal error: unrestricted VCE Vus not found."
+								exit 498
+							}
+
+							ereturn post `bu0' `Vus'
+
 							polbunch_waldtest, ///
 								estimator(`estimator') ///
 								k(`polynomial') ///
@@ -587,10 +641,6 @@
 							local chi2  = r(chi2)
 							local p_mod = r(p)
 							local df    = r(df)
-							if "`saveunres'"!="" {
-								ereturn local cmd="polbunch"
-								est sto `saveunres'
-							}
 						}
 
 					
@@ -598,7 +648,7 @@
 					restore
 					if `bootreps'>=1 eret post `b' `V', esample(`touse') depname(freq) obs(`N')
 					else eret post `b', esample(`touse') obs(`N') depname(freq)
-					if inlist(`estimator',1,2,3)&"`test'"!="notest"&`bootreps'>0 {
+					if `dotest' {
 						estadd scalar chi2=`chi2'
 						estadd scalar p_mod=`p_mod'
 						estadd scalar df_mod=`df'
@@ -609,6 +659,7 @@
 					ereturn scalar lower_limit=`zL_excl_orig'
 					ereturn scalar upper_limit=`zH_excl_orig'
 					ereturn local normalize="`normalize'"
+					ereturn scalar estimator=`estimator'
 					if `bootreps'>0 ereturn local cmd "polbunch"
 					ereturn local cmdname "polbunch"
 					ereturn local title 	"Polynomial bunching estimates"
@@ -625,7 +676,7 @@
 						di _newline
 						di "`e(title)'"
 						eret di
-						if inlist(`estimator',1,2,3)&"`test'"!="notest"&`bootreps'>0 {
+						if `dotest' {
 							di "Test of model assumptions: {col 42}Chi2(`df') test statistic {col 72}`: di %12.4f `chi2''"
 							di "{col 42}p-value {col 72}`: di %12.4f `p_mod''"
 							di "{hline 83}"
@@ -858,7 +909,6 @@
 		}
 
 		tempname theta Vtheta bnew Gnew Vnew
-		local hastax = "`t0'" != "" & "`t1'" != ""
 
 		matrix `theta' = e(b)
 
@@ -875,7 +925,7 @@
 		/* Flags */
 		local islog       = ("`log'"      != "")
 		local constant0   = ("`constant'" != "")
-		local hastax0     = ("`hastax'"   != "")
+		local hastax0 = ("`t0'" != "" & "`t1'" != "")
 		local normalized0 = ("`normalize'" != "nonormalize")
 
 		if `hastax0' {
@@ -891,7 +941,7 @@
 
 		/* Preserve e(sample), if present */
 		tempvar touse
-		capture gen byte `touse' = e(sample)
+		capture gen byte `touse' = e(sample)
 		local has_esample = !_rc
 
 		/* Call Mata transform */
@@ -1077,8 +1127,7 @@
 			ereturn scalar t1 = `t1'
 		}
 	end
-	
-	cap program drop saez_transform
+cap program drop saez_transform
 program define saez_transform, eclass
     version 16.0
 
@@ -1097,7 +1146,8 @@ program define saez_transform, eclass
     }
 
     local hastax = ("`t0'" != "" & "`t1'" != "")
-    if `hastax' == 0 {
+
+    if !`hastax' {
         local t0 = 0
         local t1 = 0
     }
@@ -1271,9 +1321,11 @@ end
         exit 301
     }
 
-    local width_excl = (`zh_excl_orig' - `zl_excl_orig') / `bw_orig'
-    local a0 = 0.5 * `width_excl'
-    local a1 = 0.5 * `width_excl'
+	quietly count if `touse' & `bunchvar' > 0
+	local width_excl = r(N)
+
+	local a0 = 0.5 * `width_excl'
+	local a1 = 0.5 * `width_excl'
 
     local dovar0 = ("`vce'" != "")
 
@@ -1522,7 +1574,11 @@ end
 		if (1 + delta <= 0) {
 			_error(3498, "delta must be greater than -1")
 		}
+
 		if (islog == 1) {
+			if (normalized == 1) {
+				return(ln(1 + delta) / bw_orig)
+			}
 			return(ln(1 + delta))
 		}
 
@@ -1676,65 +1732,46 @@ end
 		}
 		else if (estimator == 3) {
 			/*
-				Generic affine map:
-					h1(x) = scale * h0(a + s*x)
+				Estimator 3 right-side density restriction.
 
-				beta ordering:
-					beta[1]   coefficient on x^1
-					...
-					beta[K]   coefficient on x^K
-					beta[K+1] constant
+				Non-log DGP:
+					z_obs = z0 / (1 + delta)
+					z0    = (1 + delta) * z_obs
+					h1(z_obs) = (1 + delta) * h0((1 + delta) * z_obs)
 
-				Level case:
-					z0 = cutoff + (1+delta)*(z - cutoff)
+				If normalized x = (z - cutoff)/bw:
+					x0 = ((1 + delta)*(cutoff + bw*x) - cutoff)/bw
+					   = delta*cutoff/bw + (1 + delta)*x
 
-					normalized x = (z-cutoff)/bw:
-						x0 = (1+delta)*x
-						scale = 1+delta
-						a = 0
-						s = 1+delta
+				Log DGP:
+					z_obs = z0 - ln(1 + delta)
+					z0    = z_obs + ln(1 + delta)
+					h1(z_obs) = h0(z_obs + ln(1 + delta))
 
-					non-normalized z:
-						z0 = cutoff + (1+delta)*(z-cutoff)
-						   = (1-s)*cutoff + s*z
-						scale = 1+delta
-						a = (1-s)*cutoff
-						s = 1+delta
-
-				Log/proportional case:
-					z0 = (1+delta)*z
-
-					normalized x = (z-cutoff)/bw:
-						x0 = ((1+delta)*(cutoff + bw*x) - cutoff)/bw
-						   = delta*cutoff/bw + (1+delta)*x
-						scale = 1+delta
-						a = delta*cutoff/bw
-						s = 1+delta
-
-					non-normalized z:
-						z0 = (1+delta)*z
-						scale = 1+delta
-						a = 0
-						s = 1+delta
+				If normalized x = (z - cutoff)/bw:
+					x0 = x + ln(1 + delta)/bw
 			*/
 
-			scale = 1 + delta
-			s     = 1 + delta
-
 			if (islog == 0) {
-				if (normalized == 1) {
-					a = 0
-				}
-				else {
-					a = (1 - s) * cutoff_orig
-				}
-			}
-			else {
+				scale = 1 + delta
+				s     = 1 + delta
+
 				if (normalized == 1) {
 					a = delta * cutoff_orig / bw_orig
 				}
 				else {
 					a = 0
+				}
+			}
+			else {
+				scale = 1
+				s     = 1
+
+				if (normalized == 1) {
+					a = ln(1 + delta) / bw_orig
+				}
+				else {
+					a = ln(1 + delta)
 				}
 			}
 
@@ -1744,11 +1781,6 @@ end
 				out.dgamma_dbeta = J(Kb, Kb, 0)
 			}
 
-			/*
-				For p = 1,...,K:
-					coeff on x^p in scale * beta_j * (a+s*x)^j
-					equals scale * beta_j * comb(j,p) * a^(j-p) * s^p
-			*/
 			for (p = 1; p <= K; p++) {
 				for (j = p; j <= K; j++) {
 					out.gamma[p] = out.gamma[p] +
@@ -1761,10 +1793,6 @@ end
 				}
 			}
 
-			/*
-				Constant:
-					scale * beta_0 + scale * sum_j beta_j * a^j
-			*/
 			out.gamma[Kb] = scale * beta[Kb]
 
 			if (dograd) {
@@ -1780,16 +1808,11 @@ end
 			}
 
 			if (dograd) {
-				/*
-					Finite-difference derivative wrt delta. This keeps level/log
-					and normalized/non-normalized cases consistent without deriving
-					four separate analytic derivatives.
-				*/
 				real rowvector fd
 				fd = delta_fd_points(delta)
 				dp = fd[1]
 				dm = fd[2]
-				
+
 				hp = h1coef_map(beta, dp, estimator, K,
 					cutoff_orig, bw_orig, normalized, islog, 0)
 
@@ -3149,9 +3172,10 @@ end
 		real colvector y, z, side, bunch
 		real scalar Kb, Hstar_obs, lndelta_hat, delta_hat, gi, lb
 		real rowvector theta_hat, beta_hat, b, pars, phat, dgrid, qgrid
-		real matrix Vout, C
+		real matrix Vout
 		transmorphic S
 		struct stack23_out scalar st
+		
 
 		Kb = K + 1
 
@@ -3214,13 +3238,10 @@ end
 			}
 			else {
 				lb = -1 + 1e-8
-				if (initdelta <= lb | initdelta >= .) initdelta = 0
+				if (initdelta <= lb | initdelta >= .) initdelta = 0.05
 			}
 
-			C = (1, lb)
-
 			optimize_init_params(S, initdelta)
-			optimize_init_constraints(S, C)
 
 			optimize_init_argument(S, 1, y)
 			optimize_init_argument(S, 2, z)
@@ -3630,7 +3651,7 @@ real scalar delta_from_mass_e3(
 		st_numscalar("r(pb_delta_U)", delta)
 	}
 	
-	void saez_transform_mata(
+void saez_transform_mata(
     real rowvector theta,
     real scalar cutoff_orig,
     real scalar bw_orig,
@@ -3645,13 +3666,19 @@ real scalar delta_from_mass_e3(
 {
     real scalar h0, h1, B
     real scalar W, slope, target, m, EM
-    real scalar MR, shift, elast, A
+    real scalar rvar, MR, shift, elast, A
     real scalar disc, denom, hasresp
     real scalar oh0, oh1, oB, oEM, oshift, oMR, oe, nout
 
-    real rowvector b, dMR
+    real rowvector b, drvar
     real matrix G
 
+    /*
+        Raw Saez theta:
+            theta[1] = h0 constant
+            theta[2] = h1 constant
+            theta[3] = B
+    */
     h0 = theta[1]
     h1 = theta[2]
     B  = theta[3]
@@ -3663,7 +3690,7 @@ real scalar delta_from_mass_e3(
     }
 
     /*
-        Transformed outputs:
+        Output:
             h0:_cons
             h1:_cons
             bunching:number_bunchers
@@ -3675,6 +3702,7 @@ real scalar delta_from_mass_e3(
     nout = 6 + hastax
 
     b = J(1, nout, .)
+
     if (dograd) {
         G = J(nout, cols(theta), 0)
     }
@@ -3685,7 +3713,10 @@ real scalar delta_from_mass_e3(
     oEM    = 4
     oshift = 5
     oMR    = 6
-    if (hastax) oe = 7
+
+    if (hastax) {
+        oe = 7
+    }
 
     b[1, oh0] = h0
     b[1, oh1] = h1
@@ -3715,15 +3746,15 @@ real scalar delta_from_mass_e3(
     /*
         Saez/trapezoid response inversion.
 
-        The local counterfactual density is linear:
-            h(r) = h0 + slope*r,
-            slope = (h1 - h0)/W.
+        Solve in running-variable units:
+            B*bw_orig = int_0^rvar [h0 + slope*u] du
+                      = h0*rvar + 0.5*slope*rvar^2
 
-        Solve:
-            B*bw_orig = int_0^MR [h0 + slope*r] dr
-                      = h0*MR + 0.5*slope*MR^2.
+        If log==0:
+            rvar is an earnings-unit response.
 
-        MR is in original z units.
+        If log==1:
+            rvar is a log-earnings response.
     */
     target = B * bw_orig
     slope  = (h1 - h0) / W
@@ -3734,13 +3765,13 @@ real scalar delta_from_mass_e3(
         hasresp = 0
     }
     else if (abs(slope) < 1e-12) {
-        MR = target / h0
+        rvar = target / h0
 
         if (dograd) {
-            dMR = J(1, cols(theta), 0)
-            dMR[1] = -target / (h0^2)
-            dMR[2] = 0
-            dMR[3] =  bw_orig / h0
+            drvar = J(1, cols(theta), 0)
+            drvar[1] = -target / (h0^2)
+            drvar[2] = 0
+            drvar[3] =  bw_orig / h0
         }
     }
     else {
@@ -3750,30 +3781,32 @@ real scalar delta_from_mass_e3(
             hasresp = 0
         }
         else {
-            MR = (-h0 + sqrt(disc)) / slope
+            rvar = (-h0 + sqrt(disc)) / slope
 
-            if (MR <= 0 | MR >= .) {
+            if (rvar <= 0 | rvar >= .) {
                 hasresp = 0
             }
             else if (dograd) {
                 /*
-                    F = h0*MR + 0.5*slope*MR^2 - B*bw_orig = 0
-                    dF/dMR = h0 + slope*MR
+                    F = h0*rvar + 0.5*slope*rvar^2 - B*bw_orig = 0
 
+                    dF/drvar = h0 + slope*rvar
+
+                    slope = (h1-h0)/W
                     dslope/dh0 = -1/W
                     dslope/dh1 =  1/W
                 */
-                denom = h0 + slope * MR
+                denom = h0 + slope * rvar
 
                 if (abs(denom) < 1e-12 | denom >= .) {
                     hasresp = 0
                 }
                 else {
-                    dMR = J(1, cols(theta), 0)
+                    drvar = J(1, cols(theta), 0)
 
-                    dMR[1] = -(MR + 0.5*(-1/W)*MR^2) / denom
-                    dMR[2] = -(      0.5*( 1/W)*MR^2) / denom
-                    dMR[3] =  bw_orig / denom
+                    drvar[1] = -(rvar + 0.5*(-1/W)*rvar^2) / denom
+                    drvar[2] = -(       0.5*( 1/W)*rvar^2) / denom
+                    drvar[3] =  bw_orig / denom
                 }
             }
         }
@@ -3799,37 +3832,60 @@ real scalar delta_from_mass_e3(
         return
     }
 
-    b[1, oMR] = MR
+    /*
+        Convert running-variable response to reported quantities.
 
+        Level case:
+            marginal_response = rvar
+            shift = rvar / cutoff_orig
+
+        Log case:
+            rvar = log response
+            marginal_response = exp(rvar)-1
+            shift = exp(rvar)-1
+    */
     if (islog == 0) {
-        shift = MR / cutoff_orig
+        MR    = rvar
+        shift = rvar / cutoff_orig
     }
     else {
-        shift = exp(MR) - 1
+        MR    = exp(rvar) - 1
+        shift = exp(rvar) - 1
     }
 
     b[1, oshift] = shift
+    b[1, oMR]    = MR
 
     if (dograd) {
-        G[oMR, .] = dMR
-
         if (islog == 0) {
-            G[oshift, .] = dMR / cutoff_orig
+            G[oMR,    .] = drvar
+            G[oshift, .] = drvar / cutoff_orig
         }
         else {
-            G[oshift, .] = exp(MR) * dMR
+            G[oMR,    .] = exp(rvar) * drvar
+            G[oshift, .] = exp(rvar) * drvar
         }
     }
 
     if (hastax) {
         A = ln(1 - t0) - ln(1 - t1)
 
-        elast = ln(1 + shift) / A
-        b[1, oe] = elast
+        if (islog == 0) {
+            elast = ln(1 + shift) / A
 
-        if (dograd) {
-            G[oe, .] = G[oshift, .] / ((1 + shift) * A)
+            if (dograd) {
+                G[oe, .] = G[oshift, .] / ((1 + shift) * A)
+            }
         }
+        else {
+            elast = rvar / A
+
+            if (dograd) {
+                G[oe, .] = drvar / A
+            }
+        }
+
+        b[1, oe] = elast
     }
 
     st_numscalar("b_saezcalc_hasresp", 1)

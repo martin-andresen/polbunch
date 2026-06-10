@@ -1,5 +1,5 @@
 program polbunchsim, eclass
-	 syntax [, log reps(integer 1) obs(integer 5000) cutoff(real 1) el(real 0.4) t0(real 0.2) t1(real 0.6) bw(real 0.01) bootreps(integer 500) POLynomial(integer 1) notransform distribution(string) nopositiveshift estimator(numlist integer) btype(numlist integer) clist(string) noisily sample(string)]
+	 syntax [, log reps(integer 1) obs(integer 5000) cutoff(real 1) el(real 0.4) t0(real 0.2) t1(real 0.6) bw(real 0.01) bootreps(integer 500) POLynomial(integer 1) notransform distribution(string) positive estimator(numlist integer) btype(numlist integer) clist(string) noisily sample(string)]
 	
 	quietly {
 	if "`btype'"=="" loc btype=1
@@ -31,13 +31,13 @@ program polbunchsim, eclass
 			if "`c'"=="constant" loc cval=1
 			else loc cval=0
 			timer on 1
-			if `bt'==0 			polbunch z, cutoff(`cutoff') pol(`polynomial') bw(`bw') t0(`t0') t1(`t1') `log' estimator(`e') bootreps(0) `c' `noisily' `transform'
-			else if `bt'==1 	polbunch z, cutoff(`cutoff') pol(`polynomial') bw(`bw') t0(`t0') t1(`t1') `log' estimator(`e') bootreps(1) `c' `noisily' `transform'
-			else if `bt'==2 bootstrap, reps(`bootreps'): polbunch z, cutoff(`cutoff') pol(`polynomial') bw(`bw') t0(`t0') t1(`t1') `log' estimator(`e') bootreps(0) `c' `noisily' `transform'
-			else if `bt'==3 polbunch z, cutoff(`cutoff') pol(`polynomial') bw(`bw') t0(`t0') t1(`t1') `log' `constant' `postiveshift' estimator(`e') bootreps(`bootreps') nobayes `c' `noisily' `transform'
-			else if `bt'==4 polbunch z, cutoff(`cutoff') pol(`polynomial') bw(`bw') t0(`t0') t1(`t1') `log' estimator(`e') bootreps(`bootreps') nozero nobayes `c' `noisily' `transform'
-			else if `bt'==5 polbunch z, cutoff(`cutoff') pol(`polynomial') bw(`bw') t0(`t0') t1(`t1') `log' estimator(`e') bootreps(`bootreps') `c' `noisily' `transform'
-			else if `bt'==6 polbunch z, cutoff(`cutoff') pol(`polynomial') bw(`bw') t0(`t0') t1(`t1') `log' estimator(`e') bootreps(`bootreps') nozero `c' `noisily' `transform'
+			if `bt'==0 			polbunch z, cutoff(`cutoff') pol(`polynomial') bw(`bw') t0(`t0') t1(`t1') `log' estimator(`e') bootreps(0) `c' `noisily' `transform' `positive'
+			else if `bt'==1 	polbunch z, cutoff(`cutoff') pol(`polynomial') bw(`bw') t0(`t0') t1(`t1') `log' estimator(`e') bootreps(1) `c' `noisily' `transform' `positive'
+			else if `bt'==2 bootstrap, reps(`bootreps'): polbunch z, cutoff(`cutoff') pol(`polynomial') bw(`bw') t0(`t0') t1(`t1') `log' estimator(`e') bootreps(0) `c' `noisily' `transform' `positive'
+			else if `bt'==3 polbunch z, cutoff(`cutoff') pol(`polynomial') bw(`bw') t0(`t0') t1(`t1') `log' `constant' `postiveshift' estimator(`e') bootreps(`bootreps') nobayes `c' `noisily' `transform' `positive'
+			else if `bt'==4 polbunch z, cutoff(`cutoff') pol(`polynomial') bw(`bw') t0(`t0') t1(`t1') `log' estimator(`e') bootreps(`bootreps') nozero nobayes `c' `noisily' `transform' `positive'
+			else if `bt'==5 polbunch z, cutoff(`cutoff') pol(`polynomial') bw(`bw') t0(`t0') t1(`t1') `log' estimator(`e') bootreps(`bootreps') `c' `noisily' `transform' `positive'
+			else if `bt'==6 polbunch z, cutoff(`cutoff') pol(`polynomial') bw(`bw') t0(`t0') t1(`t1') `log' estimator(`e') bootreps(`bootreps') nozero `c' `noisily' `transform' `positive'
 			timer off 1
 		
 			timer list
