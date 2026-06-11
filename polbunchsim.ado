@@ -6,7 +6,7 @@ program polbunchsim, rclass
         bootreps(integer 500) POLynomial(integer 1) ///
         notransform distribution(string) positive ///
         estimator(numlist integer) btype(numlist integer) ///
-        clist(string) noisily sample(string) limits(numlist) est4limits(numlist)]
+        clist(string) noisily sample(string) limits(numlist) est4limits(numlist) wald]
 
     quietly {
         if "`zmin'" == "" local zmin "-."
@@ -67,44 +67,44 @@ program polbunchsim, rclass
                             capture noisily polbunch z `iff', cutoff(`cutoff') ///
                                 pol(`polynomial') bw(`bw') t0(`t0') t1(`t1') ///
                                 `log' estimator(`e') bootreps(0) `c' ///
-                                `noisily' `notransform' `positive' `uselimits'
+                                `noisily' `notransform' `positive' `uselimits' `wald'
                         }
                         else if `bt' == 1 {
                             capture noisily polbunch z `iff', cutoff(`cutoff') ///
                                 pol(`polynomial') bw(`bw') t0(`t0') t1(`t1') ///
                                 `log' estimator(`e') bootreps(1) `c' ///
-                                `noisily' `notransform' `positive' `uselimits'
+                                `noisily' `notransform' `positive' `uselimits' `wald'
                         }
                         else if `bt' == 2 {
                             capture noisily bootstrap, reps(`bootreps'): ///
                                 polbunch z `iff', cutoff(`cutoff') ///
                                 pol(`polynomial') bw(`bw') t0(`t0') t1(`t1') ///
                                 `log' estimator(`e') bootreps(0) `c' ///
-                                `noisily' `notransform' `positive' `uselimits'
+                                `noisily' `notransform' `positive' `uselimits' `wald'
                         }
                         else if `bt' == 3 {
                             capture noisily polbunch z `iff', cutoff(`cutoff') ///
                                 pol(`polynomial') bw(`bw') t0(`t0') t1(`t1') ///
                                 `log' estimator(`e') bootreps(`bootreps') ///
-                                nobayes `c' `noisily' `notransform' `positive' `uselimits'
+                                nobayes `c' `noisily' `notransform' `positive' `uselimits' `wald'
                         }
                         else if `bt' == 4 {
                             capture noisily polbunch z `iff', cutoff(`cutoff') ///
                                 pol(`polynomial') bw(`bw') t0(`t0') t1(`t1') ///
                                 `log' estimator(`e') bootreps(`bootreps') ///
-                                nozero nobayes `c' `noisily' `notransform' `positive' `uselimits'
+                                nozero nobayes `c' `noisily' `notransform' `positive' `uselimits' `wald'
                         }
                         else if `bt' == 5 {
                             capture noisily polbunch z `iff', cutoff(`cutoff') ///
                                 pol(`polynomial') bw(`bw') t0(`t0') t1(`t1') ///
                                 `log' estimator(`e') bootreps(`bootreps') ///
-                                `c' `noisily' `notransform' `positive' `uselimits'
+                                `c' `noisily' `notransform' `positive' `uselimits' `wald'
                         }
                         else if `bt' == 6 {
                             capture noisily polbunch z `iff', cutoff(`cutoff') ///
                                 pol(`polynomial') bw(`bw') t0(`t0') t1(`t1') ///
                                 `log' estimator(`e') bootreps(`bootreps') ///
-                                nozero `c' `noisily' `notransform' `positive' `uselimits'
+                                nozero `c' `noisily' `notransform' `positive' `uselimits' `wald'
                         }
                         else {
                             local rc = 198
