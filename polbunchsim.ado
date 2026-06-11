@@ -160,7 +160,8 @@ program polbunchsim, rclass
         }
 
 		ereturn clear
-       restore
+		
+		restore
 
 		if `genrc' {
 			return scalar failed = 1

@@ -470,7 +470,7 @@
 					local dotest = inlist(`estimator', 1, 2, 3) & "`test'" != "notest" &  `bootreps' > 0
 					
 					//ESTIMATION AND INFERENCE
-					tempname b V bs tmpb bus Vus bb VV
+					tempname b V bs bb VV bmain Vmain b0 V0 b0s
 					
 					if inlist(`bootreps',0,1) loc stop=0
 					else loc stop=`bootreps'
@@ -522,8 +522,6 @@
 									zh_excl_orig(`zH_excl_orig') `positive'
 							}
 
-							matrix `b' = e(b)
-							capture matrix `V' = e(V)
 							
 						////TRANSFORM ESTIMATES
 						if "`transform'"!="notransform"& {
@@ -565,14 +563,18 @@
 										`log' ///
 										`taxopts' ///
 										`nograd'
+								}
 							}
-								
-								matrix `b' = e(b)
-								capture matrix `V' = e(V)
+							
+							matrix `b' = e(b)
+							
+							if `s' == 0 {
+								matrix `bmain' = `b'
+								if `bootreps'==1 matrix `Vmain' = e(V)
 							}
-
-							//BOOTSTRAP WRAPUP: COLLECT ESTIMATES
-							if `bootreps'>1&`s'>0 mat `bs'=nullmat(`bs') \ e(b)
+							else if `bootreps'>1 {
+								mat `bs'=nullmat(`bs') \ `b'
+							}
 							
 							
 							//TEST
@@ -587,13 +589,13 @@
 									zl_excl_orig(`zL_excl_orig') ///
 									zh_excl_orig(`zH_excl_orig') `positive'
 								
+						
 								if `s' == 0 {
-									tempname bu0
-									matrix `bu0' = e(b)
-									if `bootreps'==1 matrix `Vus' = e(V)
+									matrix `b0' = e(b)
+									if `bootreps'==1 matrix `V0' = e(V)
 								}
-								else if `s' > 0 & `bootreps' > 1 {
-									matrix `bus' = nullmat(`bus') \ e(b)
+								else if `bootreps' > 1 {
+									matrix `b0s' = nullmat(`b0s') \ e(b)
 								}
 							}
 							if `s' > 0 noi _dots `s' 0
@@ -604,32 +606,39 @@
 						//bootstrap inference sunmmary & test
 						if `bootreps'>1 {
 							clear
-							svmat `bs'
+							svmat double `bs'
 							corr _all, cov
-							mat `V'=r(C)
+							mat `Vmain'=r(C)
 							if `dotest' {
 								clear
-								svmat `bus'
+								svmat `b0s'
 								corr _all, cov
-								matrix `Vus' = r(C)
+								matrix `V0' = r(C)
 							}
 						}
 							
 						//TEST RESTRICTIONS
 						if `dotest' {
-							capture confirm matrix `bu0'
+							capture confirm matrix `b0'
 							if _rc {
-								di as err "Internal error: unrestricted coefficient vector bu0 not found."
+								di as err "Internal error: unrestricted coefficient vector b0 not found."
 								exit 498
 							}
 
-							capture confirm matrix `Vus'
+							capture confirm matrix `V0'
 							if _rc {
-								di as err "Internal error: unrestricted VCE Vus not found."
+								di as err "Internal error: unrestricted VCE V0 not found."
 								exit 498
 							}
-
-							ereturn post `bu0' `Vus'
+							
+							local nm: colnames `b0'
+							local neq: coleq `b0'
+							mat colnames `V0'=`nm'
+							mat rownames `V0'=`nm'
+							mat coleq `V0'=`neq'
+							mat roweq `V0'=`neq'
+							
+							ereturn post `b0' `V0'
 
 							polbunch_waldtest, ///
 								estimator(`estimator') ///
@@ -650,8 +659,16 @@
 					
 					//POST RESULTS
 					restore
-					if `bootreps'>=1 eret post `b' `V', esample(`touse') depname(freq) obs(`N')
-					else eret post `b', esample(`touse') obs(`N') depname(freq)
+					if `bootreps'>=1 {
+							local nm: colnames `bmain'
+							local neq: coleq `bmain'
+							mat colnames `Vmain'=`nm'
+							mat rownames `Vmain'=`nm'
+							mat coleq `Vmain'=`neq'
+							mat roweq `Vmain'=`neq'
+						eret post `bmain' `Vmain', esample(`touse') depname(freq) obs(`N')
+					}
+					else eret post `bmain', esample(`touse') obs(`N') depname(freq)
 					if `dotest' {
 						estadd scalar chi2=`chi2'
 						estadd scalar p_mod=`p_mod'
@@ -966,7 +983,7 @@
 
 		/* Preserve e(sample), if present */
 		tempvar touse
-		capture gen byte `touse' = e(sample)
+		capture gen byte `touse' = e(sample)
 		local has_esample = !_rc
 
 		/* Call Mata transform */
@@ -1314,6 +1331,7 @@ program define saez_transform, eclass
         ereturn scalar t1 = `t1'
     }
 end
+
 cap program drop bunch_saez
 program define bunch_saez, eclass
     version 16.0
