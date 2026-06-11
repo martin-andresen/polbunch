@@ -619,28 +619,7 @@
 							
 						//TEST RESTRICTIONS
 						if `dotest' {
-							capture confirm matrix `b0'
-							if _rc {
-								di as err "Internal error: unrestricted coefficient vector b0 not found."
-								exit 498
-							}
-
-							capture confirm matrix `V0'
-							if _rc {
-								di as err "Internal error: unrestricted VCE V0 not found."
-								exit 498
-							}
-							
-							local nm: colnames `b0'
-							local neq: coleq `b0'
-							mat colnames `V0'=`nm'
-							mat rownames `V0'=`nm'
-							mat coleq `V0'=`neq'
-							mat roweq `V0'=`neq'
-							
-							ereturn post `b0' `V0'
-
-							polbunch_waldtest, ///
+							capture noisily polbunch_waldtest, ///
 								estimator(`estimator') ///
 								k(`polynomial') ///
 								cutofforig(`cutoff_orig') ///
@@ -651,9 +630,22 @@
 								`normalize' ///
 								`log'
 
-							local chi2  = r(chi2)
-							local p_mod = r(p)
-							local df    = r(df)
+							local test_rc = _rc
+
+							if `test_rc' {
+								local test_failed = 1
+								local dotest = 0
+
+								noi di as text ///
+									"Note: model-assumption test could not be computed; " ///
+									"test statistics are not reported. " ///
+									"waldtest return code = " as result `test_rc'
+							}
+							else {
+								local chi2  = r(chi2)
+								local p_mod = r(p)
+								local df    = r(df)
+							}
 						}
 
 					
@@ -1667,6 +1659,27 @@ end
 
 		return(delta * cutoff_orig)
 	}
+	
+	real scalar d_response_length_ddelta(
+    real scalar delta,
+    real scalar cutoff_orig,
+    real scalar bw_orig,
+    real scalar normalized,
+    real scalar islog
+)
+{
+    if (1 + delta <= 0) {
+        _error(3498, "delta must be greater than -1")
+    }
+
+    if (islog == 1) {
+        if (normalized == 1) return(1 / ((1 + delta) * bw_orig))
+        return(1 / (1 + delta))
+    }
+
+    if (normalized == 1) return(cutoff_orig / bw_orig)
+    return(cutoff_orig)
+}
 
 
 	void saez_run(
@@ -1755,6 +1768,127 @@ end
     }
 }
 
+real matrix h1_A_matrix(
+    real scalar delta,
+    real scalar estimator,
+    real scalar K,
+    real scalar cutoff_orig,
+    real scalar bw_orig,
+    real scalar normalized,
+    real scalar islog,
+    real scalar deriv
+)
+{
+    real scalar Kb, p, j, e
+    real scalar scale, s, a, dscale, ds, da
+    real scalar apow, apowm1, spow, spowm1, base, dbase
+    real matrix A
+
+    if (1 + delta <= 0) {
+        _error(3498, "delta must be greater than -1")
+    }
+
+    Kb = K + 1
+    A  = J(Kb, Kb, 0)
+
+    if (estimator == 1) {
+        if (deriv) return(J(Kb, Kb, 0))
+        return(I(Kb))
+    }
+
+    if (estimator == 2) {
+        if (deriv) return(-I(Kb) / (1 + delta)^2)
+        return(I(Kb) / (1 + delta))
+    }
+
+    if (estimator != 3) {
+        _error(3498, "h1_A_matrix only handles estimators 1, 2, and 3")
+    }
+
+    if (islog == 0) {
+        scale  = 1 + delta
+        s      = 1 + delta
+        dscale = 1
+        ds     = 1
+
+        if (normalized == 1) {
+            a  = delta * cutoff_orig / bw_orig
+            da = cutoff_orig / bw_orig
+        }
+        else {
+            a  = 0
+            da = 0
+        }
+    }
+    else {
+        scale  = 1
+        s      = 1
+        dscale = 0
+        ds     = 0
+
+        if (normalized == 1) {
+            a  = ln(1 + delta) / bw_orig
+            da = 1 / ((1 + delta) * bw_orig)
+        }
+        else {
+            a  = ln(1 + delta)
+            da = 1 / (1 + delta)
+        }
+    }
+
+    for (p = 1; p <= K; p++) {
+        for (j = p; j <= K; j++) {
+            e = j - p
+
+            if (e == 0) apow = 1
+            else        apow = a^e
+
+            spow = s^p
+            base = apow * spow
+
+            if (deriv == 0) {
+                A[p,j] = scale * comb(j,p) * base
+            }
+            else {
+                dbase = 0
+
+                if (e > 0) {
+                    if (e == 1) apowm1 = 1
+                    else        apowm1 = a^(e-1)
+
+                    dbase = dbase + e * apowm1 * da * spow
+                }
+
+                if (p > 0) {
+                    if (p == 1) spowm1 = 1
+                    else        spowm1 = s^(p-1)
+
+                    dbase = dbase + apow * p * spowm1 * ds
+                }
+
+                A[p,j] = comb(j,p) * (dscale * base + scale * dbase)
+            }
+        }
+    }
+
+    if (deriv == 0) {
+        A[Kb,Kb] = scale
+        for (j = 1; j <= K; j++) {
+            A[Kb,j] = scale * a^j
+        }
+    }
+    else {
+        A[Kb,Kb] = dscale
+        for (j = 1; j <= K; j++) {
+            if (j == 1) apowm1 = 1
+            else        apowm1 = a^(j-1)
+
+            A[Kb,j] = dscale * a^j + scale * j * apowm1 * da
+        }
+    }
+
+    return(A)
+}
 	// -----------------------------------------------------------------------------
 	// h1 coefficient/design restrictions
 	// -----------------------------------------------------------------------------
@@ -1810,98 +1944,31 @@ end
 			}
 		}
 		else if (estimator == 3) {
-			/*
-				Estimator 3 right-side density restriction.
+			out.dgamma_dbeta = h1_A_matrix(
+			delta,
+			estimator,
+			K,
+			cutoff_orig,
+			bw_orig,
+			normalized,
+			islog,
+			0
+		)
 
-				Non-log DGP:
-					z_obs = z0 / (1 + delta)
-					z0    = (1 + delta) * z_obs
-					h1(z_obs) = (1 + delta) * h0((1 + delta) * z_obs)
+		out.gamma = beta * out.dgamma_dbeta'
 
-				If normalized x = (z - cutoff)/bw:
-					x0 = ((1 + delta)*(cutoff + bw*x) - cutoff)/bw
-					   = delta*cutoff/bw + (1 + delta)*x
-
-				Log DGP:
-					z_obs = z0 - ln(1 + delta)
-					z0    = z_obs + ln(1 + delta)
-					h1(z_obs) = h0(z_obs + ln(1 + delta))
-
-				If normalized x = (z - cutoff)/bw:
-					x0 = x + ln(1 + delta)/bw
-			*/
-
-			if (islog == 0) {
-				scale = 1 + delta
-				s     = 1 + delta
-
-				if (normalized == 1) {
-					a = delta * cutoff_orig / bw_orig
-				}
-				else {
-					a = 0
-				}
-			}
-			else {
-				scale = 1
-				s     = 1
-
-				if (normalized == 1) {
-					a = ln(1 + delta) / bw_orig
-				}
-				else {
-					a = ln(1 + delta)
-				}
-			}
-
-			out.gamma = J(1, Kb, 0)
-
-			if (dograd) {
-				out.dgamma_dbeta = J(Kb, Kb, 0)
-			}
-
-			for (p = 1; p <= K; p++) {
-				for (j = p; j <= K; j++) {
-					out.gamma[p] = out.gamma[p] +
-						beta[j] * scale * comb(j,p) * a^(j-p) * s^p
-
-					if (dograd) {
-						out.dgamma_dbeta[p,j] =
-							scale * comb(j,p) * a^(j-p) * s^p
-					}
-				}
-			}
-
-			out.gamma[Kb] = scale * beta[Kb]
-
-			if (dograd) {
-				out.dgamma_dbeta[Kb,Kb] = scale
-			}
-
-			for (j = 1; j <= K; j++) {
-				out.gamma[Kb] = out.gamma[Kb] + scale * beta[j] * a^j
-
-				if (dograd) {
-					out.dgamma_dbeta[Kb,j] = scale * a^j
-				}
-			}
-
-			if (dograd) {
-				real rowvector fd
-				fd = delta_fd_points(delta)
-				dp = fd[1]
-				dm = fd[2]
-
-				hp = h1coef_map(beta, dp, estimator, K,
-					cutoff_orig, bw_orig, normalized, islog, 0)
-
-				hm = h1coef_map(beta, dm, estimator, K,
-					cutoff_orig, bw_orig, normalized, islog, 0)
-
-				gp = hp.gamma
-				gm = hm.gamma
-
-				out.dgamma_ddelta = ((gp - gm) / (dp - dm))'
+		if (dograd) {
+			out.dgamma_ddelta =
+				h1_A_matrix(
+					delta,
+					estimator,
+					K,
+					cutoff_orig,
+					bw_orig,
+					normalized,
+					islog,
+					1
+				) * beta'
 			}
 		}
 		else {
@@ -1926,9 +1993,9 @@ end
 	)
 	{
 		struct hdesign_out scalar out
-		struct hcoef_out scalar h1, hp, hm
+		struct hcoef_out scalar h1
 
-		real scalar eps, dp, dm
+		real scalar eps
 		real matrix Xbase, Xp, Xm
 
 		Xbase = pbasis(zR, K)
@@ -1949,17 +2016,22 @@ end
 			If gamma = A(delta) * beta', then fitted h1 rows are:
 				Xbase * A(delta) * beta'
 		*/
-		out.X = Xbase * h1.dgamma_dbeta
+		Xbase = pbasis(zR, K)
+
+		out.X = Xbase * h1_A_matrix(
+			delta,
+			estimator,
+			K,
+			cutoff_orig,
+			bw_orig,
+			normalized,
+			islog,
+			0
+		)
 
 		if (dograd) {
-			real rowvector fd
-			fd = delta_fd_points(delta)
-			dp = fd[1]
-			dm = fd[2]
-			
-			hp = h1coef_map(
-				J(1, K+1, 0),
-				dp,
+			out.dXddelta = Xbase * h1_A_matrix(
+				delta,
 				estimator,
 				K,
 				cutoff_orig,
@@ -1968,23 +2040,6 @@ end
 				islog,
 				1
 			)
-
-			hm = h1coef_map(
-				J(1, K+1, 0),
-				dm,
-				estimator,
-				K,
-				cutoff_orig,
-				bw_orig,
-				normalized,
-				islog,
-				1
-			)
-
-			Xp = Xbase * hp.dgamma_dbeta
-			Xm = Xbase * hm.dgamma_dbeta
-
-			out.dXddelta = (Xp - Xm) / (dp - dm)
 		}
 		else {
 			out.dXddelta = J(0, 0, .)
@@ -2039,120 +2094,100 @@ end
 
 		return(R)
 	}
+	
+real rowvector d_bmodel_row23_ddelta(
+    real scalar delta,
+    real scalar cutoff_orig,
+    real scalar bw_orig,
+    real scalar K,
+    real scalar estimator,
+    real scalar normalized,
+    real scalar islog,
+    real scalar zbar_est
+)
+{
+    real scalar cutoff_est, bw_est, r, dr
+    real rowvector R
 
-	real rowvector d_bmodel_row23_ddelta(
-		real scalar delta,
-		real scalar cutoff_orig,
-		real scalar bw_orig,
-		real scalar K,
-		real scalar estimator,
-		real scalar normalized,
-		real scalar islog,
-		real scalar zbar_est
-	)
-	{
-		real scalar eps, dp, dm
-		real rowvector Rp, Rm
+    if (1 + delta <= 0) {
+        _error(3498, "delta must be greater than -1")
+    }
 
-		real rowvector fd
-		fd = delta_fd_points(delta)
-		dp = fd[1]
-		dm = fd[2]
+    if (normalized == 1) {
+        cutoff_est = 0
+        bw_est     = 1
+    }
+    else {
+        cutoff_est = cutoff_orig
+        bw_est     = bw_orig
+    }
 
-		Rp = bmodel_row23(dp, cutoff_orig, bw_orig, K, estimator, normalized, islog, zbar_est)
-		Rm = bmodel_row23(dm, cutoff_orig, bw_orig, K, estimator, normalized, islog, zbar_est)
+    if (estimator == 2) {
+        return(intbasis(cutoff_est, zbar_est, K) / bw_est)
+    }
+    else if (estimator == 3) {
+        r  = response_length(delta, cutoff_orig, bw_orig, normalized, islog)
+        dr = d_response_length_ddelta(delta, cutoff_orig, bw_orig, normalized, islog)
 
-		return((Rp - Rm)/(dp - dm))
-	}
+        return(pbasis_row(cutoff_est + r, K) * dr / bw_est)
+    }
 
-	// cf_mass_row23() returns R(delta) such that cf_mass(beta,delta) = R(delta) * beta'.
-	// cf_mass = integral left part under h0 + right part under h1.
-	real rowvector cf_mass_row23(
-		real scalar delta,
-		real colvector z,
-		real scalar cutoff_orig,
-		real scalar bw_orig,
-		real scalar K,
-		real scalar estimator,
-		real scalar normalized,
-		real scalar islog,
-		real scalar zL_excl_orig,
-		real scalar zH_excl_orig
-	)
-	{
-		real scalar ex_lo, ex_hi, cutoff_est, bw_est
-		real rowvector Rlo, Rhi
-		struct hcoef_out scalar h1map
+    _error(3498, "d_bmodel_row23_ddelta only handles estimators 2 and 3")
+}
+real rowvector d_cf_mass_row23_ddelta(
+    real scalar delta,
+    real colvector z,
+    real scalar cutoff_orig,
+    real scalar bw_orig,
+    real scalar K,
+    real scalar estimator,
+    real scalar normalized,
+    real scalar islog,
+    real scalar zL_excl_orig,
+    real scalar zH_excl_orig
+)
+{
+    real scalar ex_hi, cutoff_est, bw_est
+    real rowvector Ihi
+    real matrix dA
 
-		if (1 + delta <= 0) {
-			_error(3498, "delta must be greater than -1")
-		}
-		
-		if (normalized == 1) {
-			cutoff_est = 0
-			bw_est     = 1
-			ex_lo      = (zL_excl_orig - cutoff_orig) / bw_orig
-			ex_hi      = (zH_excl_orig - cutoff_orig) / bw_orig
-		}
-		else {
-			cutoff_est = cutoff_orig
-			bw_est     = bw_orig
-			ex_lo      = zL_excl_orig
-			ex_hi      = zH_excl_orig
-		}
-		
-		Rlo = intbasis(ex_lo, cutoff_est, K)
+    if (1 + delta <= 0) {
+        _error(3498, "delta must be greater than -1")
+    }
 
-		if (estimator == 2) {
-			Rhi = intbasis(cutoff_est, ex_hi, K) / (1 + delta)
-		}
-		else if (estimator == 3) {
-			h1map = h1coef_map(
-				J(1, K+1, 0),
-				delta,
-				estimator,
-				K,
-				cutoff_orig,
-				bw_orig,
-				normalized,
-				islog,
-				1
-			)
-			Rhi = intbasis(cutoff_est, ex_hi, K) * h1map.dgamma_dbeta
-		}
-		else {
-			_error(3498, "cf_mass_row23 only handles estimators 2 and 3")
-		}
+    if (normalized == 1) {
+        cutoff_est = 0
+        bw_est     = 1
+        ex_hi      = (zH_excl_orig - cutoff_orig) / bw_orig
+    }
+    else {
+        cutoff_est = cutoff_orig
+        bw_est     = bw_orig
+        ex_hi      = zH_excl_orig
+    }
 
-		return((Rlo + Rhi) / bw_est)
-	}
+    Ihi = intbasis(cutoff_est, ex_hi, K)
 
-	real rowvector d_cf_mass_row23_ddelta(
-		real scalar delta,
-		real colvector z,
-		real scalar cutoff_orig,
-		real scalar bw_orig,
-		real scalar K,
-		real scalar estimator,
-		real scalar normalized,
-		real scalar islog,
-		real scalar zL_excl_orig,
-		real scalar zH_excl_orig
-	)
-	{
-		real scalar eps, dp, dm
-		real rowvector Rp, Rm
+    if (estimator == 2) {
+        return(-Ihi / ((1 + delta)^2 * bw_est))
+    }
+    else if (estimator == 3) {
+        dA = h1_A_matrix(
+            delta,
+            estimator,
+            K,
+            cutoff_orig,
+            bw_orig,
+            normalized,
+            islog,
+            1
+        )
 
-		real rowvector fd
-		fd = delta_fd_points(delta)
-		dp = fd[1]
-		dm = fd[2]
+        return((Ihi * dA) / bw_est)
+    }
 
-		Rp = cf_mass_row23(dp, z, cutoff_orig, bw_orig, K, estimator, normalized, islog, zL_excl_orig, zH_excl_orig)
-		Rm = cf_mass_row23(dm, z, cutoff_orig, bw_orig, K, estimator, normalized, islog, zL_excl_orig, zH_excl_orig)
-
-		return((Rp - Rm)/(dp - dm))
-	}
+    _error(3498, "d_cf_mass_row23_ddelta only handles estimators 2 and 3")
+}
 
 	real rowvector h0_excluded_row(
 		real scalar cutoff_orig,
@@ -2252,39 +2287,73 @@ end
 
 		return(R)
 	}
+	
+real rowvector d_cf_mass_row_ddelta(
+    real scalar delta,
+    real scalar cutoff_orig,
+    real scalar bw_orig,
+    real scalar K,
+    real scalar estimator,
+    real scalar normalized,
+    real scalar islog,
+    real scalar zL_excl_orig,
+    real scalar zH_excl_orig,
+    real scalar ntheta
+)
+{
+    real scalar ex_hi, cutoff_est, bw_est, Kb
+    real rowvector out, Ihi
+    real matrix dA
 
-	real rowvector d_cf_mass_row_ddelta(
-		real scalar delta,
-		real scalar cutoff_orig,
-		real scalar bw_orig,
-		real scalar K,
-		real scalar estimator,
-		real scalar normalized,
-		real scalar islog,
-		real scalar zL_excl_orig,
-		real scalar zH_excl_orig,
-		real scalar ntheta
-	)
-	{
-		real scalar eps, dp, dm
-		real rowvector Rp, Rm
+    out = J(1, ntheta, 0)
+    Kb  = K + 1
 
-		if (estimator == 0 | estimator == 1) {
-			return(J(1, ntheta, 0))
-		}
+    if (estimator == 0 | estimator == 1) {
+        return(out)
+    }
 
-		real rowvector fd
-		fd = delta_fd_points(delta)
-		dp = fd[1]
-		dm = fd[2]
+    if (1 + delta <= 0) {
+        _error(3498, "delta must be greater than -1")
+    }
 
-		Rp = cf_mass_row(dp, cutoff_orig, bw_orig, K, estimator, normalized, islog, zL_excl_orig, zH_excl_orig, ntheta)
-		Rm = cf_mass_row(dm, cutoff_orig, bw_orig, K, estimator, normalized, islog, zL_excl_orig, zH_excl_orig, ntheta)
+    if (normalized == 1) {
+        cutoff_est = 0
+        bw_est     = 1
+        ex_hi      = (zH_excl_orig - cutoff_orig) / bw_orig
+    }
+    else {
+        cutoff_est = cutoff_orig
+        bw_est     = bw_orig
+        ex_hi      = zH_excl_orig
+    }
 
-		return((Rp - Rm)/(dp - dm))
-	}
+    Ihi = intbasis(cutoff_est, ex_hi, K)
 
-	real rowvector bmodel_row(
+    if (estimator == 2) {
+        out[1, 1..Kb] = -Ihi / ((1 + delta)^2 * bw_est)
+    }
+    else if (estimator == 3) {
+        dA = h1_A_matrix(
+            delta,
+            estimator,
+            K,
+            cutoff_orig,
+            bw_orig,
+            normalized,
+            islog,
+            1
+        )
+
+        out[1, 1..Kb] = (Ihi * dA) / bw_est
+    }
+    else {
+        _error(3498, "d_cf_mass_row_ddelta only handles estimators 0, 1, 2, and 3")
+    }
+
+    return(out)
+}
+
+real rowvector bmodel_row(
 		real scalar delta,
 		real scalar cutoff_orig,
 		real scalar bw_orig,
@@ -2333,34 +2402,42 @@ end
 	}
 
 	real rowvector d_bmodel_row_ddelta(
-		real scalar delta,
-		real scalar cutoff_orig,
-		real scalar bw_orig,
-		real scalar K,
-		real scalar estimator,
-		real scalar normalized,
-		real scalar islog,
-		real scalar zbar_est,
-		real scalar ntheta
-	)
-	{
-		real scalar eps, dp, dm
-		real rowvector Rp, Rm
+    real scalar delta,
+    real scalar cutoff_orig,
+    real scalar bw_orig,
+    real scalar K,
+    real scalar estimator,
+    real scalar normalized,
+    real scalar islog,
+    real scalar zbar_est,
+    real scalar ntheta
+)
+{
+    real scalar Kb
+    real rowvector out
 
-		if (estimator == 0 | estimator == 1) {
-			return(J(1, ntheta, 0))
-		}
-		
-		real rowvector fd
-		fd = delta_fd_points(delta)
-		dp = fd[1]
-		dm = fd[2]
+    out = J(1, ntheta, 0)
+    Kb  = K + 1
 
-		Rp = bmodel_row(dp, cutoff_orig, bw_orig, K, estimator, normalized, islog, zbar_est, ntheta)
-		Rm = bmodel_row(dm, cutoff_orig, bw_orig, K, estimator, normalized, islog, zbar_est, ntheta)
+    if (estimator == 0 | estimator == 1) {
+        return(out)
+    }
 
-		return((Rp - Rm)/(dp - dm))
-	}
+    out[1, 1..Kb] =
+        d_bmodel_row23_ddelta(
+            delta,
+            cutoff_orig,
+            bw_orig,
+            K,
+            estimator,
+            normalized,
+            islog,
+            zbar_est
+        )
+
+    return(out)
+}
+
 
 	real colvector make_ystack(
 		real colvector y,
