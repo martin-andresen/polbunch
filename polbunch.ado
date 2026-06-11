@@ -25,6 +25,7 @@
 				nozero ///
 				saveunres(string) ///
 				Bmodel ///
+				wald ///
 				]
 				
 				 quietly {
@@ -618,28 +619,68 @@
 						}
 							
 						//TEST RESTRICTIONS
+						
+
 						if `dotest' {
-							capture noisily polbunch_waldtest, ///
-								estimator(`estimator') ///
-								k(`polynomial') ///
-								cutofforig(`cutoff_orig') ///
-								cutoffest(`cutoff_est') ///
-								bworig(`bw_orig') ///
-								bwest(`bw_est') ///
-								zbar(`zbar_est') ///
-								`normalize' ///
-								`log'
+							local testname=cond("`wald'"=="wald","Wald test","Minumum-distance test")
+							ereturn post `b0' `V0'
+
+							if "`wald'" == "" {
+								local init 0.05
+								capture local init = _b[bunching:shift]
+								if _rc | missing(real("`init'")) {
+									capture local init = _b[bunching:delta]
+								}
+								if _rc | missing(real("`init'")) {
+									local init 0.05
+								}
+
+								capture noisily polbunch_minimumdistancetest, ///
+									estimator(`estimator') ///
+									k(`polynomial') ///
+									cutofforig(`cutoff_orig') ///
+									cutoffest(`cutoff_est') ///
+									bworig(`bw_orig') ///
+									bwest(`bw_est') ///
+									zbar(`zbar_est') ///
+									`normalize' ///
+									`log' ///
+									`positive' ///
+									initdelta(`init')
+							}
+							else {
+								capture noisily polbunch_waldtest, ///
+									estimator(`estimator') ///
+									k(`polynomial') ///
+									cutofforig(`cutoff_orig') ///
+									cutoffest(`cutoff_est') ///
+									bworig(`bw_orig') ///
+									bwest(`bw_est') ///
+									zbar(`zbar_est') ///
+									`normalize' ///
+									`log'
+							}
 
 							local test_rc = _rc
 
-							if `test_rc' {
-								local test_failed = 1
+							local failcode = 0
+							capture confirm scalar r(failcode)
+							if !_rc {
+								local failcode = r(failcode)
+								if missing(`failcode') local failcode = 0
+							}
+
+							if (`test_rc' != 0) | (`failcode' != 0) {
 								local dotest = 0
+								local test_failed = 1
+
+								if `test_rc' != 0 local test_failcode = `test_rc'
+								else              local test_failcode = `failcode'
 
 								noi di as text ///
 									"Note: model-assumption test could not be computed; " ///
 									"test statistics are not reported. " ///
-									"waldtest return code = " as result `test_rc'
+									"`testname' return code = " as result `test_failcode'
 							}
 							else {
 								local chi2  = r(chi2)
@@ -708,7 +749,7 @@
 
 							local stub = max(`stub', 12)
 							local W = `stub' + 67
-							di as txt "Test of model assumptions:" ///
+							di as txt "`testname' of model assumptions:" ///
 								_col(`=`W'-35') "Chi2(`df') test statistic" ///
 								_col(`=`W'-10') as res %10.4f `chi2'
 							di as txt _col(`=`W'-35') as txt "p-value" ///
@@ -1530,7 +1571,111 @@ end
 		return scalar failcode = `failcode'
 
 	end
+	
+	cap program drop polbunch_minimumdistancetest
+program define polbunch_minimumdistancetest, rclass
+    version 16.0
 
+    syntax , ///
+        ESTimator(integer) ///
+        K(integer) ///
+        CUTOFFORIG(real) ///
+        CUTOFFEST(real) ///
+        BWORIG(real) ///
+        BWEST(real) ///
+        ZBAR(real) ///
+        [ NONORMALIZE LOG POSitive INITDELTA(real 0.05) ]
+
+    if !inlist(`estimator', 1, 2, 3) {
+        di as err "polbunch_minimumdistancetest only handles estimator(1), estimator(2), or estimator(3)"
+        return scalar failcode = 198
+        return scalar chi2 = .
+        return scalar p = .
+        return scalar df = .
+        return scalar delta = .
+        exit 198
+    }
+
+    capture confirm matrix e(b)
+    if _rc {
+        di as err "e(b) not found; post unrestricted estimator(0) before calling polbunch_minimumdistancetest"
+        return scalar failcode = 301
+        return scalar chi2 = .
+        return scalar p = .
+        return scalar df = .
+        return scalar delta = .
+        exit 301
+    }
+
+    capture confirm matrix e(V)
+    if _rc {
+        di as err "e(V) not found; minimum-distance test requires unrestricted VCE"
+        return scalar failcode = 302
+        return scalar chi2 = .
+        return scalar p = .
+        return scalar df = .
+        return scalar delta = .
+        exit 301
+    }
+
+    tempname b V
+    matrix `b' = e(b)
+    matrix `V' = e(V)
+
+    local normalized0 = ("`nonormalize'" == "")
+    local islog0      = ("`log'" != "")
+    local positive0   = ("`positive'" != "")
+
+    capture noisily mata: polbunch_mdt_mata( ///
+        "`b'", ///
+        "`V'", ///
+        `estimator', ///
+        `cutofforig', ///
+        `bworig', ///
+        `cutoffest', ///
+        `bwest', ///
+        `k', ///
+        `normalized0', ///
+        `islog0', ///
+        `zbar', ///
+        `positive0', ///
+        `initdelta' ///
+    )
+
+    if _rc {
+        return scalar chi2 = .
+        return scalar p = .
+        return scalar df = .
+        return scalar delta = .
+        return scalar failcode = _rc
+        exit
+    }
+
+    tempname chi2 p df delta failcode
+
+    scalar `chi2'    = r(pb_md)
+    scalar `p'       = r(pb_md_p)
+    scalar `df'      = r(pb_md_df)
+    scalar `delta'   = r(pb_md_delta)
+    scalar `failcode' = r(pb_md_failcode)
+
+    if missing(`chi2') | `failcode' {
+        di as err "Could not compute minimum-distance statistic."
+        di as err "failcode = " `failcode'
+        return scalar chi2 = .
+        return scalar p = .
+        return scalar df = .
+        return scalar delta = .
+        return scalar failcode = `failcode'
+        exit 498
+    }
+
+    return scalar chi2 = `chi2'
+    return scalar p = `p'
+    return scalar df = `df'
+    return scalar delta = `delta'
+    return scalar failcode = 0
+end
 
 	mata:
 
@@ -2134,6 +2279,8 @@ real rowvector d_bmodel_row23_ddelta(
 
     _error(3498, "d_bmodel_row23_ddelta only handles estimators 2 and 3")
 }
+
+
 real rowvector d_cf_mass_row23_ddelta(
     real scalar delta,
     real colvector z,
@@ -3572,6 +3719,493 @@ real scalar delta_from_mass_e3(
     return(.)
 }
 
+real matrix polbunch_mdt_qG(
+    real rowvector theta,
+    real matrix V,
+    real scalar delta,
+    real scalar estimator,
+    real scalar cutoff_orig,
+    real scalar bw_orig,
+    real scalar cutoff_est,
+    real scalar bw_est,
+    real scalar K,
+    real scalar normalized,
+    real scalar islog,
+    real scalar zbar_est,
+    real scalar positive
+)
+{
+    real scalar Kb, ntheta, B
+    real rowvector beta, gamma, R
+    real colvector q
+    real matrix Gq
+    struct hcoef_out scalar hmap
+
+    Kb = K + 1
+    ntheta = 2*Kb + 1
+
+    if (cols(theta) != ntheta) return(J(0,0,.))
+    if (rows(V) != ntheta | cols(V) != ntheta) return(J(0,0,.))
+    if (missing(theta) | missing(V)) return(J(0,0,.))
+
+    if (estimator == 1) {
+        delta = 0
+    }
+    else {
+        if (delta >= .) return(J(0,0,.))
+
+        if (positive == 1) {
+            if (delta <= 1e-8) return(J(0,0,.))
+        }
+        else {
+            if (1 + delta <= 1e-8) return(J(0,0,.))
+        }
+    }
+
+    beta  = theta[1, 1..Kb]
+    gamma = theta[1, (Kb+1)..(2*Kb)]
+    B     = theta[1, 2*Kb + 1]
+
+    if (estimator == 1) {
+        /*
+            q(delta) = gamma - beta
+            No nuisance delta.
+        */
+        q = (gamma - beta)'
+
+        Gq = J(Kb, ntheta, 0)
+        Gq[., 1..Kb]          = -I(Kb)
+        Gq[., (Kb+1)..(2*Kb)] =  I(Kb)
+
+        return((q, Gq))
+    }
+
+    /*
+        For estimators 2 and 3, stack:
+            q_shape = gamma - gamma_model(beta, delta)
+            q_mass  = B - B_model(beta, delta)
+
+        Important:
+            bmodel_row23() is already correct:
+              estimator 2 uses zbar_est;
+              estimator 3 ignores zbar_est and uses the response interval.
+    */
+    hmap = h1coef_map(
+        beta,
+        delta,
+        estimator,
+        K,
+        cutoff_orig,
+        bw_orig,
+        normalized,
+        islog,
+        1
+    )
+
+    R = bmodel_row23(
+        delta,
+        cutoff_orig,
+        bw_orig,
+        K,
+        estimator,
+        normalized,
+        islog,
+        zbar_est
+    )
+
+    q = J(Kb + 1, 1, .)
+    q[1..Kb, 1] = (gamma - hmap.gamma)'
+    q[Kb+1, 1] = B - beta * R'
+
+    Gq = J(Kb + 1, ntheta, 0)
+
+    /*
+        Conditional Jacobian with respect to unrestricted theta,
+        holding delta fixed. The minimization over delta accounts for
+        the one fitted nuisance parameter through df = rows(q) - 1.
+    */
+    Gq[1..Kb, 1..Kb]          = -hmap.dgamma_dbeta
+    Gq[1..Kb, (Kb+1)..(2*Kb)] =  I(Kb)
+
+    Gq[Kb+1, 1..Kb]     = -R
+    Gq[Kb+1, 2*Kb + 1]  =  1
+
+    return((q, Gq))
+}
+
+real scalar polbunch_mdt_crit(
+    real scalar delta,
+    real rowvector theta,
+    real matrix V,
+    real scalar estimator,
+    real scalar cutoff_orig,
+    real scalar bw_orig,
+    real scalar cutoff_est,
+    real scalar bw_est,
+    real scalar K,
+    real scalar normalized,
+    real scalar islog,
+    real scalar zbar_est,
+    real scalar positive
+)
+{
+    real matrix qG, Gq, Vq, Vqi
+    real colvector q
+    real scalar m, W
+
+    qG = polbunch_mdt_qG(
+        theta,
+        V,
+        delta,
+        estimator,
+        cutoff_orig,
+        bw_orig,
+        cutoff_est,
+        bw_est,
+        K,
+        normalized,
+        islog,
+        zbar_est,
+        positive
+    )
+
+    if (rows(qG) == 0) return(1e300)
+
+    m  = rows(qG)
+    q  = qG[., 1]
+    Gq = qG[., 2..cols(qG)]
+
+    if (missing(q) | missing(Gq)) return(1e300)
+
+    Vq = Gq * V * Gq'
+    if (missing(Vq)) return(1e300)
+
+    Vqi = pinv(Vq)
+    if (missing(Vqi)) return(1e300)
+
+    W = (q' * Vqi * q)[1,1]
+
+    if (W < 0 | W >= .) return(1e300)
+
+    return(W)
+}
+
+void polbunch_mdt_mata(
+    string scalar bname,
+    string scalar Vname,
+    real scalar estimator,
+    real scalar cutoff_orig,
+    real scalar bw_orig,
+    real scalar cutoff_est,
+    real scalar bw_est,
+    real scalar K,
+    real scalar normalized,
+    real scalar islog,
+    real scalar zbar_est,
+    real scalar positive,
+    real scalar initdelta
+)
+{
+    real scalar Kb, ntheta, df, pval
+    real scalar delta_hat, W_hat, W0
+    real scalar lo, hi, center, span
+    real scalar i, j, d, W, bestd, bestW
+    real scalar a, b, c, x1, x2, f1, f2, gr, iter
+    real rowvector theta, grid, candidates
+    real matrix V
+
+    Kb = K + 1
+    ntheta = 2*Kb + 1
+
+    st_numscalar("r(pb_md)", .)
+    st_numscalar("r(pb_md_p)", .)
+    st_numscalar("r(pb_md_df)", .)
+    st_numscalar("r(pb_md_delta)", .)
+    st_numscalar("r(pb_md_failcode)", 0)
+
+    if (!(estimator == 1 | estimator == 2 | estimator == 3)) {
+        st_numscalar("r(pb_md_failcode)", 101)
+        return
+    }
+
+    theta = st_matrix(bname)
+    V     = st_matrix(Vname)
+
+    if (cols(theta) != ntheta | rows(V) != ntheta | cols(V) != ntheta) {
+        st_numscalar("r(pb_md_failcode)", 102)
+        return
+    }
+
+    if (missing(theta) | missing(V)) {
+        st_numscalar("r(pb_md_failcode)", 103)
+        return
+    }
+
+    /*
+        Estimator 1 has no nuisance delta.
+        Test gamma = beta directly.
+    */
+    if (estimator == 1) {
+        W_hat = polbunch_mdt_crit(
+            0,
+            theta,
+            V,
+            estimator,
+            cutoff_orig,
+            bw_orig,
+            cutoff_est,
+            bw_est,
+            K,
+            normalized,
+            islog,
+            zbar_est,
+            positive
+        )
+
+        if (W_hat >= 1e299 | W_hat >= .) {
+            st_numscalar("r(pb_md_failcode)", 201)
+            return
+        }
+
+        df = Kb
+        pval = chi2tail(df, W_hat)
+
+        st_numscalar("r(pb_md)", W_hat)
+        st_numscalar("r(pb_md_p)", pval)
+        st_numscalar("r(pb_md_df)", df)
+        st_numscalar("r(pb_md_delta)", .)
+        st_numscalar("r(pb_md_failcode)", 0)
+        return
+    }
+
+    /*
+        Estimators 2 and 3: minimize over scalar delta.
+
+        The search is deliberately simple and robust:
+          1. Build a legal candidate grid including initdelta.
+          2. Pick the best grid point.
+          3. Golden-section refine between its neighboring grid points.
+    */
+
+    if (positive == 1) {
+        lo = 1e-8
+        if (initdelta <= lo | initdelta >= .) initdelta = 0.05
+
+        grid = (
+            1e-8, 1e-6, 1e-4, 1e-3, 0.005, 0.01, 0.025,
+            0.05, 0.075, 0.10, 0.15, 0.20, 0.30, 0.50,
+            0.75, 1, 1.5, 2, 3, 5, 10, 20, 50, 100
+        )
+    }
+    else {
+        lo = -1 + 1e-8
+        if (initdelta <= lo | initdelta >= .) initdelta = 0.05
+
+        grid = (
+            -0.999999, -0.999, -0.99, -0.98, -0.95, -0.90,
+            -0.80, -0.70, -0.60, -0.50, -0.40, -0.30,
+            -0.20, -0.15, -0.10, -0.075, -0.05, -0.025,
+            -0.01, -0.005, 0, 0.005, 0.01, 0.025, 0.05,
+            0.075, 0.10, 0.15, 0.20, 0.30, 0.50, 0.75,
+            1, 1.5, 2, 3, 5, 10, 20, 50, 100
+        )
+    }
+
+    /*
+        Add initdelta explicitly. Sort manually by evaluating all candidates;
+        no need to physically sort for the coarse step.
+    */
+    candidates = grid, initdelta
+
+    bestd = .
+    bestW = 1e300
+
+    for (j = 1; j <= cols(candidates); j++) {
+        d = candidates[j]
+
+        if (positive == 1) {
+            if (d <= lo) continue
+        }
+        else {
+            if (d <= lo) continue
+        }
+
+        W = polbunch_mdt_crit(
+            d,
+            theta,
+            V,
+            estimator,
+            cutoff_orig,
+            bw_orig,
+            cutoff_est,
+            bw_est,
+            K,
+            normalized,
+            islog,
+            zbar_est,
+            positive
+        )
+
+        if (W < bestW) {
+            bestW = W
+            bestd = d
+        }
+    }
+
+    if (bestd >= . | bestW >= 1e299) {
+        st_numscalar("r(pb_md_failcode)", 202)
+        return
+    }
+
+    /*
+        Local bracket around bestd.
+
+        This is deliberately conservative. The criterion is one-dimensional;
+        even if it is not globally convex, the coarse grid chooses a sensible
+        basin and the local refinement improves the minimum inside that basin.
+    */
+    if (bestd > 0) {
+        a = max((lo, bestd / 2))
+        b = bestd * 2
+    }
+    else {
+        span = max((0.05, abs(bestd) / 2))
+        a = max((lo, bestd - span))
+        b = bestd + span
+    }
+
+    if (b <= a) {
+        a = max((lo, bestd - 0.05))
+        b = bestd + 0.05
+    }
+
+    /*
+        Golden-section minimization over [a,b].
+    */
+    gr = (sqrt(5) - 1) / 2
+
+    x1 = b - gr * (b - a)
+    x2 = a + gr * (b - a)
+
+    f1 = polbunch_mdt_crit(
+        x1,
+        theta,
+        V,
+        estimator,
+        cutoff_orig,
+        bw_orig,
+        cutoff_est,
+        bw_est,
+        K,
+        normalized,
+        islog,
+        zbar_est,
+        positive
+    )
+
+    f2 = polbunch_mdt_crit(
+        x2,
+        theta,
+        V,
+        estimator,
+        cutoff_orig,
+        bw_orig,
+        cutoff_est,
+        bw_est,
+        K,
+        normalized,
+        islog,
+        zbar_est,
+        positive
+    )
+
+    for (iter = 1; iter <= 100; iter++) {
+        if (abs(b - a) < 1e-10 * max((1, abs(x1), abs(x2)))) break
+
+        if (f1 > f2) {
+            a  = x1
+            x1 = x2
+            f1 = f2
+            x2 = a + gr * (b - a)
+
+            f2 = polbunch_mdt_crit(
+                x2,
+                theta,
+                V,
+                estimator,
+                cutoff_orig,
+                bw_orig,
+                cutoff_est,
+                bw_est,
+                K,
+                normalized,
+                islog,
+                zbar_est,
+                positive
+            )
+        }
+        else {
+            b  = x2
+            x2 = x1
+            f2 = f1
+            x1 = b - gr * (b - a)
+
+            f1 = polbunch_mdt_crit(
+                x1,
+                theta,
+                V,
+                estimator,
+                cutoff_orig,
+                bw_orig,
+                cutoff_est,
+                bw_est,
+                K,
+                normalized,
+                islog,
+                zbar_est,
+                positive
+            )
+        }
+    }
+
+    if (f1 <= f2) {
+        delta_hat = x1
+        W_hat = f1
+    }
+    else {
+        delta_hat = x2
+        W_hat = f2
+    }
+
+    /*
+        Do not let the local refinement make things worse than the coarse grid.
+    */
+    if (bestW < W_hat) {
+        delta_hat = bestd
+        W_hat = bestW
+    }
+
+    if (W_hat >= 1e299 | W_hat >= . | delta_hat >= .) {
+        st_numscalar("r(pb_md_failcode)", 203)
+        return
+    }
+
+    /*
+        rows(q) = Kb + 1 for estimators 2/3.
+        We minimized over one nuisance scalar delta.
+        df = Kb.
+    */
+    df = Kb
+    pval = chi2tail(df, W_hat)
+
+    st_numscalar("r(pb_md)", W_hat)
+    st_numscalar("r(pb_md_p)", pval)
+    st_numscalar("r(pb_md_df)", df)
+    st_numscalar("r(pb_md_delta)", delta_hat)
+    st_numscalar("r(pb_md_failcode)", 0)
+}
+
+
 	void polbunch_wald_from_unrestricted(
 		string scalar bname,
 		string scalar Vname,
@@ -3779,9 +4413,7 @@ real scalar delta_from_mass_e3(
 			*/
 			Gq = J(Kb, 2*Kb + 1, 0)
 
-			Gq[., 1..Kb] =
-				-hmap.dgamma_dbeta
-				- hmap.dgamma_ddelta * ddelta_dtheta[1, 1..Kb]
+			Gq[., 1..Kb] = -hmap.dgamma_dbeta- hmap.dgamma_ddelta * ddelta_dtheta[1, 1..Kb]
 
 			Gq[., (Kb+1)..(2*Kb)] = I(Kb)
 
