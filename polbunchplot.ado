@@ -95,7 +95,7 @@ program polbunchplot
 
         if "`truncate'" != "" {
             summarize freq if !inrange(`z_orig', `lower_plot', `upper_plot'), meanonly
-            replace freq = r(max) if freq > r(max)
+            replace freq = r(max)*1.2 if freq > r(max)
         }
 
 		su freq, meanonly

@@ -23,7 +23,6 @@ program polbunchgendata, rclass
 		loc a=substr("`distribution'",12,1)
 		loc b=substr("`distribution'",14,1)
 		loc c=substr("`distribution'",16,1)
-		noi di "a=`a',b=`b',c=`c'"
 		gen double `r'=runiform()
 		gen double `varlist'=`a'+sqrt(`r'*(`b'-`a')*(`c'-`a')) if `r'<(`c'-`a')/(`b'-`a')
 		replace `varlist'=`b'- sqrt((1-`r')*(`b'-`a')*(`b'-`c')) if `r'>(`c'-`a')/(`b'-`a')

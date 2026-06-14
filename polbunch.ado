@@ -25,7 +25,7 @@
 				nozero ///
 				saveunres(string) ///
 				Bmodel ///
-				wald ///
+				minimumdistance ///
 				]
 				
 				 quietly {
@@ -622,7 +622,15 @@
 						
 
 						if `dotest' {
-							local testname=cond("`wald'"=="wald","Wald test","Minumum-distance test")
+							local testname=cond("`minimumdistance'"=="","Wald test","Minumum-distance test")
+							
+							local nm: colnames `b0'
+							local neq: coleq `b0'
+							mat colnames `V0'=`nm'
+							mat rownames `V0'=`nm'
+							mat coleq `V0'=`neq'
+							mat roweq `V0'=`neq'
+							
 							ereturn post `b0' `V0'
 
 							if "`wald'" == "" {
@@ -768,6 +776,7 @@
 				}
 					
 			end
+
 			
 	program define varcorrect, rclass
 		syntax anything, [nosmallsample]
@@ -1680,22 +1689,6 @@ end
 	mata:
 
 
-	real rowvector delta_fd_points(real scalar delta)
-	{
-		real scalar eps, dp, dm, lo
-
-		lo  = -1 + 1e-8
-		eps = max((1e-6, abs(1 + delta)*1e-5))
-
-		dp = delta + eps
-		dm = delta - eps
-
-		if (dm <= lo) dm = lo
-		if (dp <= dm) dp = dm + eps
-
-		return((dp, dm))
-	}
-
 	// MAIN STRUCTS
 	struct hcoef_out {
 		real rowvector gamma
@@ -1805,7 +1798,8 @@ end
 		return(delta * cutoff_orig)
 	}
 	
-	real scalar d_response_length_ddelta(
+
+real scalar d_response_length_ddelta(
     real scalar delta,
     real scalar cutoff_orig,
     real scalar bw_orig,
@@ -1818,16 +1812,20 @@ end
     }
 
     if (islog == 1) {
-        if (normalized == 1) return(1 / ((1 + delta) * bw_orig))
+        if (normalized == 1) {
+            return(1 / ((1 + delta) * bw_orig))
+        }
         return(1 / (1 + delta))
     }
 
-    if (normalized == 1) return(cutoff_orig / bw_orig)
+    if (normalized == 1) {
+        return(cutoff_orig / bw_orig)
+    }
+
     return(cutoff_orig)
 }
 
-
-	void saez_run(
+void saez_run(
     string scalar yvar,
     string scalar sidevar,
     string scalar bunchvar,
@@ -1912,7 +1910,6 @@ end
         st_matrix("r_stack_id_saez", stack_id)
     }
 }
-
 real matrix h1_A_matrix(
     real scalar delta,
     real scalar estimator,
@@ -1936,11 +1933,17 @@ real matrix h1_A_matrix(
     Kb = K + 1
     A  = J(Kb, Kb, 0)
 
+    /*
+        Estimator 1: h1 = h0
+    */
     if (estimator == 1) {
         if (deriv) return(J(Kb, Kb, 0))
         return(I(Kb))
     }
 
+    /*
+        Estimator 2: h1 = h0 / (1 + delta)
+    */
     if (estimator == 2) {
         if (deriv) return(-I(Kb) / (1 + delta)^2)
         return(I(Kb) / (1 + delta))
@@ -1950,6 +1953,15 @@ real matrix h1_A_matrix(
         _error(3498, "h1_A_matrix only handles estimators 1, 2, and 3")
     }
 
+    /*
+        Estimator 3.
+
+        Level running variable:
+            h1(z) = (1+delta) h0(a + (1+delta)z)
+
+        Log running variable:
+            h1(z) = h0(a + z)
+    */
     if (islog == 0) {
         scale  = 1 + delta
         s      = 1 + delta
@@ -1981,6 +1993,10 @@ real matrix h1_A_matrix(
         }
     }
 
+    /*
+        Nonconstant rows. Coefficients are ordered:
+            beta_1, ..., beta_K, beta_0
+    */
     for (p = 1; p <= K; p++) {
         for (j = p; j <= K; j++) {
             e = j - p
@@ -2016,14 +2032,19 @@ real matrix h1_A_matrix(
         }
     }
 
+    /*
+        Constant row.
+    */
     if (deriv == 0) {
         A[Kb,Kb] = scale
+
         for (j = 1; j <= K; j++) {
             A[Kb,j] = scale * a^j
         }
     }
     else {
         A[Kb,Kb] = dscale
+
         for (j = 1; j <= K; j++) {
             if (j == 1) apowm1 = 1
             else        apowm1 = a^(j-1)
@@ -2034,164 +2055,115 @@ real matrix h1_A_matrix(
 
     return(A)
 }
+
 	// -----------------------------------------------------------------------------
 	// h1 coefficient/design restrictions
 	// -----------------------------------------------------------------------------
-	struct hcoef_out scalar h1coef_map(
-		real rowvector beta,
-		real scalar delta,
-		real scalar estimator,
-		real scalar K,
-		real scalar cutoff_orig,
-		real scalar bw_orig,
-		real scalar normalized,
-		real scalar islog,
-		real scalar dograd
-	)
-	{
-		struct hcoef_out scalar out
-		struct hcoef_out scalar hp, hm
+struct hcoef_out scalar h1coef_map(
+    real rowvector beta,
+    real scalar delta,
+    real scalar estimator,
+    real scalar K,
+    real scalar cutoff_orig,
+    real scalar bw_orig,
+    real scalar normalized,
+    real scalar islog,
+    real scalar dograd
+)
+{
+    struct hcoef_out scalar out
+    real scalar Kb
+    real matrix A, dA
 
-		real scalar Kb, p, j
-		real scalar scale, s, a
-		real scalar eps, dp, dm
-		real rowvector gp, gm
+    if (1 + delta <= 0) {
+        _error(3498, "delta must be greater than -1")
+    }
 
-		if (1 + delta <= 0) {
-			_error(3498, "delta must be greater than -1")
-		}
-		Kb = K + 1
+    Kb = K + 1
 
-		out.gamma = J(1, Kb, .)
+    A = h1_A_matrix(
+        delta,
+        estimator,
+        K,
+        cutoff_orig,
+        bw_orig,
+        normalized,
+        islog,
+        0
+    )
 
-		if (dograd) {
-			out.dgamma_dbeta  = J(Kb, Kb, 0)
-			out.dgamma_ddelta = J(Kb, 1, 0)
-		}
-		else {
-			out.dgamma_dbeta  = J(0, 0, .)
-			out.dgamma_ddelta = J(0, 1, .)
-		}
+    out.gamma = beta * A'
 
-		if (estimator == 1) {
-			out.gamma = beta
+    if (dograd) {
+        dA = h1_A_matrix(
+            delta,
+            estimator,
+            K,
+            cutoff_orig,
+            bw_orig,
+            normalized,
+            islog,
+            1
+        )
 
-			if (dograd) {
-				out.dgamma_dbeta = I(Kb)
-			}
-		}
-		else if (estimator == 2) {
-			out.gamma = beta :/ (1 + delta)
+        out.dgamma_dbeta  = A
+        out.dgamma_ddelta = dA * beta'
+    }
+    else {
+        out.dgamma_dbeta  = J(0, 0, .)
+        out.dgamma_ddelta = J(0, 1, .)
+    }
 
-			if (dograd) {
-				out.dgamma_dbeta  = I(Kb) / (1 + delta)
-				out.dgamma_ddelta = -beta' / (1 + delta)^2
-			}
-		}
-		else if (estimator == 3) {
-			out.dgamma_dbeta = h1_A_matrix(
-			delta,
-			estimator,
-			K,
-			cutoff_orig,
-			bw_orig,
-			normalized,
-			islog,
-			0
-		)
-
-		out.gamma = beta * out.dgamma_dbeta'
-
-		if (dograd) {
-			out.dgamma_ddelta =
-				h1_A_matrix(
-					delta,
-					estimator,
-					K,
-					cutoff_orig,
-					bw_orig,
-					normalized,
-					islog,
-					1
-				) * beta'
-			}
-		}
-		else {
-			_error(3498, "h1coef_map only handles estimators 1, 2, and 3")
-		}
-
-		return(out)
-	}
-
+    return(out)
+}
 		   
 	// design row transformation for h1, consistent with h1coef_map()
-	struct hdesign_out scalar h1design23(
-		real scalar delta,
-		real colvector zR,
-		real scalar cutoff_orig,
-		real scalar bw_orig,
-		real scalar K,
-		real scalar estimator,
-		real scalar normalized,
-		real scalar islog,
-		real scalar dograd
-	)
-	{
-		struct hdesign_out scalar out
-		struct hcoef_out scalar h1
+struct hdesign_out scalar h1design23(
+    real scalar delta,
+    real colvector zR,
+    real scalar cutoff_orig,
+    real scalar bw_orig,
+    real scalar K,
+    real scalar estimator,
+    real scalar normalized,
+    real scalar islog,
+    real scalar dograd
+)
+{
+    struct hdesign_out scalar out
+    real matrix Xbase
 
-		real scalar eps
-		real matrix Xbase, Xp, Xm
+    Xbase = pbasis(zR, K)
 
-		Xbase = pbasis(zR, K)
+    out.X = Xbase * h1_A_matrix(
+        delta,
+        estimator,
+        K,
+        cutoff_orig,
+        bw_orig,
+        normalized,
+        islog,
+        0
+    )
 
-		h1 = h1coef_map(
-			J(1, K+1, 0),
-			delta,
-			estimator,
-			K,
-			cutoff_orig,
-			bw_orig,
-			normalized,
-			islog,
-			1
-		)
+    if (dograd) {
+        out.dXddelta = Xbase * h1_A_matrix(
+            delta,
+            estimator,
+            K,
+            cutoff_orig,
+            bw_orig,
+            normalized,
+            islog,
+            1
+        )
+    }
+    else {
+        out.dXddelta = J(0, 0, .)
+    }
 
-		/*
-			If gamma = A(delta) * beta', then fitted h1 rows are:
-				Xbase * A(delta) * beta'
-		*/
-		Xbase = pbasis(zR, K)
-
-		out.X = Xbase * h1_A_matrix(
-			delta,
-			estimator,
-			K,
-			cutoff_orig,
-			bw_orig,
-			normalized,
-			islog,
-			0
-		)
-
-		if (dograd) {
-			out.dXddelta = Xbase * h1_A_matrix(
-				delta,
-				estimator,
-				K,
-				cutoff_orig,
-				bw_orig,
-				normalized,
-				islog,
-				1
-			)
-		}
-		else {
-			out.dXddelta = J(0, 0, .)
-		}
-
-		return(out)
-	}
+    return(out)
+}
 
 	// -----------------------------------------------------------------------------
 	// Mass-row helpers for profile estimators 2/3
@@ -2239,7 +2211,47 @@ real matrix h1_A_matrix(
 
 		return(R)
 	}
-	
+	real rowvector d_bmodel_row_ddelta(
+    real scalar delta,
+    real scalar cutoff_orig,
+    real scalar bw_orig,
+    real scalar K,
+    real scalar estimator,
+    real scalar normalized,
+    real scalar islog,
+    real scalar zbar_est,
+    real scalar ntheta
+)
+{
+    real scalar Kb
+    real rowvector out
+
+    out = J(1, ntheta, 0)
+    Kb  = K + 1
+
+    if (estimator == 0 | estimator == 1) {
+        return(out)
+    }
+
+    if (estimator == 2 | estimator == 3) {
+        out[1, 1..Kb] = d_bmodel_row23_ddelta(
+            delta,
+            cutoff_orig,
+            bw_orig,
+            K,
+            estimator,
+            normalized,
+            islog,
+            zbar_est
+        )
+
+        return(out)
+    }
+
+    _error(3498, "d_bmodel_row_ddelta only handles estimators 0, 1, 2, and 3")
+}
+
+
 real rowvector d_bmodel_row23_ddelta(
     real scalar delta,
     real scalar cutoff_orig,
@@ -2252,7 +2264,6 @@ real rowvector d_bmodel_row23_ddelta(
 )
 {
     real scalar cutoff_est, bw_est, r, dr
-    real rowvector R
 
     if (1 + delta <= 0) {
         _error(3498, "delta must be greater than -1")
@@ -2270,7 +2281,8 @@ real rowvector d_bmodel_row23_ddelta(
     if (estimator == 2) {
         return(intbasis(cutoff_est, zbar_est, K) / bw_est)
     }
-    else if (estimator == 3) {
+
+    if (estimator == 3) {
         r  = response_length(delta, cutoff_orig, bw_orig, normalized, islog)
         dr = d_response_length_ddelta(delta, cutoff_orig, bw_orig, normalized, islog)
 
@@ -2280,63 +2292,7 @@ real rowvector d_bmodel_row23_ddelta(
     _error(3498, "d_bmodel_row23_ddelta only handles estimators 2 and 3")
 }
 
-
-real rowvector d_cf_mass_row23_ddelta(
-    real scalar delta,
-    real colvector z,
-    real scalar cutoff_orig,
-    real scalar bw_orig,
-    real scalar K,
-    real scalar estimator,
-    real scalar normalized,
-    real scalar islog,
-    real scalar zL_excl_orig,
-    real scalar zH_excl_orig
-)
-{
-    real scalar ex_hi, cutoff_est, bw_est
-    real rowvector Ihi
-    real matrix dA
-
-    if (1 + delta <= 0) {
-        _error(3498, "delta must be greater than -1")
-    }
-
-    if (normalized == 1) {
-        cutoff_est = 0
-        bw_est     = 1
-        ex_hi      = (zH_excl_orig - cutoff_orig) / bw_orig
-    }
-    else {
-        cutoff_est = cutoff_orig
-        bw_est     = bw_orig
-        ex_hi      = zH_excl_orig
-    }
-
-    Ihi = intbasis(cutoff_est, ex_hi, K)
-
-    if (estimator == 2) {
-        return(-Ihi / ((1 + delta)^2 * bw_est))
-    }
-    else if (estimator == 3) {
-        dA = h1_A_matrix(
-            delta,
-            estimator,
-            K,
-            cutoff_orig,
-            bw_orig,
-            normalized,
-            islog,
-            1
-        )
-
-        return((Ihi * dA) / bw_est)
-    }
-
-    _error(3498, "d_cf_mass_row23_ddelta only handles estimators 2 and 3")
-}
-
-	real rowvector h0_excluded_row(
+real rowvector h0_excluded_row(
 		real scalar cutoff_orig,
 		real scalar bw_orig,
 		real scalar K,
@@ -2360,6 +2316,7 @@ real rowvector d_cf_mass_row23_ddelta(
 
 		return(intbasis(ex_lo, ex_hi, K) / bw_est)
 	}
+	
 	// -----------------------------------------------------------------------------
 	// Unified stacked design/profile objective for estimators 0/1/2/3
 	// -----------------------------------------------------------------------------
@@ -2434,7 +2391,6 @@ real rowvector d_cf_mass_row23_ddelta(
 
 		return(R)
 	}
-	
 real rowvector d_cf_mass_row_ddelta(
     real scalar delta,
     real scalar cutoff_orig,
@@ -2548,42 +2504,6 @@ real rowvector bmodel_row(
 		return(R)
 	}
 
-	real rowvector d_bmodel_row_ddelta(
-    real scalar delta,
-    real scalar cutoff_orig,
-    real scalar bw_orig,
-    real scalar K,
-    real scalar estimator,
-    real scalar normalized,
-    real scalar islog,
-    real scalar zbar_est,
-    real scalar ntheta
-)
-{
-    real scalar Kb
-    real rowvector out
-
-    out = J(1, ntheta, 0)
-    Kb  = K + 1
-
-    if (estimator == 0 | estimator == 1) {
-        return(out)
-    }
-
-    out[1, 1..Kb] =
-        d_bmodel_row23_ddelta(
-            delta,
-            cutoff_orig,
-            bw_orig,
-            K,
-            estimator,
-            normalized,
-            islog,
-            zbar_est
-        )
-
-    return(out)
-}
 
 
 	real colvector make_ystack(
@@ -2683,10 +2603,34 @@ real rowvector bmodel_row(
 			out.X = XL \ h1.X \ Xmass
 
 			if (dograd) {
-				dX0 = J(rows(XL), Kb, 0)
-				dXcf   = d_cf_mass_row_ddelta(delta, cutoff_orig, bw_orig, K, estimator, normalized, islog, zL_excl_orig, zH_excl_orig, ntheta)
-				dXbmod = d_bmodel_row_ddelta(delta, cutoff_orig, bw_orig, K, estimator, normalized, islog, zbar_est, ntheta)
+				dX0    = J(rows(XL), ntheta, 0)
+				dXcf   = d_cf_mass_row_ddelta(
+					delta,
+					cutoff_orig,
+					bw_orig,
+					K,
+					estimator,
+					normalized,
+					islog,
+					zL_excl_orig,
+					zH_excl_orig,
+					ntheta
+				)
+
+				dXbmod = d_bmodel_row_ddelta(
+					delta,
+					cutoff_orig,
+					bw_orig,
+					K,
+					estimator,
+					normalized,
+					islog,
+					zbar_est,
+					ntheta
+				)
+
 				dXmass = dXcf + dXbmod
+
 				out.dXddelta = dX0 \ h1.dXddelta \ dXmass
 			}
 			else {
@@ -2825,16 +2769,27 @@ real rowvector bmodel_row(
 			out.G  = D.X
 		}
 		else {
-			beta   = theta[1..Kb]
+			/*
+			theta is beta, delta for estimators 2/3.
+			Use explicit row/column indexing. The old theta[1..Kb]
+			can produce the wrong orientation and then beta' causes
+			a conformability error.
+			*/
+			beta = theta[1, 1..Kb]
+
 			out.mu = D.X * beta'
 
 			if (dograd) {
-				out.G = D.X, D.dXddelta * beta'
+			if (rows(D.dXddelta) != rows(D.X) | cols(D.dXddelta) != Kb) {
+			_error(3200, "profile_stack: D.dXddelta has wrong dimensions")
+			}
+
+			out.G = D.X, (D.dXddelta * beta')
 			}
 			else {
-				out.G = J(0, 0, .)
+			out.G = J(0, 0, .)
 			}
-		}
+			}
 
 		out.minus_mu = out.ystack - out.mu
 		out.stack_id = J(rows(y), 1, .)
@@ -2913,7 +2868,8 @@ real rowvector bmodel_row(
 		return(bread * meat * bread)
 	}
 
-	real matrix varcorrect_collapsed(
+	/*
+real matrix varcorrect_collapsed(
 		real matrix G_stack,
 		real colvector fw_orig,
 		real colvector stack_id,
@@ -2951,7 +2907,116 @@ real rowvector bmodel_row(
 		bread = pinv(quadcross(G, G) :* N)
 		return(bread * meat * bread)
 	}
+*/
+real matrix varcorrect_collapsed(
+    real matrix G_stack,
+    real colvector fw_orig,
+    real colvector stack_id,
+    real colvector e_stack,
+    real scalar addcons
+)
+{
+    real scalar B_orig, M, N, i, s
+    real colvector y_stack, mu_stack, r_i, g_i
+    real matrix G, meat, bread, V
 
+    G = G_stack
+
+    if (addcons == 1) {
+        G = G, J(rows(G), 1, 1)
+    }
+
+    M      = rows(G)
+    B_orig = rows(fw_orig)
+
+    if (rows(e_stack) != M) {
+        return(J(cols(G), cols(G), .))
+    }
+
+    if (rows(stack_id) != B_orig) {
+        return(J(cols(G), cols(G), .))
+    }
+
+    if (missing(G) | missing(e_stack) | missing(fw_orig)) {
+        return(J(cols(G), cols(G), .))
+    }
+
+    N = sum(fw_orig)
+
+    if (N <= 0 | N >= .) {
+        return(J(cols(G), cols(G), .))
+    }
+
+    /*
+        Reconstruct stacked outcome counts:
+            y_stack[s] = sum of original frequencies mapping to stacked row s.
+
+        For the excluded-region mass row, multiple original bins should map
+        to the same stack_id, so this correctly adds them up.
+    */
+    y_stack = J(M, 1, 0)
+
+    for (i = 1; i <= B_orig; i++) {
+        if (fw_orig[i] >= .) continue
+        if (fw_orig[i] == 0) continue
+
+        s = stack_id[i]
+
+        if (s < . & s >= 1 & s <= M) {
+            y_stack[s] = y_stack[s] + fw_orig[i]
+        }
+    }
+
+    /*
+        e_stack = y_stack - mu_stack,
+        so mu_stack = y_stack - e_stack.
+    */
+    mu_stack = y_stack - e_stack
+
+    if (missing(mu_stack)) {
+        return(J(cols(G), cols(G), .))
+    }
+
+    meat = J(cols(G), cols(G), 0)
+
+    for (i = 1; i <= B_orig; i++) {
+        if (fw_orig[i] >= .) continue
+        if (fw_orig[i] == 0) continue
+
+        /*
+            Individual-level residual vector in the imaginary regression:
+                r_i = N*a_i - mu_stack.
+
+            Start from -mu_stack, then add N in the mapped row.
+        */
+        r_i = -mu_stack
+
+        s = stack_id[i]
+
+        if (s < . & s >= 1 & s <= M) {
+            r_i[s] = r_i[s] + N
+        }
+
+        g_i = G' * r_i
+
+        if (missing(g_i)) {
+            return(J(cols(G), cols(G), .))
+        }
+
+        meat = meat + fw_orig[i] * (g_i * g_i')
+    }
+
+    bread = pinv(quadcross(G, G) :* N)
+
+    if (missing(bread) | missing(meat)) {
+        return(J(cols(G), cols(G), .))
+    }
+
+    V = bread * meat * bread
+    V = (V + V') / 2
+
+    return(V)
+}	
 
 	// -----------------------------------------------------------------------------
 	// Bunching-response inversion and transformed output
@@ -4326,7 +4391,21 @@ void polbunch_mdt_mata(
 					B = Bmodel(beta, delta)
 					gamma = gamma_map(beta, delta)
 
-				Use the mass equation to define delta_U implicitly.
+				Use the unrestricted mass equation to define delta_U implicitly:
+
+					F(beta, B, delta) = beta * R_B(delta)' - B = 0
+
+				where:
+					R_B(delta) = bmodel_row23(delta, ..., estimator=3)
+
+				Then:
+					F_beta  = R_B(delta)
+					F_B     = -1
+					F_delta = dR_B(delta)/ddelta * beta'
+
+				so:
+					ddelta/dbeta = -F_beta/F_delta
+					ddelta/dB    =  1/F_delta
 			*/
 
 			delta = delta_from_mass_e3(
@@ -4341,7 +4420,15 @@ void polbunch_mdt_mata(
 				islog
 			)
 
-			if (delta >= .) return
+			if (delta >= .) {
+				st_numscalar("r(pb_failcode)", 301)
+				return
+			}
+
+			if (1 + delta <= 0) {
+				st_numscalar("r(pb_failcode)", 302)
+				return
+			}
 
 			hmap = h1coef_map(
 				beta,
@@ -4357,16 +4444,6 @@ void polbunch_mdt_mata(
 
 			q = (gamma - hmap.gamma)'
 
-			/*
-				F(beta,B,delta) = Bmodel(beta,delta) - B = 0
-
-				F_beta  = Rbmod
-				F_B     = -1
-				F_delta = dBmodel/ddelta
-
-				ddelta/dbeta = -F_beta/F_delta
-				ddelta/dB    =  1/F_delta
-			*/
 			Rbmod = bmodel_row23(
 				delta,
 				cutoff_orig,
@@ -4390,7 +4467,10 @@ void polbunch_mdt_mata(
 					zbar_est
 				) * beta'
 
-			if (abs(Fdelta) < 1e-12 | Fdelta >= .) return
+			if (abs(Fdelta) < 1e-12 | Fdelta >= .) {
+				st_numscalar("r(pb_failcode)", 303)
+				return
+			}
 
 			ddelta_dbeta = -Rbmod / Fdelta
 
@@ -4399,21 +4479,12 @@ void polbunch_mdt_mata(
 				J(1, Kb, 0),
 				1/Fdelta
 
-			/*
-				q = gamma - gamma_map(beta, delta(beta,B))
-
-				dq/dbeta =
-					-dgamma/dbeta
-					-dgamma/ddelta * ddelta/dbeta
-
-				dq/dgamma = I
-
-				dq/dB =
-					-dgamma/ddelta * ddelta/dB
-			*/
 			Gq = J(Kb, 2*Kb + 1, 0)
 
-			Gq[., 1..Kb] = -hmap.dgamma_dbeta- hmap.dgamma_ddelta * ddelta_dtheta[1, 1..Kb]
+			Gq[., 1..Kb] = (
+				-hmap.dgamma_dbeta
+				- hmap.dgamma_ddelta * ddelta_dtheta[1, 1..Kb]
+			)
 
 			Gq[., (Kb+1)..(2*Kb)] = I(Kb)
 
@@ -4477,16 +4548,7 @@ void saez_transform_mata(
         _error(3498, "invalid Saez excluded-region width")
     }
 
-    /*
-        Output:
-            h0:_cons
-            h1:_cons
-            bunching:number_bunchers
-            bunching:excess_mass
-            bunching:shift
-            bunching:marginal_response
-            bunching:elasticity, if tax options supplied
-    */
+
     nout = 6 + hastax
 
     b = J(1, nout, .)
@@ -4668,7 +4730,7 @@ void saez_transform_mata(
         else {
             elast = rvar / A
 
-            if (dograd) {
+            if (dograd) {	
                 G[oe, .] = drvar / A
             }
         }
