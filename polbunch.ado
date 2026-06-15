@@ -1975,21 +1975,21 @@ real matrix h1_A_matrix(
         Log running variable:
             h1(z) = h0(a + z)
     */
-    if (islog == 0) {
-        scale  = 1 + delta
-        s      = 1 + delta
-        dscale = 1
-        ds     = 1
+	if (islog == 0) {
+		scale  = 1 + delta
+		s      = 1 + delta
+		dscale = 1
+		ds     = 1
 
-        if (normalized == 1) {
-            a  = delta * cutoff_orig / bw_orig
-            da = cutoff_orig / bw_orig
-        }
-        else {
-            a  = 0
-            da = 0
-        }
-    }
+		if (normalized == 1) {
+			a  = 0
+			da = 0
+		}
+		else {
+			a  = -delta * cutoff_orig
+			da = -cutoff_orig
+		}
+	}
     else {
         scale  = 1
         s      = 1
