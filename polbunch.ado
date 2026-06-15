@@ -45,6 +45,11 @@
 						}
 					}
 					
+					if "`normalize'"=="nonormalize"&"`minimumdistance'"=="minimumdistance"&"`test'"!="notest" {
+						noi di as error "Minimum distance test not supported with non-normalized running variable."
+						exit 301
+					}
+					
 					if `bootreps'>0 {
 						loc coeftabresults=c(coeftabresults)
 						set coeftabresults off
@@ -630,7 +635,8 @@
 						
 
 						if `dotest' {
-							local testname=cond("`minimumdistance'"==""|`estimator'!=4,"Wald test","Minumum-distance test")
+							local testname=cond("`minimumdistance'"==""|`estimator'==4,"Wald test","Minumum-distance test")
+							local notestname=cond("`minimumdistance'"==""|`estimator'==4,"Minumum-distance test","Wald test")
 							
 							local nm: colnames `b0'
 							local neq: coleq `b0'
@@ -642,7 +648,7 @@
 							ereturn post `b0' `V0'
 							
 							if inlist(`estimator',1,2,3) {
-							if "`wald'" == "" {
+							if "`minimumdistance'" == "minimumdistance" {
 								local init 0.05
 								capture local init = _b[bunching:shift]
 								if _rc | missing(real("`init'")) {
@@ -698,10 +704,8 @@
 								if `test_rc' != 0 local test_failcode = `test_rc'
 								else              local test_failcode = `failcode'
 
-								noi di as text ///
-									"Note: model-assumption test could not be computed; " ///
-									"test statistics are not reported. " ///
-									"`testname' return code = " as result `test_failcode'
+								noi di as text  "Note: model-assumption test could not be computed; `testname' statistic is not reported."
+								noi di as text 	"Consider `notestname' instead. `testname' return code = " as result `test_failcode'
 							}
 							else {
 								local chi2  = r(chi2)
@@ -1579,13 +1583,6 @@ end
 		scalar `df'      = r(pb_df)
 		scalar `deltaU'  = r(pb_delta_U)
 		scalar `failcode' = r(pb_failcode)
-
-		if missing(`chi2') {
-			di as err "Could not compute model-restriction Wald statistic."
-			di as err "failcode = " `failcode'
-			exit 498
-		}
-
 		return scalar chi2    = `chi2'
 		return scalar p       = `p'
 		return scalar df      = `df'
@@ -4019,6 +4016,7 @@ void polbunch_mdt_mata(
         return
     }
 
+
     /*
         Estimator 1 has no nuisance delta.
         Test gamma = beta directly.
@@ -4762,5 +4760,28 @@ void saez_transform_mata(
     }
 }
 
+real matrix raw_to_norm_C(real scalar K, real scalar c, real scalar bw)
+{
+    real scalar Kb, j, p
+    real matrix C
+
+    Kb = K + 1
+    C  = J(Kb, Kb, 0)
+
+    // alpha_p for p = 1,...,K
+    for (p = 1; p <= K; p++) {
+        for (j = p; j <= K; j++) {
+            C[j,p] = comb(j,p) * c^(j-p) * bw^p
+        }
+    }
+
+    // alpha_0, constant last
+    for (j = 1; j <= K; j++) {
+        C[j,Kb] = c^j
+    }
+    C[Kb,Kb] = 1
+
+    return(C)
+}
 
 	end
