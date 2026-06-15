@@ -17,6 +17,8 @@ program polbunchsim, eclass
 
         if "`clist'" == "" local clist `"noconstant"'
 
+        local misscode = -1e300
+
         local numc : word count `clist'
         if `numc' > 2 {
             noi di as error "clist() can contain at most two strings"
@@ -58,7 +60,7 @@ program polbunchsim, eclass
                         if "`c'" == "constant" local cval = 1
                         else local cval = 0
 
-                        local modelname m_`bt'_`e'_`cval'
+                        local modelname m_`bt'_`e'_`cval'_b
 
                         timer clear
                         timer on 1
@@ -76,21 +78,21 @@ program polbunchsim, eclass
                         local rc = 0
 
                         if `bt' == 0 {
-                            capture polbunch z `iff', cutoff(`cutoff') ///
+                            capture noisily polbunch z `iff', cutoff(`cutoff') ///
                                 pol(`polynomial') bw(`bw') t0(`t0') t1(`t1') ///
                                 `log' estimator(`e') bootreps(0) `c' ///
                                 `noisily' `notransform' `positive' ///
                                 `uselimits' `minimumdistance' `rankred'
                         }
                         else if `bt' == 1 {
-                            capture polbunch z `iff', cutoff(`cutoff') ///
+                            capture noisily polbunch z `iff', cutoff(`cutoff') ///
                                 pol(`polynomial') bw(`bw') t0(`t0') t1(`t1') ///
                                 `log' estimator(`e') bootreps(1) `c' ///
                                 `noisily' `notransform' `positive' ///
                                 `uselimits' `minimumdistance' `rankred'
                         }
                         else if `bt' == 2 {
-                            capture bootstrap, reps(`bootreps'): ///
+                            capture noisily bootstrap, reps(`bootreps'): ///
                                 polbunch z `iff', cutoff(`cutoff') ///
                                 pol(`polynomial') bw(`bw') t0(`t0') t1(`t1') ///
                                 `log' estimator(`e') bootreps(0) `c' ///
@@ -98,28 +100,28 @@ program polbunchsim, eclass
                                 `uselimits' `minimumdistance' `rankred'
                         }
                         else if `bt' == 3 {
-                            capture polbunch z `iff', cutoff(`cutoff') ///
+                            capture noisily polbunch z `iff', cutoff(`cutoff') ///
                                 pol(`polynomial') bw(`bw') t0(`t0') t1(`t1') ///
                                 `log' estimator(`e') bootreps(`bootreps') ///
                                 nobayes `c' `noisily' `notransform' `positive' ///
                                 `uselimits' `minimumdistance' `rankred'
                         }
                         else if `bt' == 4 {
-                            capture polbunch z `iff', cutoff(`cutoff') ///
+                            capture noisily polbunch z `iff', cutoff(`cutoff') ///
                                 pol(`polynomial') bw(`bw') t0(`t0') t1(`t1') ///
                                 `log' estimator(`e') bootreps(`bootreps') ///
                                 nozero nobayes `c' `noisily' `notransform' ///
                                 `positive' `uselimits' `minimumdistance' `rankred'
                         }
                         else if `bt' == 5 {
-                            capture  polbunch z `iff', cutoff(`cutoff') ///
+                            capture noisily polbunch z `iff', cutoff(`cutoff') ///
                                 pol(`polynomial') bw(`bw') t0(`t0') t1(`t1') ///
                                 `log' estimator(`e') bootreps(`bootreps') ///
                                 `c' `noisily' `notransform' `positive' ///
                                 `uselimits' `minimumdistance' `rankred'
                         }
                         else if `bt' == 6 {
-                            capture polbunch z `iff', cutoff(`cutoff') ///
+                            capture noisily polbunch z `iff', cutoff(`cutoff') ///
                                 pol(`polynomial') bw(`bw') t0(`t0') t1(`t1') ///
                                 `log' estimator(`e') bootreps(`bootreps') ///
                                 nozero `c' `noisily' `notransform' `positive' ///
@@ -166,33 +168,31 @@ program polbunchsim, eclass
                         }
 
                         if `numest' > 1 {
-                            matrix `sim_extra' = (`elast', `time')
-                            matrix colnames `sim_extra' = elasticity time
-                            matrix coleq `sim_extra' = `modelname' `modelname'
+                            local elast_post = `elast'
+                            local time_post  = `time'
+                            local se_post    = `se'
+                            local p_post     = `p'
+                            local pmod_post  = `pmod'
+
+                            if missing(`elast_post') local elast_post = `misscode'
+                            if missing(`time_post')  local time_post  = `misscode'
+                            if missing(`se_post')    local se_post    = `misscode'
+                            if missing(`p_post')     local p_post     = `misscode'
+                            if missing(`pmod_post')  local pmod_post  = `misscode'
+
+                            matrix `sim_extra' = (`elast_post', `time_post', `se_post', `p_post', `pmod_post')
+                            matrix colnames `sim_extra' = elasticity time se p p_mod
+                            matrix coleq `sim_extra' = ///
+                                `modelname' `modelname' `modelname' `modelname' `modelname'
 
                             matrix `sim_b' = nullmat(`sim_b'), `sim_extra'
-
-                            if `novar' == 0 {
-                                matrix `sim_extra' = (`se', `p')
-                                matrix colnames `sim_extra' = se p
-                                matrix coleq `sim_extra' = `modelname' `modelname'
-
-                                matrix `sim_b' = nullmat(`sim_b'), `sim_extra'
-                            }
-
-                            if !missing(`pmod') {
-                                matrix `sim_extra' = (`pmod')
-                                matrix colnames `sim_extra' = p_mod
-                                matrix coleq `sim_extra' = `modelname'
-
-                                matrix `sim_b' = nullmat(`sim_b'), `sim_extra'
-                            }
                         }
 
                         local final_bt   `bt'
                         local final_e    `e'
                         local final_cval `cval'
                         local final_rc   `rc'
+                        local final_time `time'
                     }
                 }
             }
@@ -205,6 +205,7 @@ program polbunchsim, eclass
         if `genrc' {
             ereturn scalar failed = 1
             ereturn scalar genrc  = `genrc'
+            ereturn scalar misscode = `misscode'
             ereturn local cmd "polbunchsim"
             exit
         }
@@ -213,6 +214,7 @@ program polbunchsim, eclass
             capture confirm matrix `sim_b'
             if _rc {
                 ereturn scalar failed = 1
+                ereturn scalar misscode = `misscode'
                 ereturn local cmd "polbunchsim"
                 exit
             }
@@ -220,6 +222,7 @@ program polbunchsim, eclass
             ereturn post `sim_b'
 
             ereturn scalar failed = 0
+            ereturn scalar misscode = `misscode'
             ereturn scalar numest = `numest'
             ereturn scalar obs    = `obs'
             ereturn scalar cutoff = `cutoff'
@@ -237,15 +240,27 @@ program polbunchsim, eclass
         }
         else {
             if `final_rc' {
-                matrix `sim_b' = (., `time')
-                matrix colnames `sim_b' = m_`final_bt'_`final_e'_`final_cval':elasticity ///
-                                          m_`final_bt'_`final_e'_`final_cval':time
+                local final_time_post = `final_time'
+                if missing(`final_time_post') local final_time_post = `misscode'
+
+                matrix `sim_b' = (`misscode', `final_time_post', `misscode', `misscode', `misscode')
+                matrix colnames `sim_b' = ///
+                    m_`final_bt'_`final_e'_`final_cval'_b:elasticity ///
+                    m_`final_bt'_`final_e'_`final_cval'_b:time ///
+                    m_`final_bt'_`final_e'_`final_cval'_b:se ///
+                    m_`final_bt'_`final_e'_`final_cval'_b:p ///
+                    m_`final_bt'_`final_e'_`final_cval'_b:p_mod
 
                 ereturn post `sim_b'
 
-                ereturn scalar failed = 1
-                ereturn scalar rc     = `final_rc'
-                ereturn scalar time   = `time'
+                ereturn scalar failed    = 1
+                ereturn scalar rc        = `final_rc'
+                ereturn scalar misscode  = `misscode'
+                ereturn scalar time      = `final_time'
+                ereturn scalar sim_time  = `final_time'
+                ereturn scalar sim_p     = `misscode'
+                ereturn scalar sim_p_mod = `misscode'
+
                 ereturn local cmd "polbunchsim"
                 exit
             }
@@ -284,24 +299,17 @@ program polbunchsim, eclass
                 matrix `sim_oldV' = e(V)
             }
 
-            matrix `sim_extra' = (`time')
-            matrix colnames `sim_extra' = polbunchsim:time
+            local time_post = `time'
+            local p_post    = `p'
+            local pmod_post = `pmod'
 
-            if `novar' == 0 {
-                matrix `sim_extra' = `sim_extra', (`p')
-                matrix colnames `sim_extra' = polbunchsim:time polbunchsim:p
-            }
+            if missing(`time_post')  local time_post  = `misscode'
+            if missing(`p_post')     local p_post     = `misscode'
+            if missing(`pmod_post')  local pmod_post  = `misscode'
 
-            if !missing(`pmod') {
-                matrix `sim_extra' = `sim_extra', (`pmod')
-
-                if `novar' == 0 {
-                    matrix colnames `sim_extra' = polbunchsim:time polbunchsim:p polbunchsim:p_mod
-                }
-                else {
-                    matrix colnames `sim_extra' = polbunchsim:time polbunchsim:p_mod
-                }
-            }
+            matrix `sim_extra' = (`time_post', `p_post', `pmod_post')
+            matrix colnames `sim_extra' = ///
+                polbunchsim:time polbunchsim:p polbunchsim:p_mod
 
             matrix `sim_newb' = `sim_oldb', `sim_extra'
 
@@ -316,12 +324,12 @@ program polbunchsim, eclass
                         matrix `sim_newV'[`ii', `jj'] = `sim_oldV'[`ii', `jj']
                     }
                 }
-				
-				loc names: colfullnames `sim_newb'
+
+                local names : colfullnames `sim_newb'
 
                 matrix colnames `sim_newV' = `names'
                 matrix rownames `sim_newV' = `names'
-				
+
                 ereturn post `sim_newb' `sim_newV'
             }
             else {
@@ -344,9 +352,10 @@ program polbunchsim, eclass
             }
 
             ereturn scalar failed     = 0
-            ereturn scalar sim_time   = `time'
-            ereturn scalar sim_p      = `p'
-            ereturn scalar sim_p_mod  = `pmod'
+            ereturn scalar misscode   = `misscode'
+            ereturn scalar sim_time   = `time_post'
+            ereturn scalar sim_p      = `p_post'
+            ereturn scalar sim_p_mod  = `pmod_post'
 
             ereturn scalar obs    = `obs'
             ereturn scalar cutoff = `cutoff'
@@ -361,9 +370,6 @@ program polbunchsim, eclass
             ereturn local estimator "`estimator'"
             ereturn local clist "`clist'"
             ereturn local cmd "polbunchsim"
-			
         }
-		
     }
-	ereturn display
 end

@@ -469,7 +469,7 @@
 						}
 					}
 							
-					local dotest = inlist(`estimator', 1, 2, 3) & "`test'" != "notest" &  `bootreps' > 0
+					local dotest = inlist(`estimator', 1, 2, 3,4) & "`test'" != "notest" &  `bootreps' > 0
 					
 					//ESTIMATION AND INFERENCE
 					tempname b V bs bb VV bmain Vmain b0 V0 b0s
@@ -623,7 +623,7 @@
 						
 
 						if `dotest' {
-							local testname=cond("`minimumdistance'"=="","Wald test","Minumum-distance test")
+							local testname=cond("`minimumdistance'"==""|`estimator'!=4,"Wald test","Minumum-distance test")
 							
 							local nm: colnames `b0'
 							local neq: coleq `b0'
@@ -633,7 +633,8 @@
 							mat roweq `V0'=`neq'
 							
 							ereturn post `b0' `V0'
-
+							
+							if inlist(`estimator',1,2,3) {
 							if "`wald'" == "" {
 								local init 0.05
 								capture local init = _b[bunching:shift]
@@ -668,6 +669,10 @@
 									zbar(`zbar_est') ///
 									`normalize' ///
 									`log'
+							} 
+							}
+							else { //Saez: Simple Wald test of h0 vs h1
+								capture test _b[h0:_cons]=_b[h1:_cons]
 							}
 
 							local test_rc = _rc
