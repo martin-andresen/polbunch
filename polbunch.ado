@@ -25,7 +25,7 @@
 				nozero ///
 				saveunres(string) ///
 				Bmodel ///
-				minimumdistance ///
+				wald ///
 				norankred ///
 				]
 				
@@ -45,7 +45,7 @@
 						}
 					}
 					
-					if "`normalize'"=="nonormalize"&"`minimumdistance'"=="minimumdistance"&"`test'"!="notest" {
+					if "`normalize'"=="nonormalize"&"`wald'"!="wald"&"`test'"!="notest" {
 						noi di as error "Minimum distance test not supported with non-normalized running variable."
 						exit 301
 					}
@@ -635,8 +635,8 @@
 						
 
 						if `dotest' {
-							local testname=cond("`minimumdistance'"==""|`estimator'==4,"Wald test","Minumum-distance test")
-							local notestname=cond("`minimumdistance'"==""|`estimator'==4,"Minumum-distance test","Wald test")
+							local testname=cond("`wald'"=="wald"|`estimator'==4,"Wald test","Minumum-distance test")
+							local notestname=cond("`wald'"=="wald"|`estimator'==4,"Minumum-distance test","Wald test")
 							
 							local nm: colnames `b0'
 							local neq: coleq `b0'
@@ -648,7 +648,7 @@
 							ereturn post `b0' `V0'
 							
 							if inlist(`estimator',1,2,3) {
-							if "`minimumdistance'" == "minimumdistance" {
+							if "`wald'" != "wald" {
 								local init 0.05
 								capture local init = _b[bunching:shift]
 								if _rc | missing(real("`init'")) {

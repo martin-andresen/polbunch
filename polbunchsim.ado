@@ -7,7 +7,7 @@ program polbunchsim, eclass
         notransform distribution(string) positive ///
         estimator(numlist integer) btype(numlist integer) ///
         clist(string) noisily sample(string) limits(numlist) ///
-        est4limits(numlist) minimumdistance norankred]
+        est4limits(numlist) wald norankred]
 
     quietly {
         if "`zmin'" == "" local zmin "-."
@@ -82,14 +82,14 @@ program polbunchsim, eclass
                                 pol(`polynomial') bw(`bw') t0(`t0') t1(`t1') ///
                                 `log' estimator(`e') bootreps(0) `c' ///
                                 `noisily' `notransform' `positive' ///
-                                `uselimits' `minimumdistance' `rankred'
+                                `uselimits' `wald' `rankred'
                         }
                         else if `bt' == 1 {
                             capture noisily polbunch z `iff', cutoff(`cutoff') ///
                                 pol(`polynomial') bw(`bw') t0(`t0') t1(`t1') ///
                                 `log' estimator(`e') bootreps(1) `c' ///
                                 `noisily' `notransform' `positive' ///
-                                `uselimits' `minimumdistance' `rankred'
+                                `uselimits' `wald' `rankred'
                         }
                         else if `bt' == 2 {
                             capture noisily bootstrap, reps(`bootreps'): ///
@@ -97,35 +97,35 @@ program polbunchsim, eclass
                                 pol(`polynomial') bw(`bw') t0(`t0') t1(`t1') ///
                                 `log' estimator(`e') bootreps(0) `c' ///
                                 `noisily' `notransform' `positive' ///
-                                `uselimits' `minimumdistance' `rankred'
+                                `uselimits' `wald'  `rankred'
                         }
                         else if `bt' == 3 {
                             capture noisily polbunch z `iff', cutoff(`cutoff') ///
                                 pol(`polynomial') bw(`bw') t0(`t0') t1(`t1') ///
                                 `log' estimator(`e') bootreps(`bootreps') ///
                                 nobayes `c' `noisily' `notransform' `positive' ///
-                                `uselimits' `minimumdistance' `rankred'
+                                `uselimits' `wald'  `rankred'
                         }
                         else if `bt' == 4 {
                             capture noisily polbunch z `iff', cutoff(`cutoff') ///
                                 pol(`polynomial') bw(`bw') t0(`t0') t1(`t1') ///
                                 `log' estimator(`e') bootreps(`bootreps') ///
                                 nozero nobayes `c' `noisily' `notransform' ///
-                                `positive' `uselimits' `minimumdistance' `rankred'
+                                `positive' `uselimits' `wald'  `rankred'
                         }
                         else if `bt' == 5 {
                             capture noisily polbunch z `iff', cutoff(`cutoff') ///
                                 pol(`polynomial') bw(`bw') t0(`t0') t1(`t1') ///
                                 `log' estimator(`e') bootreps(`bootreps') ///
                                 `c' `noisily' `notransform' `positive' ///
-                                `uselimits' `minimumdistance' `rankred'
+                                `uselimits' `wald'  `rankred'
                         }
                         else if `bt' == 6 {
                             capture noisily polbunch z `iff', cutoff(`cutoff') ///
                                 pol(`polynomial') bw(`bw') t0(`t0') t1(`t1') ///
                                 `log' estimator(`e') bootreps(`bootreps') ///
                                 nozero `c' `noisily' `notransform' `positive' ///
-                                `uselimits' `minimumdistance' `rankred'
+                                `uselimits' `wald'  `rankred'
                         }
                         else {
                             local rc = 198
