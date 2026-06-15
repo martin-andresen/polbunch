@@ -325,48 +325,55 @@
 						local coleq1 `coleq1' h1
 
 
-						if `polynomial'>0 {
-							loc nmiss=1
-							while `nmiss'>0 {
-								regress `y' 0.`dum'#(`rhsvars') 0.`dum' 1.`dum2'#(`rhsvars') 1.`dum2' if `bunch'==0, nocons
-								loc nmiss=e(rank)<(`polynomial'+1)*2
-								if "`rankred'"!="norankred" {
-									loc note note
-									loc polynomial=`polynomial'-1
-									if `polynomial'<0 {
-										noi di in red "Could not estimate separate polynomials on either side of the cutoff."
-										exit 301
-										}
-									
-									//NEW NAMES
-									local rhsvars
-									local coleq0
-									local coleq1
+						if `polynomial' > 0 {
+							local nmiss = 1
 
-									if `polynomial' > 0 {
-										forvalues i = 1/`polynomial' {
-											if `i' == 1 local rhsvars c.`z'
-											else local rhsvars `rhsvars'##c.`z'
+							while `nmiss' {
+								regress `y' 0.`dum'#(`rhsvars') 0.`dum' 1.`dum2'#(`rhsvars') 1.`dum2' if `bunch' == 0, nocons
 
-											local coleq0 `coleq0' h0
-											local coleq1 `coleq1' h1
+								local nmiss = e(rank) < (`polynomial' + 1)*2
+
+								if `nmiss' {
+									if "`rankred'" != "norankred" {
+										local note note
+										local polynomial = `polynomial' - 1
+
+										if `polynomial' < 0 {
+											noi di as err "Could not estimate separate polynomials on either side of the cutoff."
+											exit 301
 										}
 
-										fvexpand `rhsvars'
-										local names `r(varlist)' _cons
+										// rebuild RHS and names
+										local rhsvars
+										local coleq0
+										local coleq1
+
+										if `polynomial' > 0 {
+											forvalues i = 1/`polynomial' {
+												if `i' == 1 local rhsvars c.`z'
+												else local rhsvars `rhsvars'##c.`z'
+
+												local coleq0 `coleq0' h0
+												local coleq1 `coleq1' h1
+											}
+
+											fvexpand `rhsvars'
+											local names `r(varlist)' _cons
+										}
+										else {
+											local rhsvars
+											local names _cons
+										}
+
+										local coleq0 `coleq0' h0
+										local coleq1 `coleq1' h1
 									}
 									else {
-										local rhsvars
-										local names _cons
-									}
-
-									local coleq0 `coleq0' h0
-									local coleq1 `coleq1' h1
-
-										}
-										else loc nmiss=0
+										local nmiss = 0
 									}
 								}
+							}
+						}
 							if "`note'"=="note" {
 								noi di as text "Note: Polynomial order lowered to `polynomial' because of multicollinearity problems with the specified polynomial."
 							}
