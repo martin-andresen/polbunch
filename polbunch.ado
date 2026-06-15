@@ -1978,14 +1978,14 @@ real matrix h1_A_matrix(
 		dscale = 1
 		ds     = 1
 
-		if (normalized == 1) {
-			a  = 0
-			da = 0
-		}
-		else {
-			a  = -delta * cutoff_orig
-			da = -cutoff_orig
-		}
+	if (normalized == 1) {
+		a  = 0
+		da = 0
+	}
+	else {
+		a  = -delta * cutoff_orig
+		da = -cutoff_orig
+	}
 	}
     else {
         scale  = 1
@@ -2116,7 +2116,7 @@ struct hcoef_out scalar h1coef_map(
             1
         )
 
-        out.dgamma_dbeta  = A
+        out.dgamma_dbeta  = A	
         out.dgamma_ddelta = dA * beta'
     }
     else {
@@ -2126,7 +2126,7 @@ struct hcoef_out scalar h1coef_map(
 
     return(out)
 }
-		   
+			
 	// design row transformation for h1, consistent with h1coef_map()
 struct hdesign_out scalar h1design23(
     real scalar delta,
