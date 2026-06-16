@@ -15,7 +15,8 @@
 				notransform ///
 				positive ///
 				nonormalize ///
-				BOOTreps(integer 1) ///
+				BOOTreps(integer 500) ///
+				vce(string) ///
 				log ///
 				constant ///
 				nodots /// suppress dots for bootstrap progress
@@ -50,7 +51,7 @@
 						exit 301
 					}
 					
-					if `bootreps'>0 {
+					if "`vce'"!="none" {
 						loc coeftabresults=c(coeftabresults)
 						set coeftabresults off
 					}
@@ -66,12 +67,19 @@
 					preserve
 					drop if !`touse'
 					
-					if `bootreps'<0 {
-						noi di as error "Option bootreps can only take values 0 (no inference, for outside bootstrap), 1 (analytic standard errors, the default) or a positive integer >1 (binned bootstrap)."
+					if "`vce'"=="" loc vce multinomial
+					else {
+						if !inlist("`vce'","multinomial","stacked","bootstrap","bayes","none") {
+							noi di as error "vce() can only contain none, multinomial, stacked, bootstrap or bayes."
+							exit 301
+						}
+					}
+					if `bootreps'<=1 {
+						noi di as error "Option bootreps can only take an integer >1 (binned bootstrap)."
 						exit 301
 					}
 					if `polynomial'<0 {
-						noi di as error "Polynomial must be a positive integer"
+						noi di as error "Polynomial must be a nonnegative integer"
 						exit 301
 					}
 					
@@ -472,26 +480,26 @@
 					else local dstart=0
 								
 					//BOOTSTRAP SETUP
-					if `bootreps'>1 {
+					if inlist("`vce'","bootstrap","bayes") {
 						tempname p yorig
-						if "`bayes'"=="nobayes" gen double `p'=`y'/`N'
+						if "`vce'"=="bayes" gen double `p'=`y'/`N'
 						else {
 							gen double `yorig'=`y'
 							recast double `y'
 						}
 					}
 							
-					local dotest = inlist(`estimator', 1, 2, 3,4) & "`test'" != "notest" &  `bootreps' > 0
+					local dotest = inlist(`estimator', 1, 2, 3,4) & "`test'" != "notest" & "`vce'"!="none"
 					
 					//ESTIMATION AND INFERENCE
 					tempname b V bs bb VV bmain Vmain b0 V0 b0s
 					
-					if inlist(`bootreps',0,1) loc stop=0
+					if inlist("`vce'","none","stacked","multinomial") loc stop=0
 					else loc stop=`bootreps'
 					forvalues s=0/`stop' {
 						if `s'==1&"`dots'"!="nodots" nois _dots 0, title("Performing bootstrap repetitions...") reps(`bootreps')
 						if `s'>0 { //resample outcome
-							if "`bayes'"=="nobayes" {
+							if "`vce'"=="bayes" {
 								loc i=0
 								loc factor=0
 								loc obs=`N'
@@ -514,22 +522,21 @@
 						}
 						
 						//estimate model: single stacked profile branch for estimators 0/1/2/3
-							if `bootreps'==1 local vce vce
-							
+					
 							if `estimator' == 4 {
 								bunch_saez `y' `z' `side' `bunch', ///
 									cutoff_orig(`cutoff_orig') ///
 									bw_orig(`bw_orig') ///
 									zl_excl_orig(`zL_excl_orig') ///
 									zh_excl_orig(`zH_excl_orig') ///
-									`vce'
+									vce(`vce')
 							}
 							else {
 								bunch_profile `y' `z' `side' `bunch', ///
 									estimator(`estimator') k(`polynomial') ///
 									cutoff_orig(`cutoff_orig') bw_orig(`bw_orig') ///
 									l(`L') h(`H') ///
-									`log' `normalize' `vce' ///
+									`log' `normalize' vce(`vce') ///
 									initdelta(`dstart') ///
 									zbar_est(`zbar_est') ///
 									zl_excl_orig(`zL_excl_orig') ///
@@ -538,8 +545,8 @@
 
 							
 						////TRANSFORM ESTIMATES
-						if "`transform'"!="notransform"& {
-							if `bootreps'!=1 loc nograd nograd
+						if "`transform'"!="notransform" {
+							if inlist("`vce'","bayes","bootstrap","none") loc nograd nograd
 							noi summarize `y' if `bunch' > 0, meanonly
 							local Hstar_obs = r(sum)
 							local taxopts
@@ -584,7 +591,7 @@
 							
 							if `s' == 0 {
 								matrix `bmain' = `b'
-								if `bootreps'==1 matrix `Vmain' = e(V)
+								if inlist("`vce'","multinomial","stacked") matrix `Vmain' = e(V)
 							}
 							else if `bootreps'>1 {
 								mat `bs'=nullmat(`bs') \ `b'
@@ -597,7 +604,7 @@
 									estimator(0) k(`polynomial') ///
 									cutoff_orig(`cutoff_orig') bw_orig(`bw_orig') ///
 									l(`L') h(`H') ///
-									`log' `normalize' `vce' ///
+									`log' `normalize' vce(`vce') ///
 									initdelta(`dstart') ///
 									zbar_est(`zbar_est') ///
 									zl_excl_orig(`zL_excl_orig') ///
@@ -606,7 +613,7 @@
 						
 								if `s' == 0 {
 									matrix `b0' = e(b)
-									if `bootreps'==1 matrix `V0' = e(V)
+									if inlist("`vce'","multinomial","stacked") matrix `V0' = e(V)
 								}
 								else if `bootreps' > 1 {
 									matrix `b0s' = nullmat(`b0s') \ e(b)
@@ -618,7 +625,7 @@
 						
 							
 						//bootstrap inference sunmmary & test
-						if `bootreps'>1 {
+						if inlist("`vce'","bootstrap","bayes") {
 							clear
 							svmat double `bs'
 							corr _all, cov
@@ -717,7 +724,7 @@
 					
 					//POST RESULTS
 					restore
-					if `bootreps'>=1 {
+					if "`vce'"!="none" {
 							local nm: colnames `bmain'
 							local neq: coleq `bmain'
 							mat colnames `Vmain'=`nm'
@@ -739,14 +746,16 @@
 					ereturn scalar upper_limit=`zH_excl_orig'
 					ereturn local normalize="`normalize'"
 					ereturn scalar estimator=`estimator'
-					if `bootreps'>0 ereturn local cmd "polbunch"
+					if "`vce'"!="none" ereturn local cmd "polbunch"
 					ereturn local cmdname "polbunch"
 					ereturn local title 	"Polynomial bunching estimates"
 					ereturn local cmdline 	"polbunch `0'"
 					ereturn matrix table=`table'
 					ereturn local binname "`z'"
 					ereturn scalar bw=`bw'
-					if `bootreps'>1 estadd local vcetype "bootstrap"
+					if inlist("`vce'","multinomial","stacked")&"`transform'"!="" estadd local vcetype "delta method"
+					else if inlist("`vce'","multinomial","stacked")&"`transform'"=="nostransform"estadd local vcetype "analytic" 
+					else if inlist("`vce'","bootstrap","bayes") estadd local vcetype "bootstrap"
 					if "`log'"=="log" ereturn scalar log=1
 					else ereturn scalar log=0
 		
@@ -789,13 +798,13 @@
 						}
 					}
 				
-				if `bootreps'>0 set coeftabresults `coeftabresults'
+				if "`vce'"!="none" set coeftabresults `coeftabresults'
 				}
 					
 			end
 
 			
-	program define varcorrect, rclass
+	program define variance_stacked, rclass
 		syntax anything, [nosmallsample]
 
 		quietly {
@@ -813,7 +822,7 @@
 			return local xvars "`anything'"
 
 			mata: st_matrix("`V'", ///
-				 varcorrect(st_data(., tokens(st_local("anything"))), ///
+				 variance_stacked(st_data(., tokens(st_local("anything"))), ///
 							  st_data(., "`y'"), ///
 							  st_data(., "`res'"), 0))
 			if "`smallsample'" != "nosmallsample" {
@@ -842,14 +851,18 @@
 			zbar_est(real) ///
 			zl_excl_orig(real) ///
 			zh_excl_orig(real) ///
-			[ nonormalize LOG VCE initdelta(real 0.05) positive]
+			[ nonormalize LOG vce(string) initdelta(real 0.05) positive]
 
 		gettoken yvar rest : varlist
 		gettoken zvar rest : rest
 		gettoken sidevar bunch : rest
 
+		if !inlist("`vce'","","multinomial","stacked","none") {
+			noi di as error "option vce() accepts only multinomial or stacked."
+			exit 198
+		}
 		if !inlist(`estimator', 0, 1, 2, 3) {
-			di as err "estimator() must be 0, 1, 2, or 3"
+			noi di as err "estimator() must be 0, 1, 2, or 3"
 			exit 198
 		}
 
@@ -858,8 +871,8 @@
 
 		local normalized0 = ("`normalize'" != "nonormalize")
 		local islog0      = ("`log'"        != "")
-		local dovar0      = ("`vce'"        != "")
 		local positive0 = ("`positive'" != "")
+		local dovar0 = cond("`vce'"=="stacked",1,cond("`vce'"=="multinomial",2,0))
 
 		tempvar y_t z_t side_t bunch_t
 
@@ -868,7 +881,7 @@
 		gen double `side_t'  = `sidevar' if `touse'
 		gen double `bunch_t' = `bunch'  if `touse'
 
-		tempname b V Gstack mustack minusmustack stackid
+		tempname b V Gstack mustack minusmustack stackid ystack
 
 		mata: profile_run( ///
 			"`y_t'", ///
@@ -962,17 +975,23 @@
 		ereturn scalar positive = `positive0'
 
 		if `dovar0' {
-			ereturn local vcetype "Collapsed sandwich"
+			if `dovar0' == 1 ereturn local vcetype "Collapsed sandwich"
+			if `dovar0' == 2 ereturn local vcetype "Collapsed multinomial"
 
-			matrix `Gstack'       = r_G_stack
-			matrix `mustack'      = r_mu_stack
-			matrix `minusmustack' = r_minus_mu_stack
-			matrix `stackid'      = r_stack_id
+			matrix `Gstack'  = r_G_stack
+			matrix `mustack' = r_mu_stack
+			ereturn matrix G_stack  = `Gstack'
+			ereturn matrix mu_stack = `mustack'
 
-			ereturn matrix G_stack        = `Gstack'
-			ereturn matrix mu_stack       = `mustack'
-			ereturn matrix minus_mu_stack = `minusmustack'
-			ereturn matrix stack_id       = `stackid'
+			capture matrix `ystack' = r_ystack
+			if !_rc ereturn matrix y_stack = `ystack'
+
+			if `dovar0' == 1 {
+				matrix `minusmustack' = r_minus_mu_stack
+				matrix `stackid'      = r_stack_id
+				ereturn matrix minus_mu_stack = `minusmustack'
+				ereturn matrix stack_id       = `stackid'
+			}
 		}
 	end
 
@@ -1400,7 +1419,7 @@ program define bunch_saez, eclass
         BW_orig(real) ///
         ZL_excl_orig(real) ///
         ZH_excl_orig(real) ///
-        [VCE]
+        [vce(string)]
 
     gettoken yvar rest : varlist
     gettoken zvar rest : rest
@@ -1410,6 +1429,7 @@ program define bunch_saez, eclass
     marksample touse, novarlist
     replace `touse' = 0 if missing(`yvar') | missing(`zvar') | missing(`bunchvar')
 
+	
     quietly count if `touse' & `bunchvar' == 0 & missing(`sidevar')
     if r(N) > 0 {
         di as err "Some non-excluded bins cannot be classified as left or right of cutoff."
@@ -1472,22 +1492,23 @@ program define bunch_saez, eclass
     if abs(`a0') < 1e-10 local a0 = 0
     if abs(`a1') < 1e-10 local a1 = 0
 
-    local dovar0 = ("`vce'" != "")
-
-    tempvar y_t side_t bunch_t
+	local dovar0 = cond("`vce'"=="stacked",1,cond("`vce'"=="multinomial",2,0))
+    
+	tempvar y_t side_t bunch_t
     gen double `y_t'     = `yvar'     if `touse'
     gen double `side_t'  = `sidevar'  if `touse'
     gen double `bunch_t' = `bunchvar' if `touse'
+	
 
     mata: saez_run("`y_t'", "`side_t'", "`bunch_t'", `a0', `a1', `dovar0')
 
-    tempname b V Gstack mustack minusmustack stackid
+    tempname b V Gstack mustack minusmustack stackid ystack
 
     matrix `b' = r_b_saez
     matrix colnames `b' = _cons _cons B
     matrix coleq    `b' = h0 h1 bunching
 
-    if `dovar0' {
+    if inlist(`dovar0',1,2) {
         matrix `V' = r_V_saez
         matrix rownames `V' = _cons _cons B
         matrix colnames `V' = _cons _cons B
@@ -1495,7 +1516,8 @@ program define bunch_saez, eclass
         matrix coleq    `V' = h0 h1 bunching
 
         ereturn post `b' `V', esample(`touse')
-        ereturn local vcetype "Collapsed sandwich"
+		if `dovar0' == 1 ereturn local vcetype "Collapsed sandwich"
+		if `dovar0' == 2 ereturn local vcetype "Collapsed multinomial"
 
         capture matrix `Gstack' = r_G_saez
         if !_rc ereturn matrix G_stack = `Gstack'
@@ -1505,6 +1527,9 @@ program define bunch_saez, eclass
 
         capture matrix `minusmustack' = r_minus_mu_saez
         if !_rc ereturn matrix minus_mu_stack = `minusmustack'
+		
+		capture matrix `ystack' = r_ystack_saez
+		if !_rc ereturn matrix y_stack = `ystack'
 
         capture matrix `stackid' = r_stack_id_saez
         if !_rc ereturn matrix stack_id = `stackid'
@@ -1872,39 +1897,43 @@ void saez_run(
     theta = qrsolve(X, ystack)'
 
     mu       = X * theta'
-    minus_mu = ystack - mu
-
-    fw_orig = y
-    _editmissing(fw_orig, 0)
-
-    stack_id = J(rows(y), 1, .)
-
-    idx = 0
-
-    for (i = 1; i <= rows(y); i++) {
-        if (bunch[i] == 0 & side[i] == -1) {
-            idx = idx + 1
-            stack_id[i] = idx
-        }
-    }
-
-    for (i = 1; i <= rows(y); i++) {
-        if (bunch[i] == 0 & side[i] == 1) {
-            idx = idx + 1
-            stack_id[i] = idx
-        }
-    }
-
-    massrow = nL + nR + 1
-
-    for (i = 1; i <= rows(y); i++) {
-        if (bunch[i] > 0) {
-            stack_id[i] = massrow
-        }
-    }
 
     if (dovar == 1) {
-        Vout = varcorrect_collapsed(X, fw_orig, stack_id, minus_mu, 0)
+        minus_mu = ystack - mu
+
+        fw_orig = y
+        _editmissing(fw_orig, 0)
+
+        stack_id = J(rows(y), 1, .)
+
+        idx = 0
+
+        for (i = 1; i <= rows(y); i++) {
+            if (bunch[i] == 0 & side[i] == -1) {
+                idx = idx + 1
+                stack_id[i] = idx
+            }
+        }
+
+        for (i = 1; i <= rows(y); i++) {
+            if (bunch[i] == 0 & side[i] == 1) {
+                idx = idx + 1
+                stack_id[i] = idx
+            }
+        }
+
+        massrow = nL + nR + 1
+
+        for (i = 1; i <= rows(y); i++) {
+            if (bunch[i] > 0) {
+                stack_id[i] = massrow
+            }
+        }
+
+        Vout = variance_stacked(X, fw_orig, stack_id, minus_mu, 0)
+    }
+    else if (dovar == 2) {
+        Vout = variance_multinomial(X, ystack, 0)
     }
     else {
         Vout = J(3, 3, .)
@@ -1913,13 +1942,18 @@ void saez_run(
     st_matrix("r_b_saez", theta)
     st_matrix("r_V_saez", Vout)
 
-    if (dovar == 1) {
+    if (dovar == 1 | dovar == 2) {
         st_matrix("r_G_saez", X)
         st_matrix("r_mu_saez", mu)
+        st_matrix("r_ystack_saez", ystack)
+    }
+
+    if (dovar == 1) {
         st_matrix("r_minus_mu_saez", minus_mu)
         st_matrix("r_stack_id_saez", stack_id)
     }
 }
+
 real matrix h1_A_matrix(
     real scalar delta,
     real scalar estimator,
@@ -2757,7 +2791,8 @@ real rowvector bmodel_row(
 		real scalar zL_excl_orig,
 		real scalar zH_excl_orig,
 		real scalar zbar_est,
-		real scalar dograd
+		real scalar dograd,
+		real scalar dostacked
 	)
 	{
 		struct stack23_out scalar out
@@ -2800,125 +2835,109 @@ real rowvector bmodel_row(
 			out.G = J(0, 0, .)
 			}
 			}
+		
+		if (dostacked==1) {
+			out.minus_mu = out.ystack - out.mu
+			out.stack_id = J(rows(y), 1, .)
 
-		out.minus_mu = out.ystack - out.mu
-		out.stack_id = J(rows(y), 1, .)
-
-		if (estimator == 1) {
-			nout = sum(bunch :== 0)
-			idx = 0
-			for (i = 1; i <= rows(y); i++) {
-				if (bunch[i] == 0) {
-					idx = idx + 1
-					out.stack_id[i] = idx
+			if (estimator == 1) {
+				nout = sum(bunch :== 0)
+				idx = 0
+				for (i = 1; i <= rows(y); i++) {
+					if (bunch[i] == 0) {
+						idx = idx + 1
+						out.stack_id[i] = idx
+					}
+				}
+				for (i = 1; i <= rows(y); i++) {
+					if (bunch[i] > 0) {
+						out.stack_id[i] = nout + 1
+					}
 				}
 			}
-			for (i = 1; i <= rows(y); i++) {
-				if (bunch[i] > 0) {
-					out.stack_id[i] = nout + 1
+			else {
+				nleft  = sum((bunch :== 0) :& (side :== -1))
+				nright = sum((bunch :== 0) :& (side :==  1))
+
+				idx = 0
+				for (i = 1; i <= rows(y); i++) {
+					if (bunch[i] == 0 & side[i] == -1) {
+						idx = idx + 1
+						out.stack_id[i] = idx
+					}
+				}
+				for (i = 1; i <= rows(y); i++) {
+					if (bunch[i] == 0 & side[i] == 1) {
+						idx = idx + 1
+						out.stack_id[i] = idx
+					}
+				}
+				for (i = 1; i <= rows(y); i++) {
+					if (bunch[i] > 0) {
+						out.stack_id[i] = nleft + nright + 1
+					}
 				}
 			}
+
+			out.fw_orig = y
+			_editmissing(out.fw_orig, 0)
 		}
 		else {
-			nleft  = sum((bunch :== 0) :& (side :== -1))
-			nright = sum((bunch :== 0) :& (side :==  1))
-
-			idx = 0
-			for (i = 1; i <= rows(y); i++) {
-				if (bunch[i] == 0 & side[i] == -1) {
-					idx = idx + 1
-					out.stack_id[i] = idx
-				}
-			}
-			for (i = 1; i <= rows(y); i++) {
-				if (bunch[i] == 0 & side[i] == 1) {
-					idx = idx + 1
-					out.stack_id[i] = idx
-				}
-			}
-			for (i = 1; i <= rows(y); i++) {
-				if (bunch[i] > 0) {
-					out.stack_id[i] = nleft + nright + 1
-				}
-			}
+			out.minus_mu = J(0, 0, .)
+			out.stack_id = J(0, 0, .)
+			out.fw_orig  = J(0, 0, .)
 		}
-
-		out.fw_orig = y
-		_editmissing(out.fw_orig, 0)
 
 		return(out)
 	}
 
 	// -----------------------------------------------------------------------------
-	// Variance correction
+	// Variance estimation
 	// -----------------------------------------------------------------------------
 
-	real matrix varcorrect(real matrix X, real matrix fw, real matrix e, real scalar addcons)
-	{
-		real scalar B, N, i
-		real matrix meat, bread
 
-		B = rows(fw)
-		N = sum(fw)
+real matrix variance_multinomial(
+    real matrix G_stack,
+    real colvector y_stack,
+    real scalar addcons
+)
+{
+    real scalar N
+    real matrix G, Vm, bread, V
 
-		if (addcons == 1) {
-			X = X, J(rows(X), 1, 1)
-		}
+    G = G_stack
 
-		meat = J(cols(X), cols(X), 0)
+    if (addcons == 1) {
+        G = G, J(rows(G), 1, 1)
+    }
 
-		for (i = 1; i <= B; i++) {
-			e[i] = e[i] + N
-			meat = meat + fw[i] * (X' * e * e' * X)
-			e[i] = e[i] - N
-		}
+    if (rows(G) != rows(y_stack)) {
+        return(J(cols(G), cols(G), .))
+    }
 
-		bread = invsym(quadcross(X, X) :* N)
+    if (missing(G) | missing(y_stack)) {
+        return(J(cols(G), cols(G), .))
+    }
 
-		return(bread * meat * bread)
-	}
+    N = sum(y_stack)
 
-	/*
-real matrix varcorrect_collapsed(
-		real matrix G_stack,
-		real colvector fw_orig,
-		real colvector stack_id,
-		real colvector e_stack,
-		real scalar addcons
-	)
-	{
-		real scalar B_orig, M, N, i, s
-		real colvector e_i
-		real matrix G, meat, bread
+    if (N <= 0 | N >= .) {
+        return(J(cols(G), cols(G), .))
+    }
 
-		G = G_stack
+    Vm = diag(y_stack) - (y_stack * y_stack') / N
+    Vm = (Vm + Vm') / 2
 
-		if (addcons == 1) {
-			G = G, J(rows(G), 1, 1)
-		}
+    bread = pinv(quadcross(G, G))
 
-		B_orig = rows(fw_orig)
-		M      = rows(G)
-		N      = sum(fw_orig)
+    V = bread * G' * Vm * G * bread
+    V = (V + V') / 2
 
-		meat = J(cols(G), cols(G), 0)
+    return(V)
+}
 
-		for (i = 1; i <= B_orig; i++) {
-			s = stack_id[i]
 
-			if (s < .) {
-				e_i = e_stack
-				e_i[s] = e_i[s] + N
-
-				meat = meat + fw_orig[i] * (G' * e_i * e_i' * G)
-			}
-		}
-
-		bread = pinv(quadcross(G, G) :* N)
-		return(bread * meat * bread)
-	}
-*/
-real matrix varcorrect_collapsed(
+real matrix variance_stacked(
     real matrix G_stack,
     real colvector fw_orig,
     real colvector stack_id,
@@ -3655,7 +3674,7 @@ real matrix varcorrect_collapsed(
 			_error(3498, "profile_run only handles estimators 0, 1, 2, and 3")
 		}
 
-		if (dovar == 1) {
+		if (dovar == 1 | dovar == 2) {
 			st = profile_stack(
 				y,
 				z,
@@ -3673,24 +3692,36 @@ real matrix varcorrect_collapsed(
 				zL_excl_orig,
 				zH_excl_orig,
 				zbar_est,
-				1
+				1,
+				dovar==1
 			)
-			Vout = varcorrect_collapsed(st.G, st.fw_orig, st.stack_id, st.minus_mu, 0)
+
+			if (dovar == 1) {
+				Vout = variance_stacked(st.G, st.fw_orig, st.stack_id, st.minus_mu, 0)
+			}
+			else if (dovar == 2) {
+				Vout = variance_multinomial(st.G, st.ystack, 0)
+			}
 		}
 		else {
-			Vout = J(cols(b), cols(b), .)
+			Vout=J(cols(b),cols(b),.)
 		}
-
+		
 		st_matrix("r_b_profile", b)
 		st_matrix("r_V_profile", Vout)
 
-		if (dovar == 1) {
+		if (dovar == 1 | dovar == 2) {
 			st_matrix("r_G_stack", st.G)
 			st_matrix("r_mu_stack", st.mu)
+			st_matrix("r_ystack", st.ystack)
+		}
+
+		if (dovar == 1) {
 			st_matrix("r_minus_mu_stack", st.minus_mu)
 			st_matrix("r_stack_id", st.stack_id)
 		}
 	}
+	
 real scalar delta_from_mass_e3(
     real rowvector beta0,
     real scalar B,
@@ -4783,5 +4814,6 @@ real matrix raw_to_norm_C(real scalar K, real scalar c, real scalar bw)
 
     return(C)
 }
+
 
 	end
