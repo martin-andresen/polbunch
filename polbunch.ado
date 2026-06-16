@@ -20,7 +20,7 @@
 				log ///
 				constant ///
 				nodots /// suppress dots for bootstrap progress
-				notest /// do not test
+				test(string) ///
 				nosmallsample ///
 				nobayes ///
 				nozero ///
@@ -46,10 +46,6 @@
 						}
 					}
 					
-					if "`normalize'"=="nonormalize"&"`wald'"!="wald"&"`test'"!="notest" {
-						noi di as error "Minimum distance test not supported with non-normalized running variable."
-						exit 301
-					}
 					
 					if "`vce'"!="none" {
 						loc coeftabresults=c(coeftabresults)
@@ -59,6 +55,23 @@
 						noi di as error "Option estimator can take only values 0 (using data to the left only),  1 (no adjustment), 2 (Chetty et. al. adjustment),  3 (theoretically consistent and efficient estimator) or 4 (Saez trapezoid approximation)."
 						exit 301
 					}
+					
+					if "`test'"=="" {
+						if inlist(`estimator',1,4) loc test wald
+						else loc test hausman
+					}
+					else {
+						if !inlist("`test'","none","minimumdistance","wald","hausman") {
+							noi di as error "Test() can only take wald, minimumdistance, hausman or none."
+							exit 301
+						}
+						if "`test'"!="wald" & inlist(`estimator',1,4) {
+							noi di as error "Only test(wald) supported for estimator 1 and 4 - simple linear restrictions."
+							exit 301
+						}
+					}
+					
+					
 					
 					if `estimator'==4 loc polynomial=0
 
@@ -489,10 +502,10 @@
 						}
 					}
 							
-					local dotest = inlist(`estimator', 1, 2, 3,4) & "`test'" != "notest" & "`vce'"!="none"
+					local dotest = inlist(`estimator', 1, 2, 3,4) & "`test'" != "none" & "`vce'"!="none"
 					
 					//ESTIMATION AND INFERENCE
-					tempname b V bs bb VV bmain Vmain b0 V0 b0s
+					tempname b V bs bb VV bmain Vmain b0 V0 b0s bR_raw GR_raw y_raw bU_raw GU_raw d_raw ds Dmain VD
 					
 					if inlist("`vce'","none","analytic") loc stop=0
 					else loc stop=`bootreps'
@@ -543,7 +556,16 @@
 									zh_excl_orig(`zH_excl_orig') `positive'
 							}
 
-							
+						//STORE RAW RESTRICTED ESTIMATES if using hausman test.
+						if `dotest' & "`test'"=="hausman" {
+							matrix `bR_raw' = e(b)
+
+							if "`vce'"=="analytic" {
+								matrix `GR_raw' = e(G_stack)
+								matrix `y_raw'  = e(y_stack)
+							}
+						}
+						
 						////TRANSFORM ESTIMATES
 						if "`transform'"!="notransform" {
 							if inlist("`vce'","bayes","bootstrap","none") loc nograd nograd
@@ -610,7 +632,34 @@
 									zl_excl_orig(`zL_excl_orig') ///
 									zh_excl_orig(`zH_excl_orig') `positive'
 								
-						
+								if "`test'"=="hausman" {
+									matrix `bU_raw' = e(b)
+
+									if "`vce'"=="analytic" {
+										matrix `GU_raw' = e(G_stack)
+									}
+
+									polbunch_modeldiff, ///
+										estimator(`estimator') ///
+										k(`polynomial') ///
+										bu(`bU_raw') ///
+										br(`bR_raw') ///
+										cutofforig(`cutoff_orig') ///
+										bworig(`bw_orig') ///
+										zbar(`zbar_est') ///
+										`normalize' ///
+										`log'
+
+									matrix `d_raw' = r(d)
+
+									if `s' == 0 {
+										matrix `Dmain' = `d_raw'
+									}
+									else if `bootreps' > 1 {
+										matrix `ds' = nullmat(`ds') \ `d_raw'
+									}
+								}
+
 								if `s' == 0 {
 									matrix `b0' = e(b)
 									if "`vce'"=="analytic" matrix `V0' = e(V)
@@ -631,10 +680,18 @@
 							corr _all, cov
 							mat `Vmain'=r(C)
 							if `dotest' {
-								clear
-								svmat `b0s'
-								corr _all, cov
-								matrix `V0' = r(C)
+								if "`test'"=="hausman" {
+									clear
+									svmat double `ds'
+									corr _all, cov
+									matrix `VD' = r(C)
+								}
+								else {
+									clear
+									svmat `b0s'
+									corr _all, cov
+									matrix `V0' = r(C)
+								}
 							}
 						}
 							
@@ -642,20 +699,21 @@
 						
 
 						if `dotest' {
-							local testname=cond("`wald'"=="wald"|`estimator'==4,"Wald test","Minumum-distance test")
-							local notestname=cond("`wald'"=="wald"|`estimator'==4,"Minumum-distance test","Wald test")
+							local testname=cond("`test'"=="wald","Wald test",cond("`test'"=="minimumdistance","Minumum-distance test","Hausman test"))
 							
-							local nm: colnames `b0'
-							local neq: coleq `b0'
-							mat colnames `V0'=`nm'
-							mat rownames `V0'=`nm'
-							mat coleq `V0'=`neq'
-							mat roweq `V0'=`neq'
+							if `estimator'!=4 {
+								if inlist("`test'","wald","minimumdistance") {
+									local nm: colnames `b0'
+									local neq: coleq `b0'
+									mat colnames `V0'=`nm'
+									mat rownames `V0'=`nm'
+									mat coleq `V0'=`neq'
+									mat roweq `V0'=`neq'
+									
+									ereturn post `b0' `V0'
+								}
 							
-							ereturn post `b0' `V0'
-							
-							if inlist(`estimator',1,2,3) {
-							if "`wald'" != "wald" {
+								if "`test'"=="minimumdistance" {
 								local init 0.05
 								capture local init = _b[bunching:shift]
 								if _rc | missing(real("`init'")) {
@@ -677,19 +735,37 @@
 									`log' ///
 									`positive' ///
 									initdelta(`init')
-							}
-							else {
-								capture noisily polbunch_waldtest, ///
-									estimator(`estimator') ///
-									k(`polynomial') ///
-									cutofforig(`cutoff_orig') ///
-									cutoffest(`cutoff_est') ///
-									bworig(`bw_orig') ///
-									bwest(`bw_est') ///
-									zbar(`zbar_est') ///
-									`normalize' ///
-									`log'
-							} 
+								}
+								else if "`test'"=="wald" {
+									capture noisily polbunch_waldtest, ///
+										estimator(`estimator') ///
+										k(`polynomial') ///
+										cutofforig(`cutoff_orig') ///
+										cutoffest(`cutoff_est') ///
+										bworig(`bw_orig') ///
+										bwest(`bw_est') ///
+										zbar(`zbar_est') ///
+										`normalize' ///
+										`log'
+								} 
+								else if "`test'"=="hausman" {
+									if "`vce'"=="analytic" {
+										capture noisily polbunch_modeltest, ///
+											estimator(`estimator') ///
+											k(`polynomial') ///
+											bu(`bU_raw') gu(`GU_raw') ///
+											br(`bR_raw') gr(`GR_raw') ///
+											ystack(`y_raw') ///
+											cutofforig(`cutoff_orig') ///
+											bworig(`bw_orig') ///
+											zbar(`zbar_est') ///
+											`normalize' ///
+											`log'
+									}
+									else {
+										capture noisily polbunch_diff_test, d(`Dmain') v(`VD')
+									}
+								}
 							}
 							else { //Saez: Simple Wald test of h0 vs h1
 								capture test _b[h0:_cons]=_b[h1:_cons]
@@ -1499,6 +1575,83 @@ program define bunch_saez, eclass
     ereturn scalar saez_a1 = `a1'
     ereturn scalar saez_width_excl = `width_excl'
 end
+
+cap program drop polbunch_modeldiff
+program define polbunch_modeldiff, rclass
+    syntax , ///
+        ESTimator(integer) ///
+        K(integer) ///
+        BU(name) ///
+        BR(name) ///
+        CUTOFFORIG(real) ///
+        BWORIG(real) ///
+        ZBAR(real) ///
+        [ NONORMALIZE LOG ]
+
+    local normalized0 = ("`nonormalize'" == "")
+    local islog0      = ("`log'" != "")
+
+    mata: polbunch_modeldiff_mata( ///
+        "`bu'", "`br'", ///
+        `estimator', `k', ///
+        `cutofforig', `bworig', `zbar', ///
+        `normalized0', `islog0' ///
+    )
+
+    matrix d = r(pb_model_d)
+    return matrix d = d
+    return scalar failcode = r(pb_modeldiff_failcode)
+end
+
+cap program drop polbunch_diff_test
+program define polbunch_diff_test, rclass
+    syntax , D(name) V(name)
+
+    mata: polbunch_diff_test_mata("`d'", "`v'")
+
+    return scalar chi2 = r(pb_diff_chi2)
+    return scalar p    = r(pb_diff_p)
+    return scalar df   = r(pb_diff_df)
+    return scalar failcode = r(pb_diff_failcode)
+end
+
+cap program drop polbunch_modeltest
+program define polbunch_modeltest, rclass
+    version 16.0
+
+    syntax , ///
+        ESTimator(integer) ///
+        K(integer) ///
+        BU(name) GU(name) ///
+        BR(name) GR(name) ///
+        YSTACK(name) ///
+        CUTOFFORIG(real) ///
+        BWORIG(real) ///
+        ZBAR(real) ///
+        [ NONORMALIZE LOG ]
+
+    local normalized0 = ("`nonormalize'" == "")
+    local islog0      = ("`log'" != "")
+
+    mata: polbunch_modeltest_mata( ///
+        "`bu'", "`gu'", ///
+        "`br'", "`gr'", ///
+        "`ystack'", ///
+        `estimator', ///
+        `k', ///
+        `cutofforig', ///
+        `bworig', ///
+        `zbar', ///
+        `normalized0', ///
+        `islog0' ///
+    )
+
+    return scalar chi2 = r(pb_model_chi2)
+    return scalar p    = r(pb_model_p)
+    return scalar df   = r(pb_model_df)
+    return scalar failcode = r(pb_model_failcode)
+end
+
 
 	cap prog drop polbunch_waldtest
 	program define polbunch_waldtest, rclass
@@ -3982,6 +4135,286 @@ void polbunch_mdt_mata(
     st_numscalar("r(pb_md_df)", df)
     st_numscalar("r(pb_md_delta)", delta_hat)
     st_numscalar("r(pb_md_failcode)", 0)
+}
+
+void polbunch_diff_test_mata(string scalar dname, string scalar Vname)
+{
+    real rowvector d
+    real matrix V
+    real scalar stat, df, pval
+
+    st_numscalar("r(pb_diff_chi2)", .)
+    st_numscalar("r(pb_diff_p)", .)
+    st_numscalar("r(pb_diff_df)", .)
+    st_numscalar("r(pb_diff_failcode)", 0)
+
+    d = st_matrix(dname)
+    V = st_matrix(Vname)
+
+    if (missing(d) | missing(V)) {
+        st_numscalar("r(pb_diff_failcode)", 101)
+        return
+    }
+
+    if (rows(d) != 1) d = d'
+
+    if (rows(V) != cols(d) | cols(V) != cols(d)) {
+        st_numscalar("r(pb_diff_failcode)", 102)
+        return
+    }
+
+    df = rank(V)
+    if (df <= 0) {
+        st_numscalar("r(pb_diff_failcode)", 103)
+        return
+    }
+
+    stat = d * pinv(V) * d'
+    pval = chi2tail(df, stat)
+
+    st_numscalar("r(pb_diff_chi2)", stat)
+    st_numscalar("r(pb_diff_p)", pval)
+    st_numscalar("r(pb_diff_df)", df)
+}
+
+void polbunch_modeldiff_mata(
+    string scalar bUname,
+    string scalar bRname,
+    real scalar estimator,
+    real scalar K,
+    real scalar cutoff_orig,
+    real scalar bw_orig,
+    real scalar zbar_est,
+    real scalar normalized,
+    real scalar islog
+)
+{
+    real scalar Kb
+    real rowvector bU, bR, beta, g, RB
+    struct hcoef_out scalar hmap
+
+    st_numscalar("r(pb_modeldiff_failcode)", 0)
+    st_matrix("r(pb_model_d)", J(1, 1, .))
+
+    Kb = K + 1
+    bU = st_matrix(bUname)
+    bR = st_matrix(bRname)
+
+    if (estimator == 2 | estimator == 3) {
+        beta = bR[1, 1..Kb]
+
+        hmap = h1coef_map(
+            beta,
+            bR[1, Kb+1],
+            estimator,
+            K,
+            cutoff_orig,
+            bw_orig,
+            normalized,
+            islog,
+            0
+        )
+
+        RB = bmodel_row23(
+            bR[1, Kb+1],
+            cutoff_orig,
+            bw_orig,
+            K,
+            estimator,
+            normalized,
+            islog,
+            zbar_est
+        )
+
+        g = beta, hmap.gamma, RB * beta'
+    }
+    else {
+        st_numscalar("r(pb_modeldiff_failcode)", 201)
+        return
+    }
+
+    if (cols(bU) != cols(g)) {
+        st_numscalar("r(pb_modeldiff_failcode)", 202)
+        return
+    }
+
+    st_matrix("r(pb_model_d)", bU - g)
+}
+
+void polbunch_modeltest_mata(
+    string scalar bUname,
+    string scalar GUname,
+    string scalar bRname,
+    string scalar GRname,
+    string scalar yname,
+    real scalar estimator,
+    real scalar K,
+    real scalar cutoff_orig,
+    real scalar bw_orig,
+    real scalar zbar_est,
+    real scalar normalized,
+    real scalar islog
+)
+{
+    real scalar Kb, N, df, stat, pval
+    real rowvector bU, bR, beta, g
+    real colvector y
+    real matrix GU, GR, AU, AR, Jg, Ad, Vm, Vd
+    struct hcoef_out scalar hmap
+    real rowvector RB, dRB
+
+    st_numscalar("r(pb_model_chi2)", .)
+    st_numscalar("r(pb_model_p)", .)
+    st_numscalar("r(pb_model_df)", .)
+    st_numscalar("r(pb_model_failcode)", 0)
+
+    Kb = K + 1
+
+    bU = st_matrix(bUname)
+    GU = st_matrix(GUname)
+    bR = st_matrix(bRname)
+    GR = st_matrix(GRname)
+    y  = st_matrix(yname)
+
+    if (rows(y) == 1) y = y'
+
+    if (missing(bU) | missing(GU) | missing(bR) | missing(GR) | missing(y)) {
+        st_numscalar("r(pb_model_failcode)", 101)
+        return
+    }
+
+    if (rows(GU) != rows(y) | rows(GR) != rows(y)) {
+        st_numscalar("r(pb_model_failcode)", 102)
+        return
+    }
+
+    N = sum(y)
+    if (N <= 0 | N >= .) {
+        st_numscalar("r(pb_model_failcode)", 103)
+        return
+    }
+
+    Vm = diag(y) - (y * y') / N
+    Vm = (Vm + Vm') / 2
+
+    AU = pinv(quadcross(GU, GU)) * GU'
+    AR = pinv(quadcross(GR, GR)) * GR'
+
+    if (estimator == 1) {
+        /*
+            U: (beta, gamma, B)
+            R: (beta, B)
+            g(beta,B) = (beta, beta, B)
+        */
+        if (cols(bU) != 2*Kb + 1 | cols(bR) != Kb + 1) {
+            st_numscalar("r(pb_model_failcode)", 201)
+            return
+        }
+
+        beta = bR[1, 1..Kb]
+        g = beta, beta, bR[1, Kb+1]
+
+        Jg = J(2*Kb + 1, Kb + 1, 0)
+        Jg[1..Kb, 1..Kb]              = I(Kb)
+        Jg[(Kb+1)..(2*Kb), 1..Kb]     = I(Kb)
+        Jg[2*Kb+1, Kb+1]              = 1
+    }
+    else if (estimator == 2 | estimator == 3) {
+        /*
+            U: (beta, gamma, B)
+            R: (beta, delta)
+            g(beta,delta) = (beta, gamma(beta,delta), B(beta,delta))
+        */
+        if (cols(bU) != 2*Kb + 1 | cols(bR) != Kb + 1) {
+            st_numscalar("r(pb_model_failcode)", 202)
+            return
+        }
+
+        beta = bR[1, 1..Kb]
+
+        hmap = h1coef_map(
+            beta,
+            bR[1, Kb+1],
+            estimator,
+            K,
+            cutoff_orig,
+            bw_orig,
+            normalized,
+            islog,
+            1
+        )
+
+        RB = bmodel_row23(
+            bR[1, Kb+1],
+            cutoff_orig,
+            bw_orig,
+            K,
+            estimator,
+            normalized,
+            islog,
+            zbar_est
+        )
+
+        dRB = d_bmodel_row23_ddelta(
+            bR[1, Kb+1],
+            cutoff_orig,
+            bw_orig,
+            K,
+            estimator,
+            normalized,
+            islog,
+            zbar_est
+        )
+
+        g = beta, hmap.gamma, RB * beta'
+
+        Jg = J(2*Kb + 1, Kb + 1, 0)
+
+        Jg[1..Kb, 1..Kb] = I(Kb)
+
+        Jg[(Kb+1)..(2*Kb), 1..Kb] = hmap.dgamma_dbeta
+        Jg[(Kb+1)..(2*Kb), Kb+1]  = hmap.dgamma_ddelta
+
+        Jg[2*Kb+1, 1..Kb] = RB
+        Jg[2*Kb+1, Kb+1]  = dRB * beta'
+    }
+    else if (estimator == 4) {
+        /*
+            Saez:
+            U: (h0, h1, B)
+            R: (h, B)
+            g(h,B) = (h, h, B)
+
+            This requires a restricted Saez estimate with two parameters.
+        */
+        if (cols(bU) != 3 | cols(bR) != 2) {
+            st_numscalar("r(pb_model_failcode)", 204)
+            return
+        }
+
+        g = bR[1,1], bR[1,1], bR[1,2]
+
+        Jg = (1, 0 \ 
+              1, 0 \ 
+              0, 1)
+    }
+    else {
+        st_numscalar("r(pb_model_failcode)", 205)
+        return
+    }
+
+    Ad = AU - Jg * AR
+    Vd = Ad * Vm * Ad'
+    Vd = (Vd + Vd') / 2
+
+    stat = (bU - g) * pinv(Vd) * (bU - g)'
+    df   = rank(Vd)
+    pval = chi2tail(df, stat)
+
+    st_numscalar("r(pb_model_chi2)", stat)
+    st_numscalar("r(pb_model_p)", pval)
+    st_numscalar("r(pb_model_df)", df)
+    st_numscalar("r(pb_model_failcode)", 0)
 }
 
 
