@@ -67,10 +67,10 @@
 					preserve
 					drop if !`touse'
 					
-					if "`vce'"=="" loc vce multinomial
+					if "`vce'"=="" loc vce analytic
 					else {
-						if !inlist("`vce'","multinomial","stacked","bootstrap","bayes","none") {
-							noi di as error "vce() can only contain none, multinomial, stacked, bootstrap or bayes."
+						if !inlist("`vce'","analytic","bootstrap","bayes","none") {
+							noi di as error "vce() can only contain none, analytic, bootstrap or bayes."
 							exit 301
 						}
 					}
@@ -494,7 +494,7 @@
 					//ESTIMATION AND INFERENCE
 					tempname b V bs bb VV bmain Vmain b0 V0 b0s
 					
-					if inlist("`vce'","none","stacked","multinomial") loc stop=0
+					if inlist("`vce'","none","analytic") loc stop=0
 					else loc stop=`bootreps'
 					forvalues s=0/`stop' {
 						if `s'==1&"`dots'"!="nodots" nois _dots 0, title("Performing bootstrap repetitions...") reps(`bootreps')
@@ -591,7 +591,7 @@
 							
 							if `s' == 0 {
 								matrix `bmain' = `b'
-								if inlist("`vce'","multinomial","stacked") matrix `Vmain' = e(V)
+								if "`vce'"=="analytic" matrix `Vmain' = e(V)
 							}
 							else if `bootreps'>1 {
 								mat `bs'=nullmat(`bs') \ `b'
@@ -613,7 +613,7 @@
 						
 								if `s' == 0 {
 									matrix `b0' = e(b)
-									if inlist("`vce'","multinomial","stacked") matrix `V0' = e(V)
+									if "`vce'"=="analytic" matrix `V0' = e(V)
 								}
 								else if `bootreps' > 1 {
 									matrix `b0s' = nullmat(`b0s') \ e(b)
@@ -753,9 +753,10 @@
 					ereturn matrix table=`table'
 					ereturn local binname "`z'"
 					ereturn scalar bw=`bw'
-					if inlist("`vce'","multinomial","stacked")&"`transform'"!="" estadd local vcetype "delta method"
-					else if inlist("`vce'","multinomial","stacked")&"`transform'"=="nostransform"estadd local vcetype "analytic" 
-					else if inlist("`vce'","bootstrap","bayes") estadd local vcetype "bootstrap"
+					if "`vce'"=="analytic"&"`transform'"=="notransform" estadd local vcetype "analytic"
+					if "`vce'"=="analytic"&"`transform'"=="" estadd local vcetype "delta method"
+					else if "`vce'"=="bootstrap" estadd local vcetype "binned bootstrap"
+					else if "`vce'"=="bayes" estadd local vcetype "bayesian bootstrap"
 					if "`log'"=="log" ereturn scalar log=1
 					else ereturn scalar log=0
 		
@@ -804,39 +805,6 @@
 			end
 
 			
-	program define variance_stacked, rclass
-		syntax anything, [nosmallsample]
-
-		quietly {
-			gettoken y anything : anything
-
-			tempvar res rss
-			tempname g V
-			local numbins = _N
-
-			summarize `y', meanonly
-			local N = r(sum)
-			local k = e(df_m)
-
-			predict `res', residuals
-			return local xvars "`anything'"
-
-			mata: st_matrix("`V'", ///
-				 variance_stacked(st_data(., tokens(st_local("anything"))), ///
-							  st_data(., "`y'"), ///
-							  st_data(., "`res'"), 0))
-			if "`smallsample'" != "nosmallsample" {
-				matrix `V' = (`N'/(`N'-1)) * ///
-					((`N'*`numbins'-1)/(`N'*`numbins'-`k')) * `V'
-			}
-
-			return matrix V = `V'
-
-			gen double `rss' = `y'*(`N'-`res')^2 + (`N'-`y')*(`res')^2
-			summarize `rss', meanonly
-			return local rss = r(sum)
-		}
-	end
 
 	program define bunch_profile, eclass
 		version 16.0
@@ -872,8 +840,8 @@
 		local normalized0 = ("`normalize'" != "nonormalize")
 		local islog0      = ("`log'"        != "")
 		local positive0 = ("`positive'" != "")
-		local dovar0 = cond("`vce'"=="stacked",1,cond("`vce'"=="multinomial",2,0))
-
+		local dovar0 = ("`vce'"=="analytic")
+		
 		tempvar y_t z_t side_t bunch_t
 
 		gen double `y_t'     = `yvar'   if `touse'
@@ -881,7 +849,7 @@
 		gen double `side_t'  = `sidevar' if `touse'
 		gen double `bunch_t' = `bunch'  if `touse'
 
-		tempname b V Gstack mustack minusmustack stackid ystack
+		tempname b V Gstack mustack ystack
 
 		mata: profile_run( ///
 			"`y_t'", ///
@@ -975,23 +943,15 @@
 		ereturn scalar positive = `positive0'
 
 		if `dovar0' {
-			if `dovar0' == 1 ereturn local vcetype "Collapsed sandwich"
-			if `dovar0' == 2 ereturn local vcetype "Collapsed multinomial"
+			ereturn local vcetype "Analytic"
 
 			matrix `Gstack'  = r_G_stack
 			matrix `mustack' = r_mu_stack
+			matrix `ystack'  = r_ystack
+
 			ereturn matrix G_stack  = `Gstack'
 			ereturn matrix mu_stack = `mustack'
-
-			capture matrix `ystack' = r_ystack
-			if !_rc ereturn matrix y_stack = `ystack'
-
-			if `dovar0' == 1 {
-				matrix `minusmustack' = r_minus_mu_stack
-				matrix `stackid'      = r_stack_id
-				ereturn matrix minus_mu_stack = `minusmustack'
-				ereturn matrix stack_id       = `stackid'
-			}
+			ereturn matrix y_stack  = `ystack'
 		}
 	end
 
@@ -1492,7 +1452,7 @@ program define bunch_saez, eclass
     if abs(`a0') < 1e-10 local a0 = 0
     if abs(`a1') < 1e-10 local a1 = 0
 
-	local dovar0 = cond("`vce'"=="stacked",1,cond("`vce'"=="multinomial",2,0))
+	local dovar0 = ("`vce'"=="analytic")
     
 	tempvar y_t side_t bunch_t
     gen double `y_t'     = `yvar'     if `touse'
@@ -1502,38 +1462,24 @@ program define bunch_saez, eclass
 
     mata: saez_run("`y_t'", "`side_t'", "`bunch_t'", `a0', `a1', `dovar0')
 
-    tempname b V Gstack mustack minusmustack stackid ystack
+    tempname b V Gstack mustack ystack
 
     matrix `b' = r_b_saez
     matrix colnames `b' = _cons _cons B
     matrix coleq    `b' = h0 h1 bunching
 
-    if inlist(`dovar0',1,2) {
-        matrix `V' = r_V_saez
-        matrix rownames `V' = _cons _cons B
-        matrix colnames `V' = _cons _cons B
-        matrix roweq    `V' = h0 h1 bunching
-        matrix coleq    `V' = h0 h1 bunching
+	if `dovar0' {
+		ereturn local vcetype "Analytic"
 
-        ereturn post `b' `V', esample(`touse')
-		if `dovar0' == 1 ereturn local vcetype "Collapsed sandwich"
-		if `dovar0' == 2 ereturn local vcetype "Collapsed multinomial"
+		capture matrix `Gstack' = r_G_saez
+		if !_rc ereturn matrix G_stack = `Gstack'
 
-        capture matrix `Gstack' = r_G_saez
-        if !_rc ereturn matrix G_stack = `Gstack'
+		capture matrix `mustack' = r_mu_saez
+		if !_rc ereturn matrix mu_stack = `mustack'
 
-        capture matrix `mustack' = r_mu_saez
-        if !_rc ereturn matrix mu_stack = `mustack'
-
-        capture matrix `minusmustack' = r_minus_mu_saez
-        if !_rc ereturn matrix minus_mu_stack = `minusmustack'
-		
 		capture matrix `ystack' = r_ystack_saez
 		if !_rc ereturn matrix y_stack = `ystack'
-
-        capture matrix `stackid' = r_stack_id_saez
-        if !_rc ereturn matrix stack_id = `stackid'
-    }
+	}
     else {
         ereturn post `b', esample(`touse')
     }
@@ -1741,9 +1687,6 @@ end
 		real matrix X
 		real matrix G
 		real colvector mu
-		real colvector minus_mu
-		real colvector stack_id
-		real colvector fw_orig
 	}
 
 	struct design_out {
@@ -1896,62 +1839,23 @@ void saez_run(
 
     theta = qrsolve(X, ystack)'
 
-    mu       = X * theta'
+	mu = X * theta'
 
-    if (dovar == 1) {
-        minus_mu = ystack - mu
+	if (dovar == 1) {
+		Vout = variance_multinomial(X, ystack, 0)
+	}
+	else {
+		Vout = J(3, 3, .)
+	}
 
-        fw_orig = y
-        _editmissing(fw_orig, 0)
+		st_matrix("r_b_saez", theta)
+		st_matrix("r_V_saez", Vout)
 
-        stack_id = J(rows(y), 1, .)
-
-        idx = 0
-
-        for (i = 1; i <= rows(y); i++) {
-            if (bunch[i] == 0 & side[i] == -1) {
-                idx = idx + 1
-                stack_id[i] = idx
-            }
-        }
-
-        for (i = 1; i <= rows(y); i++) {
-            if (bunch[i] == 0 & side[i] == 1) {
-                idx = idx + 1
-                stack_id[i] = idx
-            }
-        }
-
-        massrow = nL + nR + 1
-
-        for (i = 1; i <= rows(y); i++) {
-            if (bunch[i] > 0) {
-                stack_id[i] = massrow
-            }
-        }
-
-        Vout = variance_stacked(X, fw_orig, stack_id, minus_mu, 0)
-    }
-    else if (dovar == 2) {
-        Vout = variance_multinomial(X, ystack, 0)
-    }
-    else {
-        Vout = J(3, 3, .)
-    }
-
-    st_matrix("r_b_saez", theta)
-    st_matrix("r_V_saez", Vout)
-
-    if (dovar == 1 | dovar == 2) {
-        st_matrix("r_G_saez", X)
-        st_matrix("r_mu_saez", mu)
-        st_matrix("r_ystack_saez", ystack)
-    }
-
-    if (dovar == 1) {
-        st_matrix("r_minus_mu_saez", minus_mu)
-        st_matrix("r_stack_id_saez", stack_id)
-    }
+	if (dovar == 1) {
+		st_matrix("r_G_saez", X)
+		st_matrix("r_mu_saez", mu)
+		st_matrix("r_ystack_saez", ystack)
+	}
 }
 
 real matrix h1_A_matrix(
@@ -2791,8 +2695,7 @@ real rowvector bmodel_row(
 		real scalar zL_excl_orig,
 		real scalar zH_excl_orig,
 		real scalar zbar_est,
-		real scalar dograd,
-		real scalar dostacked
+		real scalar dograd
 	)
 	{
 		struct stack23_out scalar out
@@ -2836,57 +2739,6 @@ real rowvector bmodel_row(
 			}
 			}
 		
-		if (dostacked==1) {
-			out.minus_mu = out.ystack - out.mu
-			out.stack_id = J(rows(y), 1, .)
-
-			if (estimator == 1) {
-				nout = sum(bunch :== 0)
-				idx = 0
-				for (i = 1; i <= rows(y); i++) {
-					if (bunch[i] == 0) {
-						idx = idx + 1
-						out.stack_id[i] = idx
-					}
-				}
-				for (i = 1; i <= rows(y); i++) {
-					if (bunch[i] > 0) {
-						out.stack_id[i] = nout + 1
-					}
-				}
-			}
-			else {
-				nleft  = sum((bunch :== 0) :& (side :== -1))
-				nright = sum((bunch :== 0) :& (side :==  1))
-
-				idx = 0
-				for (i = 1; i <= rows(y); i++) {
-					if (bunch[i] == 0 & side[i] == -1) {
-						idx = idx + 1
-						out.stack_id[i] = idx
-					}
-				}
-				for (i = 1; i <= rows(y); i++) {
-					if (bunch[i] == 0 & side[i] == 1) {
-						idx = idx + 1
-						out.stack_id[i] = idx
-					}
-				}
-				for (i = 1; i <= rows(y); i++) {
-					if (bunch[i] > 0) {
-						out.stack_id[i] = nleft + nright + 1
-					}
-				}
-			}
-
-			out.fw_orig = y
-			_editmissing(out.fw_orig, 0)
-		}
-		else {
-			out.minus_mu = J(0, 0, .)
-			out.stack_id = J(0, 0, .)
-			out.fw_orig  = J(0, 0, .)
-		}
 
 		return(out)
 	}
@@ -2937,115 +2789,6 @@ real matrix variance_multinomial(
 }
 
 
-real matrix variance_stacked(
-    real matrix G_stack,
-    real colvector fw_orig,
-    real colvector stack_id,
-    real colvector e_stack,
-    real scalar addcons
-)
-{
-    real scalar B_orig, M, N, i, s
-    real colvector y_stack, mu_stack, r_i, g_i
-    real matrix G, meat, bread, V
-
-    G = G_stack
-
-    if (addcons == 1) {
-        G = G, J(rows(G), 1, 1)
-    }
-
-    M      = rows(G)
-    B_orig = rows(fw_orig)
-
-    if (rows(e_stack) != M) {
-        return(J(cols(G), cols(G), .))
-    }
-
-    if (rows(stack_id) != B_orig) {
-        return(J(cols(G), cols(G), .))
-    }
-
-    if (missing(G) | missing(e_stack) | missing(fw_orig)) {
-        return(J(cols(G), cols(G), .))
-    }
-
-    N = sum(fw_orig)
-
-    if (N <= 0 | N >= .) {
-        return(J(cols(G), cols(G), .))
-    }
-
-    /*
-        Reconstruct stacked outcome counts:
-            y_stack[s] = sum of original frequencies mapping to stacked row s.
-
-        For the excluded-region mass row, multiple original bins should map
-        to the same stack_id, so this correctly adds them up.
-    */
-    y_stack = J(M, 1, 0)
-
-    for (i = 1; i <= B_orig; i++) {
-        if (fw_orig[i] >= .) continue
-        if (fw_orig[i] == 0) continue
-
-        s = stack_id[i]
-
-        if (s < . & s >= 1 & s <= M) {
-            y_stack[s] = y_stack[s] + fw_orig[i]
-        }
-    }
-
-    /*
-        e_stack = y_stack - mu_stack,
-        so mu_stack = y_stack - e_stack.
-    */
-    mu_stack = y_stack - e_stack
-
-    if (missing(mu_stack)) {
-        return(J(cols(G), cols(G), .))
-    }
-
-    meat = J(cols(G), cols(G), 0)
-
-    for (i = 1; i <= B_orig; i++) {
-        if (fw_orig[i] >= .) continue
-        if (fw_orig[i] == 0) continue
-
-        /*
-            Individual-level residual vector in the imaginary regression:
-                r_i = N*a_i - mu_stack.
-
-            Start from -mu_stack, then add N in the mapped row.
-        */
-        r_i = -mu_stack
-
-        s = stack_id[i]
-
-        if (s < . & s >= 1 & s <= M) {
-            r_i[s] = r_i[s] + N
-        }
-
-        g_i = G' * r_i
-
-        if (missing(g_i)) {
-            return(J(cols(G), cols(G), .))
-        }
-
-        meat = meat + fw_orig[i] * (g_i * g_i')
-    }
-
-    bread = pinv(quadcross(G, G) :* N)
-
-    if (missing(bread) | missing(meat)) {
-        return(J(cols(G), cols(G), .))
-    }
-
-    V = bread * meat * bread
-    V = (V + V') / 2
-
-    return(V)
-}	
 
 	// -----------------------------------------------------------------------------
 	// Bunching-response inversion and transformed output
@@ -3674,7 +3417,7 @@ real matrix variance_stacked(
 			_error(3498, "profile_run only handles estimators 0, 1, 2, and 3")
 		}
 
-		if (dovar == 1 | dovar == 2) {
+		if (dovar == 1) {
 			st = profile_stack(
 				y,
 				z,
@@ -3692,33 +3435,22 @@ real matrix variance_stacked(
 				zL_excl_orig,
 				zH_excl_orig,
 				zbar_est,
-				1,
-				dovar==1
+				1
 			)
 
-			if (dovar == 1) {
-				Vout = variance_stacked(st.G, st.fw_orig, st.stack_id, st.minus_mu, 0)
-			}
-			else if (dovar == 2) {
-				Vout = variance_multinomial(st.G, st.ystack, 0)
-			}
+			Vout = variance_multinomial(st.G, st.ystack, 0)
 		}
 		else {
-			Vout=J(cols(b),cols(b),.)
+			Vout = J(cols(b), cols(b), .)
 		}
 		
 		st_matrix("r_b_profile", b)
 		st_matrix("r_V_profile", Vout)
 
-		if (dovar == 1 | dovar == 2) {
+		if (dovar == 1) {
 			st_matrix("r_G_stack", st.G)
 			st_matrix("r_mu_stack", st.mu)
 			st_matrix("r_ystack", st.ystack)
-		}
-
-		if (dovar == 1) {
-			st_matrix("r_minus_mu_stack", st.minus_mu)
-			st_matrix("r_stack_id", st.stack_id)
 		}
 	}
 	
