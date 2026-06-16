@@ -825,10 +825,6 @@
 		gettoken zvar rest : rest
 		gettoken sidevar bunch : rest
 
-		if !inlist("`vce'","","multinomial","stacked","none") {
-			noi di as error "option vce() accepts only multinomial or stacked."
-			exit 198
-		}
 		if !inlist(`estimator', 0, 1, 2, 3) {
 			noi di as err "estimator() must be 0, 1, 2, or 3"
 			exit 198
@@ -1467,22 +1463,31 @@ program define bunch_saez, eclass
     matrix `b' = r_b_saez
     matrix colnames `b' = _cons _cons B
     matrix coleq    `b' = h0 h1 bunching
+	
+	matrix `V' = r_V_saez
+
+	if `dovar0' {
+		matrix rownames `V' = _cons _cons B
+		matrix colnames `V' = _cons _cons B
+		matrix roweq    `V' = h0 h1 bunching
+		matrix coleq    `V' = h0 h1 bunching
+		ereturn post `b' `V', esample(`touse')
+	}
+	else {
+		ereturn post `b', esample(`touse')
+	}
 
 	if `dovar0' {
 		ereturn local vcetype "Analytic"
 
-		capture matrix `Gstack' = r_G_saez
-		if !_rc ereturn matrix G_stack = `Gstack'
+		matrix `Gstack' = r_G_saez
+		matrix `mustack' = r_mu_saez
+		matrix `ystack' = r_ystack_saez
 
-		capture matrix `mustack' = r_mu_saez
-		if !_rc ereturn matrix mu_stack = `mustack'
-
-		capture matrix `ystack' = r_ystack_saez
-		if !_rc ereturn matrix y_stack = `ystack'
+		ereturn matrix G_stack = `Gstack'
+		ereturn matrix mu_stack = `mustack'
+		ereturn matrix y_stack = `ystack'
 	}
-    else {
-        ereturn post `b', esample(`touse')
-    }
 
     ereturn local cmd "bunch_saez"
     ereturn scalar estimator = 4
@@ -1813,10 +1818,10 @@ void saez_run(
 )
 {
     real colvector y, side, bunch
-    real colvector yL, yR, ystack, stack_id, fw_orig, mu, minus_mu
+    real colvector yL, yR, ystack, mu
+	real scalar nL, nR, Hstar_obs
     real matrix X, Vout
     real rowvector theta
-    real scalar nL, nR, Hstar_obs, i, idx, massrow
 
     y     = st_data(., yvar)
     side  = st_data(., sidevar)
@@ -2678,70 +2683,6 @@ real rowvector bmodel_row(
 		return(quadcross(resid, resid))
 	}
 
-	struct stack23_out scalar profile_stack(
-		real colvector y,
-		real colvector z,
-		real colvector side,
-		real colvector bunch,
-		real rowvector theta,
-		real scalar delta,
-		real scalar Hstar_obs,
-		real scalar cutoff_orig,
-		real scalar bw_orig,
-		real scalar K,
-		real scalar estimator,
-		real scalar normalized,
-		real scalar islog,
-		real scalar zL_excl_orig,
-		real scalar zH_excl_orig,
-		real scalar zbar_est,
-		real scalar dograd
-	)
-	{
-		struct stack23_out scalar out
-		struct design_out scalar D
-
-		real scalar i, idx, nleft, nright, nout, Kb
-		real rowvector beta
-
-		Kb = K + 1
-
-		out.ystack = make_ystack(y, side, bunch, estimator, Hstar_obs)
-
-		D = make_design(delta, z, side, bunch, cutoff_orig, bw_orig, K, estimator, normalized, islog, zL_excl_orig, zH_excl_orig, zbar_est, dograd)
-
-		out.X = D.X
-
-		if (estimator == 0 | estimator == 1) {
-			out.mu = D.X * theta'
-			out.G  = D.X
-		}
-		else {
-			/*
-			theta is beta, delta for estimators 2/3.
-			Use explicit row/column indexing. The old theta[1..Kb]
-			can produce the wrong orientation and then beta' causes
-			a conformability error.
-			*/
-			beta = theta[1, 1..Kb]
-
-			out.mu = D.X * beta'
-
-			if (dograd) {
-			if (rows(D.dXddelta) != rows(D.X) | cols(D.dXddelta) != Kb) {
-			_error(3200, "profile_stack: D.dXddelta has wrong dimensions")
-			}
-
-			out.G = D.X, (D.dXddelta * beta')
-			}
-			else {
-			out.G = J(0, 0, .)
-			}
-			}
-		
-
-		return(out)
-	}
 
 	// -----------------------------------------------------------------------------
 	// Variance estimation
@@ -3314,7 +3255,10 @@ real matrix variance_multinomial(
 		real rowvector theta_hat, beta_hat, b, pars, phat, dgrid, qgrid
 		real matrix Vout
 		transmorphic S
-		struct stack23_out scalar st
+		
+		struct design_out scalar D
+		real colvector ystack, mu
+		real matrix Gv
 		
 
 		Kb = K + 1
@@ -3418,39 +3362,35 @@ real matrix variance_multinomial(
 		}
 
 		if (dovar == 1) {
-			st = profile_stack(
-				y,
-				z,
-				side,
-				bunch,
-				theta_hat,
-				delta_hat,
-				Hstar_obs,
-				cutoff_orig,
-				bw_orig,
-				K,
-				estimator,
-				normalized,
-				islog,
-				zL_excl_orig,
-				zH_excl_orig,
-				zbar_est,
-				1
-			)
+			D = make_design(delta_hat, z, side, bunch,
+				cutoff_orig, bw_orig, K, estimator, normalized, islog,
+				zL_excl_orig, zH_excl_orig, zbar_est, 1)
 
-			Vout = variance_multinomial(st.G, st.ystack, 0)
+			ystack = make_ystack(y, side, bunch, estimator, Hstar_obs)
+
+			if (estimator == 0 | estimator == 1) {
+				Gv = D.X
+				mu = D.X * theta_hat'
+			}
+			else {
+				beta_hat = theta_hat[1, 1..Kb]
+				Gv = D.X, (D.dXddelta * beta_hat')
+				mu = D.X * beta_hat'
+			}
+
+			Vout = variance_multinomial(Gv, ystack, 0)
 		}
 		else {
 			Vout = J(cols(b), cols(b), .)
 		}
-		
+				
 		st_matrix("r_b_profile", b)
 		st_matrix("r_V_profile", Vout)
 
 		if (dovar == 1) {
-			st_matrix("r_G_stack", st.G)
-			st_matrix("r_mu_stack", st.mu)
-			st_matrix("r_ystack", st.ystack)
+			st_matrix("r_G_stack", Gv)
+			st_matrix("r_mu_stack", mu)
+			st_matrix("r_ystack", ystack)
 		}
 	}
 	
