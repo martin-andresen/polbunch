@@ -7,10 +7,10 @@ program define polbunchplot
 
     syntax [anything(name=models id="stored estimation name(s)")], ///
         [ graph_opts(string) noci nostar ///
-          limit(numlist min=2 max=2) log TRUncate ]
+          limit(numlist min=2 max=2) log TRUncate]
 
     quietly {
-
+		
         local nmodels : word count `models'
 
         /*

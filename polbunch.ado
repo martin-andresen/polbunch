@@ -617,14 +617,7 @@
 										`bmodel'			
 								}
 								else {
-										saez_transform, ///
-											cutofforig(`cutoff_orig') ///
-											bworig(`bw_orig') ///
-											zlexcl(`zL_excl_orig') ///
-											zhexcl(`zH_excl_orig') ///
-											`log' ///
-											`taxopts' ///
-											`nograd'
+										saez_transform, zstarorig(`cutoff_orig') bworig(`bw_orig') t0(`t0') t1(`t1') `log' `grad'
 									}
 								}
 								
@@ -1331,7 +1324,7 @@
 			}
 		end
 		
-		
+/*		
 	cap program drop saez_transform
 	program define saez_transform, eclass
 		version 16.0
@@ -1494,8 +1487,111 @@
 			ereturn scalar t1 = `t1'
 		}
 	end
+*/
+capture program drop saez_transform
+program define saez_transform, eclass
+    version 16.0
 
-	cap program drop bunch_saez
+    syntax , ZSTAROrig(numlist max=1) BWOrig(numlist max=1) ///
+        [T0(numlist max=1) T1(numlist max=1) LOG NOGRAD]
+
+    tempname b0 V0 theta Vtheta b G V
+
+    matrix `b0' = e(b)
+    if (colsof(`b0') < 3) {
+        di as err "e(b) must contain theta=(h0:_cons,h1:_cons,B) in columns 1..3"
+        exit 503
+    }
+
+    local islog  = ("`log'" != "")
+    local dograd = ("`nograd'" == "")
+
+    local zstarorig : word 1 of `zstarorig'
+    local bworig    : word 1 of `bworig'
+
+    if (`zstarorig' <= 0) {
+        di as err "zstarorig() must be positive"
+        exit 198
+    }
+    if (`bworig' <= 0) {
+        di as err "bworig() must be positive"
+        exit 198
+    }
+
+    local hastax = 0
+    if ("`t0'" != "" | "`t1'" != "") {
+        if ("`t0'" == "" | "`t1'" == "") {
+            di as err "t0() and t1() must be specified together"
+            exit 198
+        }
+        local t0 : word 1 of `t0'
+        local t1 : word 1 of `t1'
+        local hastax = 1
+    }
+    else {
+        local t0 = .
+        local t1 = .
+    }
+
+    matrix `theta' = `b0'[1,1..3]
+    matrix colnames `theta' = h0:_cons h1:_cons bunching:number_bunchers
+
+    if (`dograd') {
+        capture matrix `V0' = e(V)
+        if (_rc) {
+            di as err "e(V) not found; specify nograd"
+            exit 111
+        }
+
+        matrix `Vtheta' = `V0'[1..3,1..3]
+        matrix rownames `Vtheta' = h0:_cons h1:_cons bunching:number_bunchers
+        matrix colnames `Vtheta' = h0:_cons h1:_cons bunching:number_bunchers
+    }
+
+    mata: st_matrix("`b'", saez_transform( ///
+        st_matrix("`theta'"), ///
+        `zstarorig', `bworig', `t0', `t1', ///
+        `islog', `hastax', `dograd', "`G'" ///
+    ))
+
+    local outnames h0:_cons h1:_cons bunching:number_bunchers ///
+        bunching:excess_mass bunching:shift bunching:marginal_response
+    if (`hastax') local outnames `outnames' bunching:elasticity
+
+    matrix colnames `b' = `outnames'
+
+    if (`dograd') {
+        matrix rownames `G' = `outnames'
+        matrix colnames `G' = h0:_cons h1:_cons bunching:number_bunchers
+
+        matrix `V' = `G' * `Vtheta' * `G''
+        matrix rownames `V' = `outnames'
+        matrix colnames `V' = `outnames'
+
+        ereturn post `b' `V'
+        ereturn matrix G = `G'
+        ereturn matrix Vtheta = `Vtheta'
+    }
+    else {
+        ereturn post `b'
+    }
+
+    ereturn matrix theta = `theta'
+    ereturn scalar zstarorig = `zstarorig'
+    ereturn scalar bworig    = `bworig'
+    ereturn scalar islog     = `islog'
+    ereturn scalar hastax    = `hastax'
+
+    if (`hastax') {
+        ereturn scalar t0 = `t0'
+        ereturn scalar t1 = `t1'
+    }
+
+    ereturn local cmd "saez_transform_e"
+    ereturn display
+end
+
+cap program drop bunch_saez
 	program define bunch_saez, eclass
 		version 16.0
 
@@ -4824,8 +4920,130 @@
 			st_numscalar("r(pb_df)", df)
 			st_numscalar("r(pb_delta_U)", delta)
 		}
+
+real rowvector saez_transform(
+    real rowvector theta,
+    real scalar zstarorig,
+    real scalar bworig,
+    real scalar t0,
+    real scalar t1,
+    real scalar islog,
+    real scalar hastax,
+    real scalar dograd,
+    string scalar Gname
+)
+{
+    real scalar hminus, hplus, B, s, taxratio, L
+    real scalar excess_mass, shift, marginal_response, elasticity
+    real scalar A, q, disc, x, dlogz, Fx
+    real rowvector out, dshift, dmr, dx
+    real matrix G
+
+    out = J(1, 6 + hastax, .)
+    if (dograd) st_matrix(Gname, J(6 + hastax, 3, .))
+
+    if (cols(theta) < 3) return(out)
+
+    hminus = theta[1]
+    hplus  = theta[2]
+    B      = theta[3]
+
+    s = hminus + hplus
+    if (hminus <= 0 | hplus <= 0 | s <= 0) return(out)
+    if (zstarorig <= 0 | bworig <= 0) return(out)
+
+    // excess mass is in bins
+    excess_mass = 2 * B / s
+
+    if (islog) {
+        // hminus/hplus/B are bin counts, so convert bin-width mass to log distance
+        dlogz = 2 * B * bworig / s
+        x     = exp(dlogz)
+
+        shift             = x - 1
+        marginal_response = dlogz
+
+        if (dograd) {
+            dmr = (-2*B*bworig/s^2, -2*B*bworig/s^2, 2*bworig/s)
+            dshift = x * dmr
+        }
+    }
+    else {
+        // B = zstarorig/(2*bworig) * (x-1)*(hminus + hplus/x)
+        A    = 2 * B * bworig / zstarorig
+        q    = hplus - hminus - A
+        disc = q^2 + 4*hminus*hplus
+        if (disc < 0) return(out)
+
+        x = (-q + sqrt(disc)) / (2*hminus)
+        if (x <= 0) return(out)
+
+        shift             = x - 1
+        marginal_response = zstarorig * shift
+
+        if (dograd) {
+            Fx = zstarorig/(2*bworig) * (hminus + hplus/x^2)
+            if (Fx == 0) return(out)
+
+            dx = J(1,3,0)
+            dx[1] = -(zstarorig/(2*bworig)) * (x-1) / Fx
+            dx[2] = -(zstarorig/(2*bworig)) * (x-1) / x / Fx
+            dx[3] =  1 / Fx
+
+            dshift = dx
+            dmr    = zstarorig * dshift
+        }
+    }
+
+    if (hastax) {
+        taxratio = (1-t0)/(1-t1)
+        elasticity = .
+
+        if (taxratio > 0 & taxratio != 1) {
+            L = ln(taxratio)
+            if (islog) elasticity = marginal_response / L
+            else       elasticity = ln(x) / L
+        }
+
+        out = (hminus, hplus, B, excess_mass, shift, marginal_response, elasticity)
+    }
+    else {
+        out = (hminus, hplus, B, excess_mass, shift, marginal_response)
+    }
+
+    if (dograd) {
+        G = J(6 + hastax, 3, 0)
+
+        G[1,1] = 1
+        G[2,2] = 1
+        G[3,3] = 1
+
+        G[4,1] = -2 * B / s^2
+        G[4,2] = -2 * B / s^2
+        G[4,3] =  2 / s
+
+        G[5,.] = dshift
+        G[6,.] = dmr
+
+        if (hastax) {
+            if (taxratio <= 0 | taxratio == 1) {
+                G[7,.] = J(1,3,.)
+            }
+            else {
+                if (islog) G[7,.] = dmr / L
+                else       G[7,.] = dx / (x * L)
+            }
+        }
+
+        st_matrix(Gname, G)
+    }
+
+    return(out)
+}
+
+
 		
-	void saez_transform_mata(
+/*	void saez_transform_mata(
 		real rowvector theta,
 		real scalar cutoff_orig,
 		real scalar bw_orig,
@@ -5087,6 +5305,6 @@
 
 		return(C)
 	}
-
+*/
 
 		end
