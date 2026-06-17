@@ -4377,8 +4377,23 @@
 		Vm = diag(y) - (y * y') / N
 		Vm = (Vm + Vm') / 2
 
-		AU = pinv(quadcross(GU, GU)) * GU'
-		AR = pinv(quadcross(GR, GR)) * GR'
+		real rowvector sU, sR
+		real matrix GUs, GRs
+
+		sU = sqrt(colsum(GU:^2))
+		sR = sqrt(colsum(GR:^2))
+
+		if (any(sU :<= 0) | any(sU :>= .) |
+			any(sR :<= 0) | any(sR :>= .)) {
+			st_numscalar("r(pb_model_failcode)", 104)
+			return
+		}
+
+		GUs = GU :/ sU
+		GRs = GR :/ sR
+
+		AU = diag(1 :/ sU) * pinv(GUs)
+		AR = diag(1 :/ sR) * pinv(GRs)
 
 		if (estimator == 1) {
 			/*
@@ -4488,12 +4503,39 @@
 			return
 		}
 
+		real matrix C, Vq, Vqs
+		real rowvector q, sq, qs
+		real scalar qdf
+
 		Ad = AU - Jg * AR
 		Vd = Ad * Vm * Ad'
 		Vd = (Vd + Vd') / 2
 
-		stat = (bU - g) * pinv(Vd) * (bU - g)'
-		df   = rank(Vd)
+		qdf = rows(Jg) - cols(Jg)
+		C   = nullspace(Jg')
+
+		if (cols(C) != qdf) {
+			st_numscalar("r(pb_model_failcode)", 105)
+			return
+		}
+
+		q  = (bU - g) * C
+		Vq = C' * Vd * C
+		Vq = (Vq + Vq') / 2
+
+		sq = sqrt(diagonal(Vq))'
+
+		if (any(sq :<= 0) | any(sq :>= .)) {
+			st_numscalar("r(pb_model_failcode)", 106)
+			return
+		}
+
+		qs  = q :/ sq
+		Vqs = Vq :/ (sq' * sq)
+		Vqs = (Vqs + Vqs') / 2
+
+		stat = qs * pinv(Vqs) * qs'
+		df   = qdf
 		pval = chi2tail(df, stat)
 
 		st_numscalar("r(pb_model_chi2)", stat)
