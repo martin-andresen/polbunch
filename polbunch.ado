@@ -758,6 +758,8 @@
 										`log' ///
 										`positive' ///
 										initdelta(`init')
+										
+										local delta_md=r(delta)
 									}
 									else if "`test'"=="wald" {
 										capture noisily polbunch_waldtest, ///
@@ -839,6 +841,7 @@
 							estadd scalar chi2=`chi2'
 							estadd scalar p_mod=`p_mod'
 							estadd scalar df_mod=`df'
+							if "`test'"=="minimumdistance" estadd scalar delta_md = `delta_md'
 						}
 						ereturn scalar polynomial=`polynomial'
 						ereturn scalar bandwidth=`bw'
@@ -2115,17 +2118,22 @@
 				dscale = 1
 				ds     = 1
 
-				a  = -delta * cutoff_est
-				da = -cutoff_est
-			}
-			else {
-				scale  = 1
-				s      = 1
-				dscale = 0
-				ds     = 0
+				/*
+					Original-variable transformation:
+						z0 = (1 + delta) * z
 
-				a  = ln(1 + delta) * bw_est / bw_orig
-				da = (bw_est / bw_orig) / (1 + delta)
+					In normalized coordinates x = (z-zmid)/xscale:
+						x0 = (1 + delta)*x + delta*zmid/xscale
+				*/
+				a = delta * (
+					cutoff_orig * bw_est / bw_orig
+					- cutoff_est
+				)
+
+				da = (
+					cutoff_orig * bw_est / bw_orig
+					- cutoff_est
+				)
 			}
 		}
 
@@ -3980,7 +3988,7 @@
 			grid = (
 				1e-8, 1e-6, 1e-4, 1e-3, 0.005, 0.01, 0.025,
 				0.05, 0.075, 0.10, 0.15, 0.20, 0.30, 0.50,
-				0.75, 1, 1.5, 2, 3, 5, 10, 20, 50, 100
+				0.75, 1, 1.5, 2
 			)
 		}
 		else {
@@ -3993,7 +4001,7 @@
 				-0.20, -0.15, -0.10, -0.075, -0.05, -0.025,
 				-0.01, -0.005, 0, 0.005, 0.01, 0.025, 0.05,
 				0.075, 0.10, 0.15, 0.20, 0.30, 0.50, 0.75,
-				1, 1.5, 2, 3, 5, 10, 20, 50, 100
+				1, 1.5, 2
 			)
 		}
 

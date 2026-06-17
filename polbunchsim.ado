@@ -4,10 +4,10 @@ program polbunchsim, eclass
         obs(integer 5000) cutoff(real 1) el(real 0.4) ///
         t0(real 0.2) t1(real 0.6) bw(real 0.01) ///
         bootreps(integer 500) POLynomial(integer 1) ///
-        notransform distribution(string) positive ///
+        distribution(string) opts(string) ///
         estimator(numlist integer) btype(numlist integer) ///
-        clist(string) noisily sample(string) limits(numlist) ///
-        est4limits(numlist) wald norankred]
+        clist(string) sample(string)  ///
+        est4limits(numlist) limits(numlist)]
 
     quietly {
         if "`zmin'" == "" local zmin "-."
@@ -42,6 +42,7 @@ program polbunchsim, eclass
         tempname esthold
 
         preserve
+        local anyfail = 0
 
         capture noisily polbunchgendata z, obs(`obs') cutoff(`cutoff') ///
             el(`el') t0(`t0') t1(`t1') `log' distribution(`distribution')
@@ -78,54 +79,47 @@ program polbunchsim, eclass
                         local rc = 0
 
                         if `bt' == 0 {
-                            capture noisily polbunch z `iff', cutoff(`cutoff') ///
+                            capture polbunch z `iff', cutoff(`cutoff') ///
                                 pol(`polynomial') bw(`bw') t0(`t0') t1(`t1') ///
-                                `log' estimator(`e') bootreps(0) `c' ///
-                                `noisily' `notransform' `positive' ///
-                                `uselimits' `wald' `rankred'
+                                `log' estimator(`e') vce(none) `c' ///
+                                 `uselimits' `opts'
                         }
                         else if `bt' == 1 {
-                            capture noisily polbunch z `iff', cutoff(`cutoff') ///
+                            capture  polbunch z `iff', cutoff(`cutoff') ///
                                 pol(`polynomial') bw(`bw') t0(`t0') t1(`t1') ///
-                                `log' estimator(`e') bootreps(1) `c' ///
-                                `noisily' `notransform' `positive' ///
-                                `uselimits' `wald' `rankred'
+                                `log' estimator(`e') vce(analytic) `c' ///
+                                `opts' `uselimits'  
                         }
                         else if `bt' == 2 {
-                            capture noisily bootstrap, reps(`bootreps'): ///
+                            capture bootstrap, reps(`bootreps'): ///
                                 polbunch z `iff', cutoff(`cutoff') ///
                                 pol(`polynomial') bw(`bw') t0(`t0') t1(`t1') ///
-                                `log' estimator(`e') bootreps(0) `c' ///
-                                `noisily' `notransform' `positive' ///
-                                `uselimits' `wald'  `rankred'
+                                `log' estimator(`e') vce(none) `c' ///
+                                `opts' `uselimits' 
                         }
                         else if `bt' == 3 {
-                            capture noisily polbunch z `iff', cutoff(`cutoff') ///
+                            capture polbunch z `iff', cutoff(`cutoff') ///
                                 pol(`polynomial') bw(`bw') t0(`t0') t1(`t1') ///
-                                `log' estimator(`e') bootreps(`bootreps') ///
-                                nobayes `c' `noisily' `notransform' `positive' ///
-                                `uselimits' `wald'  `rankred'
+                                `log' estimator(`e') bootreps(`bootreps') vce(bootstrap) ///
+                                 `c' `opts' `uselimits' 
                         }
                         else if `bt' == 4 {
-                            capture noisily polbunch z `iff', cutoff(`cutoff') ///
+                            capture polbunch z `iff', cutoff(`cutoff') ///
                                 pol(`polynomial') bw(`bw') t0(`t0') t1(`t1') ///
-                                `log' estimator(`e') bootreps(`bootreps') ///
-                                nozero nobayes `c' `noisily' `notransform' ///
-                                `positive' `uselimits' `wald'  `rankred'
+                                `log' estimator(`e') bootreps(`bootreps') vce(bayes) ///
+                                 `c' `opts' `uselimits'
                         }
                         else if `bt' == 5 {
-                            capture noisily polbunch z `iff', cutoff(`cutoff') ///
+                            capture  polbunch z `iff', cutoff(`cutoff') ///
                                 pol(`polynomial') bw(`bw') t0(`t0') t1(`t1') ///
-                                `log' estimator(`e') bootreps(`bootreps') ///
-                                `c' `noisily' `notransform' `positive' ///
-                                `uselimits' `wald'  `rankred'
+                                `log' estimator(`e') bootreps(`bootreps') vce(bootstrap) ///
+                                `c' `opts' `uselimits' nozero 
                         }
                         else if `bt' == 6 {
-                            capture noisily polbunch z `iff', cutoff(`cutoff') ///
+                            capture polbunch z `iff', cutoff(`cutoff') ///
                                 pol(`polynomial') bw(`bw') t0(`t0') t1(`t1') ///
-                                `log' estimator(`e') bootreps(`bootreps') ///
-                                nozero `c' `noisily' `notransform' `positive' ///
-                                `uselimits' `wald'  `rankred'
+                                `log' estimator(`e') bootreps(`bootreps') vce(bayes) ///
+                                nozero `c' `opts' `uselimits'
                         }
                         else {
                             local rc = 198
@@ -165,28 +159,64 @@ program polbunchsim, eclass
                             if `numest' == 1 {
                                 estimates store `esthold'
                             }
+                            else {
+                                /*
+                                    Retain only the coefficients originally posted
+                                    by polbunch in the combined e(b). Prefix the
+                                    original equation names by the model identifier
+                                    so that all coefficient names remain unique.
+                                */
+                                tempname this_b
+                                matrix `this_b' = e(b)
+
+                                local oldnames : colfullnames `this_b'
+                                local newnames
+                                foreach nm of local oldnames {
+                                    gettoken oldeq oldcoef : nm, parse(":")
+                                    if "`oldcoef'" == "" {
+                                        local oldcoef "`oldeq'"
+                                        local oldeq "b"
+                                    }
+                                    else {
+                                        local oldcoef = substr("`oldcoef'", 2, .)
+                                    }
+                                    local neweq = substr("`modelname'_`oldeq'", 1, 32)
+                                    local newnames `newnames' `neweq':`oldcoef'
+                                }
+                                matrix colnames `this_b' = `newnames'
+                                matrix `sim_b' = nullmat(`sim_b'), `this_b'
+                            }
                         }
 
-                        if `numest' > 1 {
-                            local elast_post = `elast'
-                            local time_post  = `time'
-                            local se_post    = `se'
-                            local p_post     = `p'
-                            local pmod_post  = `pmod'
+                        /*
+                            Quantities computed by polbunchsim, rather than
+                            coefficients estimated by polbunch, are returned as
+                            model-specific e() scalars. simulate can collect them
+                            explicitly as e(<model>_<name>).
+                        */
+                        local time_post = `time'
+                        local p_post    = `p'
+                        local pmod_post = `pmod'
+                        local se_post   = `se'
+                        local rc_post   = `rc'
 
-                            if missing(`elast_post') local elast_post = `misscode'
-                            if missing(`time_post')  local time_post  = `misscode'
-                            if missing(`se_post')    local se_post    = `misscode'
-                            if missing(`p_post')     local p_post     = `misscode'
-                            if missing(`pmod_post')  local pmod_post  = `misscode'
+                        if missing(`time_post') local time_post = `misscode'
+                        if missing(`p_post')    local p_post    = `misscode'
+                        if missing(`pmod_post') local pmod_post = `misscode'
+                        if missing(`se_post')   local se_post   = `misscode'
 
-                            matrix `sim_extra' = (`elast_post', `time_post', `se_post', `p_post', `pmod_post')
-                            matrix colnames `sim_extra' = elasticity time se p p_mod
-                            matrix coleq `sim_extra' = ///
-                                `modelname' `modelname' `modelname' `modelname' `modelname'
+                        local scalar_names `scalar_names' ///
+                            `modelname'_time `modelname'_se ///
+                            `modelname'_p `modelname'_p_mod ///
+                            `modelname'_rc
 
-                            matrix `sim_b' = nullmat(`sim_b'), `sim_extra'
-                        }
+                        local scalar_`modelname'_time  = `time_post'
+                        local scalar_`modelname'_se    = `se_post'
+                        local scalar_`modelname'_p     = `p_post'
+                        local scalar_`modelname'_p_mod = `pmod_post'
+                        local scalar_`modelname'_rc    = `rc_post'
+
+                        if `rc' local anyfail = 1
 
                         local final_bt   `bt'
                         local final_e    `e'
@@ -213,15 +243,27 @@ program polbunchsim, eclass
         if `numest' > 1 {
             capture confirm matrix `sim_b'
             if _rc {
-                ereturn scalar failed = 1
+                ereturn scalar failed  = 1
                 ereturn scalar misscode = `misscode'
+                foreach s of local scalar_names {
+                    ereturn scalar `s' = `scalar_`s''
+                }
                 ereturn local cmd "polbunchsim"
                 exit
             }
 
+            /*
+                e(b) now contains only coefficients that came from the
+                constituent polbunch calls. No timing, p-values, or other
+                simulation diagnostics are appended to it.
+            */
             ereturn post `sim_b'
 
-            ereturn scalar failed = 0
+            foreach s of local scalar_names {
+                ereturn scalar `s' = `scalar_`s''
+            }
+
+            ereturn scalar failed = `anyfail'
             ereturn scalar misscode = `misscode'
             ereturn scalar numest = `numest'
             ereturn scalar obs    = `obs'
@@ -240,122 +282,53 @@ program polbunchsim, eclass
         }
         else {
             if `final_rc' {
-                local final_time_post = `final_time'
-                if missing(`final_time_post') local final_time_post = `misscode'
+                ereturn clear
 
-                matrix `sim_b' = (`misscode', `final_time_post', `misscode', `misscode', `misscode')
-                matrix colnames `sim_b' = ///
-                    m_`final_bt'_`final_e'_`final_cval'_b:elasticity ///
-                    m_`final_bt'_`final_e'_`final_cval'_b:time ///
-                    m_`final_bt'_`final_e'_`final_cval'_b:se ///
-                    m_`final_bt'_`final_e'_`final_cval'_b:p ///
-                    m_`final_bt'_`final_e'_`final_cval'_b:p_mod
+                foreach s of local scalar_names {
+                    ereturn scalar `s' = `scalar_`s''
+                }
 
-                ereturn post `sim_b'
+                ereturn scalar failed  = 1
+                ereturn scalar rc      = `final_rc'
+                ereturn scalar misscode = `misscode'
+                ereturn scalar obs     = `obs'
+                ereturn scalar cutoff  = `cutoff'
+                ereturn scalar el      = `el'
+                ereturn scalar t0      = `t0'
+                ereturn scalar t1      = `t1'
+                ereturn scalar bw      = `bw'
+                ereturn scalar polynomial = `polynomial'
+                ereturn scalar bootreps   = `bootreps'
 
-                ereturn scalar failed    = 1
-                ereturn scalar rc        = `final_rc'
-                ereturn scalar misscode  = `misscode'
-                ereturn scalar time      = `final_time'
-                ereturn scalar sim_time  = `final_time'
-                ereturn scalar sim_p     = `misscode'
-                ereturn scalar sim_p_mod = `misscode'
-
+                ereturn local btype "`btype'"
+                ereturn local estimator "`estimator'"
+                ereturn local clist "`clist'"
                 ereturn local cmd "polbunchsim"
                 exit
             }
 
+            /*
+                Restoring the stored result restores the original polbunch
+                e(b), e(V), matrices, macros, and scalars. We then add only
+                simulation diagnostics as e() scalars; e(b) is untouched.
+            */
             estimates restore `esthold'
 
-            local escalars  : e(scalars)
-            local emacros   : e(macros)
-            local ematrices : e(matrices)
-
-            foreach s of local escalars {
-                local hold_scalar_`s' = e(`s')
+            foreach s of local scalar_names {
+                ereturn scalar `s' = `scalar_`s''
             }
 
-            foreach m of local emacros {
-                local hold_macro_`m' `"`e(`m')'"'
-            }
+            ereturn scalar failed = 0
+            ereturn scalar misscode = `misscode'
 
-            local mh 0
-            foreach M of local ematrices {
-                if !inlist("`M'", "b", "V") {
-                    local ++mh
-                    tempname hmat`mh'
-                    matrix `hmat`mh'' = e(`M')
-                    local hmat_name_`mh' "`M'"
-                }
-            }
-            local hmat_count `mh'
-
-            matrix `sim_oldb' = e(b)
-
-            capture confirm matrix e(V)
-            local hasV = (_rc == 0)
-
-            if `hasV' {
-                matrix `sim_oldV' = e(V)
-            }
-
-            local time_post = `time'
-            local p_post    = `p'
-            local pmod_post = `pmod'
-
-            if missing(`time_post')  local time_post  = `misscode'
-            if missing(`p_post')     local p_post     = `misscode'
-            if missing(`pmod_post')  local pmod_post  = `misscode'
-
-            matrix `sim_extra' = (`time_post', `p_post', `pmod_post')
-            matrix colnames `sim_extra' = ///
-                polbunchsim:time polbunchsim:p polbunchsim:p_mod
-
-            matrix `sim_newb' = `sim_oldb', `sim_extra'
-
-            if `hasV' {
-                local k_old = colsof(`sim_oldb')
-                local k_new = colsof(`sim_newb')
-
-                matrix `sim_newV' = J(`k_new', `k_new', 0)
-
-                forvalues ii = 1/`k_old' {
-                    forvalues jj = 1/`k_old' {
-                        matrix `sim_newV'[`ii', `jj'] = `sim_oldV'[`ii', `jj']
-                    }
-                }
-
-                local names : colfullnames `sim_newb'
-
-                matrix colnames `sim_newV' = `names'
-                matrix rownames `sim_newV' = `names'
-
-                ereturn post `sim_newb' `sim_newV'
-            }
-            else {
-                ereturn post `sim_newb'
-            }
-
-            foreach s of local escalars {
-                if !inlist("`s'", "rank") {
-                    capture ereturn scalar `s' = `hold_scalar_`s''
-                }
-            }
-
-            foreach m of local emacros {
-                capture ereturn local `m' `"`hold_macro_`m''"'
-            }
-
-            forvalues hh = 1/`hmat_count' {
-                local M "`hmat_name_`hh''"
-                capture ereturn matrix `M' = `hmat`hh''
-            }
-
-            ereturn scalar failed     = 0
-            ereturn scalar misscode   = `misscode'
-            ereturn scalar sim_time   = `time_post'
-            ereturn scalar sim_p      = `p_post'
-            ereturn scalar sim_p_mod  = `pmod_post'
+            /*
+                Convenient generic aliases for the one-model case.
+            */
+            ereturn scalar sim_time  = `time_post'
+            ereturn scalar sim_se    = `se_post'
+            ereturn scalar sim_p     = `p_post'
+            ereturn scalar sim_p_mod = `pmod_post'
+            ereturn scalar sim_rc    = `rc_post'
 
             ereturn scalar obs    = `obs'
             ereturn scalar cutoff = `cutoff'
@@ -367,7 +340,7 @@ program polbunchsim, eclass
             ereturn scalar bootreps   = `bootreps'
 
             ereturn local btype "`btype'"
-            ereturn scalar estimator=`estimator'
+            ereturn local estimator "`estimator'"
             ereturn local clist "`clist'"
             ereturn local cmd "polbunchsim"
         }

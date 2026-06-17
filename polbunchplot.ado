@@ -107,13 +107,17 @@ program polbunchplot
         }
 
 		cap loc MR=`cutoff_plot'+_b[bunching:marginal_response]
-		if !mi(`MR') loc mrline xline(`MR', lcolor(maroon) lpattern(longdash))
-		local linemax=max(`upper_plot',min(`xmax',`MR'))
+		if "`MR'"!="" {
+			loc mrline xline(`MR', lcolor(maroon) lpattern(longdash))
+			local linemax=max(`upper_plot',min(`xmax',`MR'))
+		}
+		else loc linemax=max(`upper_plot',`xmax')
 
         if e(estimator)==4 {
 			local h0c = _b[h0:_cons]
 			local h1c = _b[h1:_cons]
 
+			loc linemax=min(`linemax',`h0c'*(`upper_plot'-`lower_plot')/(`h1c'-`h0c')+`lower_plot')
 			local htrap `h0c' + ///
 				((`h1c' - `h0c') / (`upper_plot' - `lower_plot')) * ///
 				(x - `lower_plot')
