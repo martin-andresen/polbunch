@@ -503,8 +503,7 @@
 						local dstart = scalar(dstart)
 						} 
 						else local dstart=0
-							
-							noi di `dstart'
+					
 							
 						//BOOTSTRAP SETUP
 						if inlist("`vce'","bootstrap","bayes") {
@@ -4513,14 +4512,48 @@
 		Vd = Ad * Vm * Ad'
 		Vd = (Vd + Vd') / 2
 
-		qdf = rows(Jg) - cols(Jg)
-		C   = nullspace(Jg')
+		real matrix Jgs, Uj, Vtj
+		real colvector sj
+		real rowvector scaleJ
+		real scalar rankJ
+
+		/*
+			Column scaling improves the SVD numerically but does not alter
+			the column space of Jg.
+		*/
+		scaleJ = sqrt(colsum(Jg:^2))
+
+		if (any(scaleJ :<= 0) | any(scaleJ :>= .)) {
+			st_numscalar("r(pb_model_failcode)", 105)
+			return
+		}
+
+		Jgs = Jg :/ scaleJ
+
+		/*
+			Full SVD is needed because the thin SVD would return only
+			cols(Jg) left singular vectors and omit the orthogonal complement.
+		*/
+		fullsvd(Jgs, Uj, sj, Vtj)
+
+		rankJ = rank(Jgs)
+		qdf  = rows(Jg) - rankJ
+
+		if (rankJ != cols(Jg) | qdf <= 0) {
+			st_numscalar("r(pb_model_failcode)", 105)
+			return
+		}
+
+		/*
+			The last qdf columns of Uj span the left null space:
+				C' * Jg = 0.
+		*/
+		C = Uj[., (rankJ + 1)..rows(Jg)]
 
 		if (cols(C) != qdf) {
 			st_numscalar("r(pb_model_failcode)", 105)
 			return
 		}
-
 		q  = (bU - g) * C
 		Vq = C' * Vd * C
 		Vq = (Vq + Vq') / 2
