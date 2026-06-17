@@ -1170,8 +1170,8 @@
 				`Btype2', ///
 				`zlexcl', ///
 				`zhexcl', ///
-				`zhexclest', ///
-				`zlexclest' ///
+				`zlexclest', ///
+				`zhexclest' ///
 			)
 
 			matrix `bnew' = b_bunchcalc
