@@ -1,4 +1,4 @@
-				*! polbunch version date 20253001
+				*! polbunch version date 20260618
 				* Author: Martin Eckhoff Andresen
 				* This program is part of the polbunch package.
 				
@@ -603,6 +603,8 @@
 										high(`H') ///
 										zlexcl(`zL_excl_orig') ///
 										zhexcl(`zH_excl_orig') ///
+										zlexclest(`zL_excl_est') ///
+										zhexclest(`zH_excl_est') ///
 										`log' ///
 										`constant' ///
 										`taxopts' ///
@@ -852,6 +854,15 @@
 						ereturn matrix table=`table'
 						ereturn local binname "`z'"
 						ereturn scalar bw=`bw'
+						ereturn scalar cutoff_orig = `cutoff_orig'
+						ereturn scalar cutoff_est  = `cutoff_est'
+						ereturn scalar bw_orig     = `bw_orig'
+						ereturn scalar bw_est      = `bw_est'
+						ereturn scalar xscale      = `xscale'
+						ereturn scalar zL_excl_est = `zL_excl_est'
+						ereturn scalar zH_excl_est = `zH_excl_est'
+						ereturn local zname = "`z'"
+
 						if "`vce'"=="analytic"&"`transform'"=="notransform" estadd local vcetype "analytic"
 						if "`vce'"=="analytic"&"`transform'"=="" estadd local vcetype "delta method"
 						else if "`vce'"=="bootstrap" estadd local vcetype "binned bootstrap"
@@ -1071,6 +1082,8 @@
 				XSCALE(real) ///
 				ZLEXCL(real) ///
 				ZHEXCL(real) ///
+				ZLEXCLEST(real) ///
+				ZHEXCLEST(real) ///
 				LOW(integer) ///
 				HIGH(integer) ///
 				[ LOG CONSTANT T0(numlist min=1 max=1) T1(numlist min=1 max=1) NOGRAD nonormalize ZBAR(real 0) MASSOBS(real 0) BMODEL ]
@@ -1153,7 +1166,9 @@
 				`massobs', ///
 				`Btype2', ///
 				`zlexcl', ///
-				`zhexcl' ///
+				`zhexcl', ///
+				`zhexclest', ///
+				`zlexclest' ///
 			)
 
 			matrix `bnew' = b_bunchcalc
@@ -1310,6 +1325,8 @@
 				ereturn scalar t1 = `t1'
 			}
 		end
+		
+		
 	cap program drop saez_transform
 	program define saez_transform, eclass
 		version 16.0
@@ -1621,7 +1638,7 @@
 			zbar(real) ///
 			[ nonormalize log ]
 
-		local normalized0 = ("`nonormalize'" == "")
+		local normalized0 = ("`normalize'" != "nonormalize")
 		local islog0      = ("`log'" != "")
 
 		mata: polbunch_modeldiff_mata( ///
@@ -1665,7 +1682,7 @@
 			ZBAR(real) ///
 			[ NONORMALIZE LOG ]
 
-		local normalized0 = ("`nonormalize'" == "")
+		local normalized0 = ("`normalize'" != "nonormalize")
 		local islog0      = ("`log'" != "")
 
 		mata: polbunch_modeltest_mata( ///
@@ -1807,7 +1824,7 @@
 		matrix `b' = e(b)
 		matrix `V' = e(V)
 
-		local normalized0 = ("`nonormalize'" == "")
+		local normalized0 = ("`normalize'" != "nonormalize")
 		local islog0      = ("`log'" != "")
 		local positive0   = ("`positive'" != "")
 
@@ -3022,7 +3039,9 @@
 			real scalar Hstar_obs,
 			real scalar Btype2,
 			real scalar zL_excl_orig,
-			real scalar zH_excl_orig
+			real scalar zH_excl_orig,
+			real scalar zL_excl_est,
+			real scalar zH_excl_est
 		)
 		{
 			struct hcoef_out scalar h1
@@ -3765,7 +3784,7 @@
 			islog,
 			1
 		)
-
+		
 		R = bmodel_row23(
 			delta,
 			cutoff_orig,
@@ -3778,7 +3797,7 @@
 			islog,
 			zbar_est
 		)
-
+	
 		q = J(Kb + 1, 1, .)
 		q[1..Kb, 1] = (gamma - hmap.gamma)'
 		q[Kb+1, 1] = B - beta * R'

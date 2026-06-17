@@ -1,4 +1,4 @@
-*! polbunchplot version date 20241210
+*! polbunchplot version date 20260617
 * Author: Martin Eckhoff Andresen
 * This program is part of the polbunch package.
 
@@ -39,30 +39,23 @@ program polbunchplot
 
             Rename the stored z column to z_est and create z_orig for plotting.
         */
-        local zcol "`e(binname)'"
-        rename `zcol' `z_est'
+		local zcol "`e(binname)'"
+		rename `zcol' `z_est'
 
-        if "`e(normalize)'" == "nonormalize" {
-            gen double `z_orig' = `z_est'
+		if "`e(normalize)'" == "nonormalize" {
+			gen double `z_orig' = `z_est'
+		}
+		else {
+			gen double `z_orig' = e(cutoff_orig) + ///
+				(`z_est' - e(cutoff_est)) * e(xscale)
+		}
 
-            local cutoff_plot = e(cutoff)
-            local lower_plot  = e(lower_limit)
-            local upper_plot  = e(upper_limit)
-            local bw_plot     = e(bw)
+		local cutoff_plot = e(cutoff_orig)
+		local lower_plot  = e(lower_limit)
+		local upper_plot  = e(upper_limit)
+		local bw_plot     = e(bw_orig)
 
-            local xarg "x"
-        }
-        else {
-            gen double `z_orig' = e(cutoff) + e(bw)*`z_est'
-
-            local cutoff_plot = e(cutoff)
-            local lower_plot  = e(lower_limit)
-            local upper_plot  = e(upper_limit)
-            local bw_plot     = e(bw)
-
-            local xarg "((x - e(cutoff))/e(bw))"
-        }
-
+		local xarg "(e(cutoff_est) + (x - e(cutoff_orig))/e(xscale))"
         /*
             Interpret limit() in original scale.
         */
