@@ -496,14 +496,16 @@
 							scalar dstart = 0.05
 						}
 
-						if dstart > 2 {
-							scalar dstart = 2
+						if dstart > 0.5 {
+							scalar dstart = 0.5
 						}
-
+							
 						local dstart = scalar(dstart)
 						} 
 						else local dstart=0
-									
+							
+							noi di `dstart'
+							
 						//BOOTSTRAP SETUP
 						if inlist("`vce'","bootstrap","bayes") {
 							tempname p yorig
