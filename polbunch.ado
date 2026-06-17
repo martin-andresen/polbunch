@@ -418,10 +418,11 @@
 						if inlist(`estimator',2,3) { //STARTING VALUES
 							tempname h0coefs h1coefs bu
 							mat `bu'=e(b)
-							mat `h0coefs'=`bu'[1,1..`polynomial']
-							mat `h1coefs'=`bu'[1,`=`polynomial'+1'..`=2*(`polynomial'+1)']
-											
-			/*
+							local Kb = `polynomial' + 1
+
+							matrix `h0coefs' = `bu'[1, 1..`Kb']
+							matrix `h1coefs' = `bu'[1, `=`Kb'+1'..`=2*`Kb'']
+										/*
 							Simple delta initializer from one beta/gamma coefficient relation.
 							h0coef/h1coef ordering:
 								beta_1 ... beta_K beta_0
@@ -2134,6 +2135,15 @@
 					cutoff_orig * bw_est / bw_orig
 					- cutoff_est
 				)
+			}
+			else {
+				scale  = 1
+				s      = 1
+				dscale = 0
+				ds     = 0
+
+				a  = ln(1 + delta) * bw_est / bw_orig
+				da = (bw_est / bw_orig) / (1 + delta)
 			}
 		}
 
