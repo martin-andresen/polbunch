@@ -340,7 +340,7 @@ program polbunchsim, eclass
             ereturn scalar bootreps   = `bootreps'
 
             ereturn local btype "`btype'"
-            ereturn local estimator "`estimator'"
+            ereturn scalar estimator=`estimator'
             ereturn local clist "`clist'"
             ereturn local cmd "polbunchsim"
         }

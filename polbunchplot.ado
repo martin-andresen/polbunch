@@ -11,6 +11,10 @@ program define polbunchplot
 
     quietly {
 		
+		local islog = 0
+		capture local islog = e(islog)
+		if missing(`islog') local islog = 0
+		
         local nmodels : word count `models'
 
         /*
@@ -217,65 +221,75 @@ program define polbunchplot
                     max(`upper_plot', min(`xmax', `MR'))
             }
 
-            if e(estimator) == 4 {
+           if e(estimator) == 4 {
 
-                local h0c = _b[h0:_cons]
-                local h1c = _b[h1:_cons]
+				local h0c = _b[h0:_cons]
+				local h1c = _b[h1:_cons]
 
-                local linemax = min( ///
-                    `linemax', ///
-                    `h0c'*(`upper_plot' - `lower_plot') / ///
-                    (`h1c' - `h0c') + `lower_plot' ///
-                )
+				local shift = _b[bunching:shift]
+				local mr    = _b[bunching:marginal_response]
 
-                local htrap ///
-                    `h0c' + ///
-                    ((`h1c' - `h0c') / ///
-                    (`upper_plot' - `lower_plot')) * ///
-                    (x - `lower_plot')
+				local islog = 0
+				capture local islog = e(islog)
+				if missing(`islog') local islog = 0
 
-                twoway ///
-                    (bar freq `z_orig', ///
-                        barwidth(`bw_plot') ///
-                        color(navy%50) ///
-                        base(0)) ///
-                    (function y=`h0c', ///
-                        range(`xmin' `lower_plot') ///
-                        lcolor(maroon) ///
-                        lpattern(solid)) ///
-                    (function y=`htrap', ///
-                        range(`lower_plot' `linemax') ///
-                        lcolor(maroon) ///
-                        lpattern(shortdash)) ///
-                    (function y=`h1c', ///
-                        range(`upper_plot' `xmax') ///
-                        lcolor(navy) ///
-                        lpattern(solid)), ///
-                    xline(`cutoff_plot', ///
-                        lcolor(maroon) ///
-                        lpattern(dash)) ///
-                    xline(`lower_plot', ///
-                        lcolor(black) ///
-                        lpattern(dash)) ///
-                    xline(`upper_plot', ///
-                        lcolor(black) ///
-                        lpattern(dash)) ///
-                    `mrline' ///
-                    graphregion(color(white)) ///
-                    plotregion(lcolor(black)) ///
-                    ytitle("Frequency") ///
-                    xtitle("`zcol'") ///
-                    legend( ///
-                        label(1 "Frequency") ///
-                        label(2 "Estimated h0") ///
-                        label(4 "Estimated h1") ///
-                        cols(3) ///
-                        order(1 2 4) ///
-                        pos(6) ///
-                    ) ///
-                    `yscale' ///
-                    `graph_opts'
-            }
+				local x0 = `cutoff_plot'
+				local x1 = `cutoff_plot' + `mr'
+
+				local y0 = `h0c'
+
+				if `islog' == 1 {
+					local y1 = `h1c'
+				}
+				else {
+					local y1 = `h1c'/(1 + `shift')
+				}
+
+				local linemax = min(`x1', `xmax')
+
+				local hsaez ///
+					`y0' + ///
+					((`y1' - `y0') / (`x1' - `x0')) * ///
+					(x - `x0')
+
+				twoway ///
+					(bar freq `z_orig', ///
+						barwidth(`bw_plot') ///
+						color(navy%50) ///
+						base(0)) ///
+					(function y=`h0c', ///
+						range(`xmin' `lower_plot') ///
+						lcolor(maroon) ///
+						lpattern(solid)) ///
+					(function y=`h0c', ///
+						range(`lower_plot' `cutoff_plot') ///
+						lcolor(maroon) ///
+						lpattern(shortdash)) ///
+					(function y=`hsaez', ///
+						range(`cutoff_plot' `linemax') ///
+						lcolor(black) ///
+						lpattern(solid)) ///
+					(function y=`h1c', ///
+						range(`cutoff_plot' `upper_plot') ///
+						lcolor(navy) ///
+						lpattern(shortdash)) ///
+					(function y=`h1c', ///
+						range(`upper_plot' `xmax') ///
+						lcolor(navy) ///
+						lpattern(solid)), ///
+					xline(`cutoff_plot', lcolor(maroon) lpattern(dash)) ///
+					xline(`lower_plot', lcolor(black) lpattern(dash)) ///
+					xline(`upper_plot', lcolor(black) lpattern(dash)) ///
+					`mrline' ///
+					graphregion(color(white)) ///
+					plotregion(lcolor(black)) ///
+					ytitle("Frequency") ///
+					xtitle("`zcol'") ///
+					legend(label(1 "Frequency") label(2 "Estimated h0") ///
+						   label(6 "Estimated h1") label(4 "Implied counterfactual") cols(4) order(1 2 6 4) pos(6)) ///
+					`yscale' ///
+					`graph_opts'
+			}
             else {
 
                 twoway ///

@@ -72,7 +72,7 @@
 						}
 						
 						
-						
+
 						if `estimator'==4 loc polynomial=0
 
 						tempvar touse
@@ -87,6 +87,8 @@
 								exit 301
 							}
 						}
+						local grad = cond("`vce'"=="analytic","","nograd")
+						
 						if `bootreps'<=1 {
 							noi di as error "Option bootreps can only take an integer >1 (binned bootstrap)."
 							exit 301
@@ -585,8 +587,7 @@
 							
 							////TRANSFORM ESTIMATES
 							if "`transform'"!="notransform" {
-								if inlist("`vce'","bayes","bootstrap","none") loc nograd nograd
-								noi summarize `y' if `bunch' > 0, meanonly
+								summarize `y' if `bunch' > 0, meanonly
 								local Hstar_obs = r(sum)
 								local taxopts
 								if "`t0'" != "" & "`t1'" != "" {
@@ -617,7 +618,7 @@
 										`bmodel'			
 								}
 								else {
-										saez_transform, zstarorig(`cutoff_orig') bworig(`bw_orig') t0(`t0') t1(`t1') `log' `grad'
+									saez_transform, zstarorig(`cutoff_orig') bworig(`bw_orig') t0(`t0') t1(`t1') `log' `grad'
 									}
 								}
 								
@@ -632,8 +633,8 @@
 								}
 								
 								
-								//TEST
-								if `dotest' {
+								//IF TESTING: ALSO ESTIMATE UNRESTRICTED MODEL
+								if `dotest'&`estimator'!=4 {
 									bunch_profile `y' `z' `side' `bunch', ///
 										estimator(0) k(`polynomial') ///
 										cutoff_orig(`cutoff_orig') bw_orig(`bw_orig') ///
@@ -704,23 +705,29 @@
 										corr _all, cov
 										matrix `VD' = r(C)
 									}
-									else {
+									else if `estimator'!=4 {
 										clear
 										svmat `b0s'
 										corr _all, cov
 										matrix `V0' = r(C)
 									}
+
 								}
 							}
-								
-							//TEST RESTRICTIONS
 							
 
+								
+							//TEST RESTRICTIONS
+			
 							if `dotest' {
+								if `estimator'==4 { //saez: Post main model to b0 V0
+										mat `b0' = `bmain'
+										mat `V0' = `Vmain'
+
+									}
 								local testname=cond("`test'"=="wald","Wald test",cond("`test'"=="minimumdistance","Minumum-distance test","Hausman test"))
 								
-								if `estimator'!=4 {
-									if inlist("`test'","wald","minimumdistance") {
+								if inlist("`test'","wald","minimumdistance") {
 										local nm: colnames `b0'
 										local neq: coleq `b0'
 										mat colnames `V0'=`nm'
@@ -729,8 +736,11 @@
 										mat roweq `V0'=`neq'
 										
 										ereturn post `b0' `V0'
+										ereturn local properties "b V"
 									}
+									
 								
+								if `estimator'!=4 {
 									if "`test'"=="minimumdistance" {
 									local init 0.05
 									capture local init = _b[bunching:shift]
@@ -790,7 +800,8 @@
 									}
 								}
 								else { //Saez: Simple Wald test of h0 vs h1
-									capture test _b[h0:_cons]=_b[h1:_cons]
+									if "`log'"=="" capture test _b[h1:_cons] - _b[h0:_cons] - (`bw_orig'/`cutoff_orig')*_b[bunching:number_bunchers] = 0
+									else capture test _b[h1:_cons] = _b[h0:_cons]
 								}
 
 								local test_rc = _rc
@@ -823,12 +834,13 @@
 						//POST RESULTS
 						restore
 						if "`vce'"!="none" {
-								local nm: colnames `bmain'
-								local neq: coleq `bmain'
-								mat colnames `Vmain'=`nm'
-								mat rownames `Vmain'=`nm'
-								mat coleq `Vmain'=`neq'
-								mat roweq `Vmain'=`neq'
+							local nm: colnames `bmain'
+							local neq: coleq `bmain'
+							mat colnames `Vmain'=`nm'
+							mat rownames `Vmain'=`nm'
+							mat coleq `Vmain'=`neq'
+							mat roweq `Vmain'=`neq'
+							
 							eret post `bmain' `Vmain', esample(`touse') depname(freq) obs(`N')
 						}
 						else eret post `bmain', esample(`touse') obs(`N') depname(freq)
@@ -860,6 +872,7 @@
 						ereturn scalar zL_excl_est = `zL_excl_est'
 						ereturn scalar zH_excl_est = `zH_excl_est'
 						ereturn local zname = "`z'"
+						ereturn local transform="`transform'"
 
 						if "`vce'"=="analytic"&"`transform'"=="notransform" estadd local vcetype "analytic"
 						if "`vce'"=="analytic"&"`transform'"=="" estadd local vcetype "delta method"
@@ -1053,9 +1066,11 @@
 			ereturn scalar normalized  = `normalized0'
 			ereturn scalar islog       = `islog0'
 			ereturn scalar positive = `positive0'
+			
 
 			if `dovar0' {
 				ereturn local vcetype "Analytic"
+				ereturn local properties "b V"
 
 				matrix `Gstack'  = r_G_stack
 				matrix `mustack' = r_mu_stack
@@ -1084,7 +1099,7 @@
 				ZHEXCLEST(real) ///
 				LOW(integer) ///
 				HIGH(integer) ///
-				[ LOG CONSTANT T0(numlist min=1 max=1) T1(numlist min=1 max=1) NOGRAD nonormalize ZBAR(real 0) MASSOBS(real 0) BMODEL ]
+				[ LOG CONSTANT T0(numlist min=1 max=1) T1(numlist min=1 max=1) nograd nonormalize ZBAR(real 0) MASSOBS(real 0) bmodel ]
 
 				loc z `varlist'
 				
@@ -1292,7 +1307,8 @@
 				}
 
 				ereturn matrix G = `Gnew'
-				ereturn local vcetype "Delta method"
+				ereturn local vcetype "delta method"
+				ereturn local properties "b V"
 			}
 			else {
 				if `has_esample' {
@@ -1324,176 +1340,13 @@
 			}
 		end
 		
-/*		
-	cap program drop saez_transform
-	program define saez_transform, eclass
-		version 16.0
 
-		syntax , ///
-			CUTOFFORIG(real) ///
-			BWORIG(real) ///
-			ZLEXCL(real) ///
-			ZHEXCL(real) ///
-			[ LOG T0(numlist min=1 max=1) T1(numlist min=1 max=1) NOGRAD ]
-
-		if "`t0'" != "" {
-			local t0 : word 1 of `t0'
-		}
-		if "`t1'" != "" {
-			local t1 : word 1 of `t1'
-		}
-
-		local hastax = ("`t0'" != "" & "`t1'" != "")
-
-		if !`hastax' {
-			local t0 = 0
-			local t1 = 0
-		}
-
-		capture confirm matrix e(b)
-		if _rc {
-			di as err "e(b) not found"
-			exit 301
-		}
-
-		tempname theta Vtheta bnew Gnew Vnew
-		matrix `theta' = e(b)
-
-		if colsof(`theta') != 3 {
-			di as err "saez_transform expects raw theta = (h0:_cons, h1:_cons, bunching:B)"
-			exit 503
-		}
-
-		local dograd = 0
-		if "`nograd'" == "" {
-			capture confirm matrix e(V)
-			if !_rc {
-				matrix `Vtheta' = e(V)
-				local dograd = 1
-			}
-		}
-
-		local islog = ("`log'" != "")
-
-		tempvar touse
-		capture gen byte `touse' = e(sample)
-		local has_esample = !_rc
-
-		mata: saez_transform_mata( ///
-			st_matrix("`theta'"), ///
-			`cutofforig', ///
-			`bworig', ///
-			`zlexcl', ///
-			`zhexcl', ///
-			`islog', ///
-			`hastax', ///
-			`t0', ///
-			`t1', ///
-			`dograd' ///
-		)
-
-		matrix `bnew' = b_saezcalc
-		local hasresp = scalar(b_saezcalc_hasresp)
-		
-		if !`hasresp' {
-		 noi di as text "Note: Saez response not reported because the trapezoid response equation has no real solution. " ///
-						"The estimated bunching mass is too large relative to h0, h1, and the excluded-region width."
-		}
-
-		if `dograd' {
-			matrix `Gnew' = G_saezcalc
-
-			if colsof(`Gnew') != colsof(`theta') {
-				di as err "conformability error: colsof(G) != colsof(e(b))"
-				exit 503
-			}
-
-			matrix `Vnew' = `Gnew' * `Vtheta' * `Gnew''
-		}
-
-		local cnames _cons _cons number_bunchers excess_mass
-
-		if `hasresp' {
-			local cnames `cnames' shift marginal_response
-
-			if `hastax' {
-				local cnames `cnames' elasticity
-			}
-		}
-		else {
-			noi di as text "Note: Could not solve Saez trapezoid response equation."
-		}
-
-		local eqnames h0 h1 bunching bunching
-
-		if `hasresp' {
-			local eqnames `eqnames' bunching bunching
-
-			if `hastax' {
-				local eqnames `eqnames' bunching
-			}
-		}
-
-		if wordcount("`cnames'") != colsof(`bnew') {
-			di as err "internal error: coefficient names do not match transformed Saez b"
-			di as err "number of names = " wordcount("`cnames'")
-			di as err "colsof(b)       = " colsof(`bnew')
-			exit 503
-		}
-
-		matrix colnames `bnew' = `cnames'
-		matrix coleq    `bnew' = `eqnames'
-
-		if `dograd' {
-			matrix rownames `Vnew' = `cnames'
-			matrix colnames `Vnew' = `cnames'
-			matrix roweq    `Vnew' = `eqnames'
-			matrix coleq    `Vnew' = `eqnames'
-
-			matrix rownames `Gnew' = `cnames'
-			matrix roweq    `Gnew' = `eqnames'
-
-			if `has_esample' {
-				ereturn post `bnew' `Vnew', esample(`touse')
-			}
-			else {
-				ereturn post `bnew' `Vnew'
-			}
-
-			ereturn matrix G = `Gnew'
-			ereturn local vcetype "Delta method"
-		}
-		else {
-			if `has_esample' {
-				ereturn post `bnew', esample(`touse')
-			}
-			else {
-				ereturn post `bnew'
-			}
-		}
-
-		ereturn local cmd "saez_transform"
-		ereturn scalar estimator = 4
-		ereturn scalar cutoff_orig = `cutofforig'
-		ereturn scalar bw_orig = `bworig'
-		ereturn scalar zL_excl_orig = `zlexcl'
-		ereturn scalar zH_excl_orig = `zhexcl'
-		ereturn scalar islog = `islog'
-		ereturn scalar hastax = `hastax'
-		ereturn scalar hasresp = `hasresp'
-
-		if `hastax' {
-			ereturn scalar t0 = `t0'
-			ereturn scalar t1 = `t1'
-		}
-	end
-*/
 capture program drop saez_transform
 program define saez_transform, eclass
     version 16.0
 
     syntax , ZSTAROrig(numlist max=1) BWOrig(numlist max=1) ///
-        [T0(numlist max=1) T1(numlist max=1) LOG NOGRAD]
+        [T0(numlist max=1) T1(numlist max=1) log nograd]
 
     tempname b0 V0 theta Vtheta b G V
 
@@ -1502,9 +1355,10 @@ program define saez_transform, eclass
         di as err "e(b) must contain theta=(h0:_cons,h1:_cons,B) in columns 1..3"
         exit 503
     }
-
+	
+	noi di "`dograd'"
     local islog  = ("`log'" != "")
-    local dograd = ("`nograd'" == "")
+    local dograd = ("`grad'" != "nograd")
 
     local zstarorig : word 1 of `zstarorig'
     local bworig    : word 1 of `bworig'
@@ -1537,15 +1391,11 @@ program define saez_transform, eclass
     matrix colnames `theta' = h0:_cons h1:_cons bunching:number_bunchers
 
     if (`dograd') {
-        capture matrix `V0' = e(V)
+        capture matrix `Vtheta' = e(V)
         if (_rc) {
             di as err "e(V) not found; specify nograd"
             exit 111
         }
-
-        matrix `Vtheta' = `V0'[1..3,1..3]
-        matrix rownames `Vtheta' = h0:_cons h1:_cons bunching:number_bunchers
-        matrix colnames `Vtheta' = h0:_cons h1:_cons bunching:number_bunchers
     }
 
     mata: st_matrix("`b'", saez_transform( ///
@@ -1587,7 +1437,8 @@ program define saez_transform, eclass
         ereturn scalar t1 = `t1'
     }
 
-    ereturn local cmd "saez_transform_e"
+    ereturn local cmd "saez_transform"
+	ereturn local properties "b V"
     ereturn display
 end
 
@@ -1704,7 +1555,8 @@ cap program drop bunch_saez
 
 		if `dovar0' {
 			ereturn local vcetype "Analytic"
-
+			ereturn local properties "b V"
+			
 			matrix `Gstack' = r_G_saez
 			matrix `mustack' = r_mu_saez
 			matrix `ystack' = r_ystack_saez
@@ -3101,35 +2953,6 @@ cap program drop bunch_saez
 			return(hi * xscale)
 		}
 
-		/*
-		real scalar eresp(real scalar B, real scalar tau, real matrix cf, real scalar bw, real scalar xscale)
-		{
-			real matrix cfpoly, integral, roots, realroots, out
-
-			// Input cf is [b1, b2, ..., bK, b0]. Mata poly* functions need [b0, b1, ..., bK].
-			if (cols(cf) == 1) {
-				cfpoly = cf
-			}
-			else {
-				cfpoly = cf[cols(cf)], cf[1..cols(cf)-1]
-			}
-
-			if (cols(cfpoly) == 1) {
-				if (cfpoly[1] <= 0) return(.)
-				return(((B * bw) / cfpoly[1]) * xscale)
-			}
-
-			integral = polyinteg(cfpoly, 1)
-			integral[1] = -polyeval(integral, tau) - B*bw
-
-			roots = polyroots(integral)
-			realroots = Re(select(roots, Im(roots) :== 0))
-			out = sort(select(realroots, realroots :> tau)', 1)'
-
-			if (cols(out) == 0) return(.)
-			else return((out[1] - tau) * xscale)
-		}
-		*/
 
 
 		void bunch_transform(
