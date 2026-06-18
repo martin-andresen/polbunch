@@ -184,11 +184,6 @@
 							local L = real("`L'")
 							local H = real("`H'")
 						}
-						
-						if `estimator' == 4 & `H' == 0 {
-							noi di as text "Note: estimator(4) with no excluded bins above the cutoff uses little or no h1 information in the raw excess-mass estimate, unlike the classic Saez trapezoid estimator."
-						}
-						
 
 						tempvar zleft zright relbin crossbin edgehit inbunch
 
