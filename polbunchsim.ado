@@ -135,8 +135,11 @@ program polbunchsim, eclass
                         local elast = .
                         local se    = .
                         local p     = .
-                        local pmod  = .
                         local novar = 1
+                        foreach _tt in wald minimumdistance hausman {
+                            local chi2_`_tt' = .
+                            local p_`_tt'    = .
+                        }
 
                         if `rc' == 0 {
                             capture local elast = _b[bunching:elasticity]
@@ -153,8 +156,12 @@ program polbunchsim, eclass
                                 }
                             }
 
-                            capture local pmod = e(p_mod)
-                            if _rc local pmod = .
+                            foreach _tt in wald minimumdistance hausman {
+                                capture local chi2_`_tt' = e(chi2_`_tt')
+                                if _rc local chi2_`_tt' = .
+                                capture local p_`_tt' = e(p_`_tt')
+                                if _rc local p_`_tt' = .
+                            }
 
                             if `numest' == 1 {
                                 estimates store `esthold'
@@ -196,25 +203,37 @@ program polbunchsim, eclass
                         */
                         local time_post = `time'
                         local p_post    = `p'
-                        local pmod_post = `pmod'
                         local se_post   = `se'
                         local rc_post   = `rc'
 
                         if missing(`time_post') local time_post = `misscode'
                         if missing(`p_post')    local p_post    = `misscode'
-                        if missing(`pmod_post') local pmod_post = `misscode'
                         if missing(`se_post')   local se_post   = `misscode'
 
+                        foreach _tt in wald minimumdistance hausman {
+                            local chi2_`_tt'_post = `chi2_`_tt''
+                            local p_`_tt'_post    = `p_`_tt''
+                            if missing(`chi2_`_tt'_post') local chi2_`_tt'_post = `misscode'
+                            if missing(`p_`_tt'_post')    local p_`_tt'_post    = `misscode'
+                        }
+
                         local scalar_names `scalar_names' ///
-                            `modelname'_time `modelname'_se ///
-                            `modelname'_p `modelname'_p_mod ///
+                            `modelname'_time `modelname'_se `modelname'_p ///
+                            `modelname'_chi2_wald `modelname'_p_wald ///
+                            `modelname'_chi2_minimumdistance `modelname'_p_minimumdistance ///
+                            `modelname'_chi2_hausman `modelname'_p_hausman ///
                             `modelname'_rc
 
-                        local scalar_`modelname'_time  = `time_post'
-                        local scalar_`modelname'_se    = `se_post'
-                        local scalar_`modelname'_p     = `p_post'
-                        local scalar_`modelname'_p_mod = `pmod_post'
-                        local scalar_`modelname'_rc    = `rc_post'
+                        local scalar_`modelname'_time             = `time_post'
+                        local scalar_`modelname'_se               = `se_post'
+                        local scalar_`modelname'_p                = `p_post'
+                        local scalar_`modelname'_chi2_wald        = `chi2_wald_post'
+                        local scalar_`modelname'_p_wald           = `p_wald_post'
+                        local scalar_`modelname'_chi2_minimumdistance = `chi2_minimumdistance_post'
+                        local scalar_`modelname'_p_minimumdistance   = `p_minimumdistance_post'
+                        local scalar_`modelname'_chi2_hausman     = `chi2_hausman_post'
+                        local scalar_`modelname'_p_hausman        = `p_hausman_post'
+                        local scalar_`modelname'_rc               = `rc_post'
 
                         if `rc' local anyfail = 1
 
@@ -324,11 +343,16 @@ program polbunchsim, eclass
             /*
                 Convenient generic aliases for the one-model case.
             */
-            ereturn scalar sim_time  = `time_post'
-            ereturn scalar sim_se    = `se_post'
-            ereturn scalar sim_p     = `p_post'
-            ereturn scalar sim_p_mod = `pmod_post'
-            ereturn scalar sim_rc    = `rc_post'
+            ereturn scalar sim_time            = `time_post'
+            ereturn scalar sim_se              = `se_post'
+            ereturn scalar sim_p               = `p_post'
+            ereturn scalar sim_chi2_wald       = `chi2_wald_post'
+            ereturn scalar sim_p_wald          = `p_wald_post'
+            ereturn scalar sim_chi2_minimumdistance = `chi2_minimumdistance_post'
+            ereturn scalar sim_p_minimumdistance    = `p_minimumdistance_post'
+            ereturn scalar sim_chi2_hausman    = `chi2_hausman_post'
+            ereturn scalar sim_p_hausman       = `p_hausman_post'
+            ereturn scalar sim_rc              = `rc_post'
 
             ereturn scalar obs    = `obs'
             ereturn scalar cutoff = `cutoff'
