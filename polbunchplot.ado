@@ -640,8 +640,9 @@ program define polbunchplot
                 exit 498
             }
 
+            local model_label = upper(substr("`model'",1,1)) + substr("`model'",2,.)
             local legend_order ///
-                `legend_order' `legendplot' "`model'"
+                `legend_order' `legendplot' "`model_label'"
         }
 
         /*
@@ -664,6 +665,8 @@ program define polbunchplot
                     lpattern(dash))
         }
 
+        local legend_cols = min(`nmodels' + 1, 5)
+
         twoway ///
             `plots', ///
             xline(`cutoff_first', ///
@@ -677,7 +680,7 @@ program define polbunchplot
             xtitle("`zcol_first'") ///
             legend( ///
                 order(`legend_order') ///
-                cols(2) ///
+                cols(`legend_cols') ///
                 pos(6) ///
             ) ///
             `yscale' ///

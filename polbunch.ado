@@ -21,13 +21,11 @@
 					constant ///
 					nodots /// suppress dots for bootstrap progress
 					test(string) ///
-					nosmallsample ///
-					nobayes ///
 					nozero ///
-					saveunres(string) ///
 					Bmodel ///
-					wald ///
 					norankred ///
+					NOBias ///
+					NOITERate ///
 					]
 					
 					 quietly {
@@ -58,16 +56,20 @@
 						
 						if "`test'"=="" {
 							if inlist(`estimator',1,4) loc test wald
-							else loc test hausman
+							else loc test all
 						}
 						else {
-							if !inlist("`test'","none","minimumdistance","wald","hausman","all") {
+							if !inlist("`test'","none","minimumdistance","wald","hausman","all","forceall") {
 								noi di as error "Test() can only take wald, minimumdistance, hausman,"all" or none."
 								exit 301
 							}
-							if "`test'"!="wald" & inlist(`estimator',1,4) {
+							if "`test'"!="wald" & "`test'"!="all" & inlist(`estimator',1,4) {
 								noi di as error "Only test(wald) supported for estimator 1 and 4 - simple linear restrictions."
 								exit 301
+							}
+							if "`test'"=="wald" & !inlist(`estimator',1,4) {
+								noi di as txt "note: Wald test is a conditional shape diagnostic at the mass-implied delta;"
+								noi di as txt "      minimumdistance or hausman is recommended for formal testing."
 							}
 						}
 						
@@ -325,10 +327,9 @@
 						}
 										
 						//gen dummies
-						tempvar fw dupe dum dum2 cons
+						tempvar dum dum2
 						gen byte `dum' = `z' > `cutoff_est'
 						gen byte `dum2' = `dum'
-						gen `cons'=1
 						count
 						loc numbins=r(N)
 						
@@ -515,7 +516,7 @@
 						local dotest = inlist(`estimator', 1, 2, 3,4) & "`test'" != "none" & "`vce'"!="none"
 						
 						//ESTIMATION AND INFERENCE
-						tempname b V bs bb VV bmain Vmain b0 V0 b0s bR_raw GR_raw y_raw bU_raw GU_raw d_raw ds Dmain VD
+						tempname b V bs bmain Vmain b0 V0 b0s bR_raw GR_raw y_raw bU_raw GU_raw d_raw ds Dmain VD
 						
 						if inlist("`vce'","none","analytic") loc stop=0
 						else loc stop=`bootreps'
@@ -571,7 +572,7 @@
 								}
 
 							//STORE RAW RESTRICTED ESTIMATES if using hausman test.
-							if `dotest' & "`test'"=="hausman" {
+							if `dotest' & inlist("`test'","hausman","all") & !inlist(`estimator',1,4) {
 								matrix `bR_raw' = e(b)
 
 								if "`vce'"=="analytic" {
@@ -644,7 +645,7 @@
 										zh_excl_est(`zH_excl_est') ///
 										`positive'
 									
-									if "`test'"=="hausman" {
+									if inlist("`test'","hausman","all") & `estimator'!=1 {
 										matrix `bU_raw' = e(b)
 
 										if "`vce'"=="analytic" {
@@ -694,13 +695,13 @@
 								corr _all, cov
 								mat `Vmain'=r(C)
 								if `dotest' {
-									if "`test'"=="hausman" {
+									if inlist("`test'","hausman","all") & !inlist(`estimator',1,4) {
 										clear
 										svmat double `ds'
 										corr _all, cov
 										matrix `VD' = r(C)
 									}
-									else if `estimator'!=4 {
+									if !inlist("`test'","hausman") & `estimator'!=4 {
 										clear
 										svmat `b0s'
 										corr _all, cov
@@ -716,124 +717,142 @@
 			
 							if `dotest' {
 								if `estimator'==4 { //saez: Post main model to b0 V0
-										mat `b0' = `bmain'
-										mat `V0' = `Vmain'
+									mat `b0' = `bmain'
+									mat `V0' = `Vmain'
+								}
 
-									}
-								local testname=cond("`test'"=="wald","Wald test",cond("`test'"=="minimumdistance","Minumum-distance test","Hausman test"))
-								
-								if inlist("`test'","wald","minimumdistance") {
-										local nm: colnames `b0'
-										local neq: coleq `b0'
-										mat colnames `V0'=`nm'
-										mat rownames `V0'=`nm'
-										mat coleq `V0'=`neq'
-										mat roweq `V0'=`neq'
-										
-										ereturn post `b0' `V0'
-										ereturn local properties "b V"
-									}
-									
-								
-								if `estimator'!=4 {
-									if "`test'"=="minimumdistance" {
-									local init 0.05
-									capture local init = _b[bunching:shift]
-									if _rc | missing(real("`init'")) {
-										capture local init = _b[bunching:delta]
-									}
-									if _rc | missing(real("`init'")) {
-										local init 0.05
-									}
+								// Determine which tests to run
+								if inlist("`test'","all","forceall") {
+									if inlist(`estimator',1,4)  local _tests_to_run "wald"
+									else if "`test'"=="forceall" local _tests_to_run "wald minimumdistance hausman"
+									else                         local _tests_to_run "minimumdistance hausman"
+								}
+								else {
+									local _tests_to_run "`test'"
+									local testname = cond("`test'"=="wald","Wald test", ///
+										cond("`test'"=="minimumdistance","Minimum-distance test","Hausman test"))
+								}
 
-									capture noisily polbunch_minimumdistancetest, ///
-										estimator(`estimator') ///
-										k(`polynomial') ///
-										cutofforig(`cutoff_orig') ///
-										cutoffest(`cutoff_est') ///
-										bworig(`bw_orig') ///
-										bwest(`bw_est') ///
-										zbar(`zbar_est') ///
-										`normalize' ///
-										`log' ///
-										`positive' ///
-										initdelta(`init')
-										
-										local delta_md=r(delta)
-									}
-									else if "`test'"=="wald" {
-										capture noisily polbunch_waldtest, ///
-											estimator(`estimator') ///
-											k(`polynomial') ///
-											cutofforig(`cutoff_orig') ///
-											cutoffest(`cutoff_est') ///
-											bworig(`bw_orig') ///
-											bwest(`bw_est') ///
-											zbar(`zbar_est') ///
-											`normalize' ///
-											`log'
-									} 
-									else if "`test'"=="hausman" {
-										if "`vce'"=="analytic" {
-											capture noisily polbunch_modeltest, ///
+								// Post b0/V0 once for all wald/md tests
+								local _needs_post = 0
+								foreach _tt of local _tests_to_run {
+									if inlist("`_tt'","wald","minimumdistance") local _needs_post = 1
+								}
+								if `_needs_post' {
+									local nm: colnames `b0'
+									local neq: coleq `b0'
+									mat colnames `V0'=`nm'
+									mat rownames `V0'=`nm'
+									mat coleq `V0'=`neq'
+									mat roweq `V0'=`neq'
+									ereturn post `b0' `V0'
+									ereturn local properties "b V"
+								}
+
+								// Run each test and store per-test results
+								local _tests_done ""
+								foreach _tt of local _tests_to_run {
+
+									if `estimator'!=4 {
+										if "`_tt'"=="minimumdistance" {
+											local init 0.05
+											capture local init = _b[bunching:shift]
+											if _rc | missing(real("`init'")) {
+												capture local init = _b[bunching:delta]
+											}
+											if _rc | missing(real("`init'")) {
+												local init 0.05
+											}
+											capture noisily polbunch_minimumdistancetest, ///
 												estimator(`estimator') ///
 												k(`polynomial') ///
-												bu(`bU_raw') gu(`GU_raw') ///
-												br(`bR_raw') gr(`GR_raw') ///
-												ystack(`y_raw') ///
 												cutofforig(`cutoff_orig') ///
-												bworig(`bw_orig') ///
 												cutoffest(`cutoff_est') ///
+												bworig(`bw_orig') ///
+												bwest(`bw_est') ///
+												zbar(`zbar_est') ///
+												`normalize' ///
+												`log' ///
+												`positive' ///
+												initdelta(`init')
+										}
+										else if "`_tt'"=="wald" {
+											capture noisily polbunch_waldtest, ///
+												estimator(`estimator') ///
+												k(`polynomial') ///
+												cutofforig(`cutoff_orig') ///
+												cutoffest(`cutoff_est') ///
+												bworig(`bw_orig') ///
 												bwest(`bw_est') ///
 												zbar(`zbar_est') ///
 												`normalize' ///
 												`log'
 										}
-										else {
-											capture noisily polbunch_diff_test, d(`Dmain') v(`VD')
+										else if "`_tt'"=="hausman" {
+											if "`vce'"=="analytic" {
+												capture noisily polbunch_modeltest, ///
+													estimator(`estimator') ///
+													k(`polynomial') ///
+													bu(`bU_raw') gu(`GU_raw') ///
+													br(`bR_raw') gr(`GR_raw') ///
+													ystack(`y_raw') ///
+													cutofforig(`cutoff_orig') ///
+													bworig(`bw_orig') ///
+													cutoffest(`cutoff_est') ///
+													bwest(`bw_est') ///
+													zbar(`zbar_est') ///
+													`normalize' ///
+													`log'
+											}
+											else {
+												capture noisily polbunch_diff_test, d(`Dmain') v(`VD')
+											}
 										}
 									}
-								}
-								else { //Saez: Simple Wald test of h0 vs h1
-									if "`log'"=="" capture test _b[h1:_cons] - _b[h0:_cons] - (`bw_orig'/`cutoff_orig')*_b[bunching:number_bunchers] = 0
-									else capture test _b[h1:_cons] = _b[h0:_cons]
+									else { //Saez: Simple Wald test of h0 vs h1
+										if "`log'"=="" capture test _b[h1:_cons] - _b[h0:_cons] - (`bw_orig'/`cutoff_orig')*_b[bunching:number_bunchers] = 0
+										else capture test _b[h1:_cons] = _b[h0:_cons]
+									}
+
+									local _test_rc = _rc
+									local _fc = 0
+									capture confirm scalar r(failcode)
+									if !_rc {
+										local _fc = r(failcode)
+										if missing(`_fc') local _fc = 0
+									}
+
+									if (`_test_rc' != 0) | (`_fc' != 0) {
+										local _tname = cond("`_tt'"=="wald","Wald test", ///
+											cond("`_tt'"=="minimumdistance","Minimum-distance test","Hausman test"))
+										if `_test_rc' != 0 local _tfc = `_test_rc'
+										else local _tfc = `_fc'
+										noi di as text "Note: `_tname' could not be computed; statistic not reported (rc=`_tfc')."
+									}
+									else {
+										local chi2_`_tt' = r(chi2)
+										local p_`_tt'    = r(p)
+										local df_`_tt'   = r(df)
+										if "`_tt'"=="minimumdistance" local delta_md = r(delta)
+										local _tests_done "`_tests_done' `_tt'"
+									}
 								}
 
-								local test_rc = _rc
-
-								local failcode = 0
-								capture confirm scalar r(failcode)
-								if !_rc {
-									local failcode = r(failcode)
-									if missing(`failcode') local failcode = 0
-								}
-
-								if (`test_rc' != 0) | (`failcode' != 0) {
-									local dotest = 0
-									local test_failed = 1
-
-									if `test_rc' != 0 local test_failcode = `test_rc'
-									else              local test_failcode = `failcode'
-
-									noi di as text  "Note: model-assumption test could not be computed; `testname' statistic is not reported."
-									noi di as text 	"Consider one of the alternatives in test(). `testname' return code = " as result `test_failcode'
-								}
-								else {
-									local chi2  = r(chi2)
-									local p_mod = r(p)
-									local df    = r(df)
-								}
+								local _tests_done = strtrim("`_tests_done'")
+								if "`_tests_done'"=="" local dotest = 0
 							}
 
 						
 						//POST RESULTS
 						su `z' if `side'==-1, meanonly
 						loc dL=r(mean)
-						noi di "`dL'"
 						su `z' if `side'==1, meanonly
 						loc dR=r(mean)
-						noi di "`dR'"
-						
+
+						su `z_orig', meanonly
+						local _zlo_val = r(min) - `bw_orig'/2
+						local _zhi_val = r(max) + `bw_orig'/2
+
 						restore
 						if "`vce'"!="none" {
 							local nm: colnames `bmain'
@@ -847,14 +866,14 @@
 						}
 						else eret post `bmain', esample(`touse') obs(`N') depname(freq)
 						if `dotest' {
-							estadd scalar chi2=`chi2'
-							estadd scalar p_mod=`p_mod'
-							estadd scalar df_mod=`df'
-							if "`test'"=="minimumdistance" estadd scalar delta_md = `delta_md'
+							foreach _tt of local _tests_done {
+								estadd scalar chi2_`_tt' = `chi2_`_tt''
+								estadd scalar p_`_tt'    = `p_`_tt''
+								estadd scalar df_`_tt'   = `df_`_tt''
+							}
+							if strpos(" `_tests_done' "," minimumdistance ") estadd scalar delta_md = `delta_md'
 						}
 						ereturn scalar polynomial=`polynomial'
-						ereturn scalar bandwidth=`bw'
-						ereturn scalar cutoff=`cutoff'
 						ereturn scalar lower_limit=`zL_excl_orig'
 						ereturn scalar upper_limit=`zH_excl_orig'
 						ereturn local normalize="`normalize'"
@@ -878,13 +897,19 @@
 						ereturn local zname = "`z'"
 						ereturn local transform="`transform'"
 
-						if "`vce'"=="analytic"&"`transform'"=="notransform" estadd local vcetype "analytic"
-						if "`vce'"=="analytic"&"`transform'"=="" estadd local vcetype "delta method"
+						if "`vce'"=="analytic" {
+							if "`transform'"=="notransform" estadd local vcetype "analytic"
+							else estadd local vcetype "delta method"
+						}
 						else if "`vce'"=="bootstrap" estadd local vcetype "binned bootstrap"
 						else if "`vce'"=="bayes" estadd local vcetype "bayesian bootstrap"
 						if "`log'"=="log" ereturn scalar log=1
 						else ereturn scalar log=0
-			
+						if "`t0'" != "" ereturn scalar t0 = `t0'
+						if "`t1'" != "" ereturn scalar t1 = `t1'
+						ereturn scalar zlo = `_zlo_val'
+						ereturn scalar zhi = `_zhi_val'
+
 						//Display results
 						noi {
 							di _newline
@@ -909,18 +934,95 @@
 
 								local stub = max(`stub', 12)
 								local W = `stub' + 67
-								di as txt "`testname' of model assumptions:" ///
-									_col(`=`W'-35') "Chi2(`df') test statistic" ///
-									_col(`=`W'-10') as res %10.4f `chi2'
-								di as txt _col(`=`W'-35') as txt "p-value" ///
-									_col(`=`W'-10') as res %10.4f `p_mod'
+
+								if inlist("`test'","all","forceall") {
+									local _first = 1
+									foreach _tt of local _tests_done {
+										local _tshort = cond("`_tt'"=="wald","Wald", ///
+											cond("`_tt'"=="minimumdistance","Min. dist.","Hausman"))
+										if `_first' {
+											di as txt "Model assumption tests:" ///
+												_col(`=`W'-35') "`_tshort': Chi2(`df_`_tt'')" ///
+												_col(`=`W'-10') as res %10.4f `chi2_`_tt''
+											local _first = 0
+										}
+										else {
+											di as txt _col(`=`W'-35') "`_tshort': Chi2(`df_`_tt'')" ///
+												_col(`=`W'-10') as res %10.4f `chi2_`_tt''
+										}
+										di as txt _col(`=`W'-35') "p-value" ///
+											_col(`=`W'-10') as res %10.4f `p_`_tt''
+									}
+								}
+								else {
+									di as txt "`testname' of model assumptions:" ///
+										_col(`=`W'-35') "Chi2(`df_`test'') test statistic" ///
+										_col(`=`W'-10') as res %10.4f `chi2_`test''
+									di as txt _col(`=`W'-35') as txt "p-value" ///
+										_col(`=`W'-10') as res %10.4f `p_`test''
+								}
 								di as txt "{hline `W'}"
 							}
-							if inlist(`estimator',1,2) {
-								di "Note: Estimator is not consistent with iso-elastic labor supply model and thus biased."
-							}
-							if "`constant'"!=""&"`t0'"!=""&"`t1'"!=""&"`transform'"!="notransform" {
-								di "Note: Using the constant approximation to the density to calculate the elasticity may lead to bias."
+							// First-order bias (suppressed by nobias option)
+							if "`nobias'" == "" & inlist(`estimator', 1, 2, 4) & ///
+									"`transform'" != "notransform" & "`t0'" != "" & "`t1'" != "" {
+								local _bmodelopt
+								if "`bmodel'" != "" local _bmodelopt "bmodel(1)"
+								local _bconstopt
+								if "`constant'" != "" local _bconstopt "constant"
+								local _biteropt "iterate"
+								if "`noiterate'" != "" local _biteropt ""
+								capture quietly polbunchbias, `_bmodelopt' `_bconstopt' `_biteropt'
+								if !_rc {
+									// Capture r() before any command can overwrite it
+									local _bh  = r(bias_h)
+									local _bsl = r(bias_slope)
+									local _bla = r(bias_lambda)
+									local _bB  = r(bias_B)
+									local _br  = r(bias_response)
+									local _bs  = r(bias_shift)
+									local _be  = r(bias_elasticity)
+									tempname _bm
+									matrix `_bm' = r(b)
+
+									// Compute table width matching eret di
+									tempname _btab
+									matrix `_btab' = e(b)
+									local _bstub = strlen("`e(depvar)'")
+									local _bcols : colnames `_btab'
+									local _beqs  : coleq `_btab'
+									foreach _bx of local _bcols {
+										local _bstub = max(`_bstub', strlen("`_bx'"))
+									}
+									foreach _bx of local _beqs {
+										local _bstub = max(`_bstub', strlen("`_bx'"))
+									}
+									local _bstub = max(`_bstub', 18)
+									local _bW    = `_bstub' + 67
+
+									// Append to eret di table: first row on same line as title, rest below
+									local _bnames : colnames `_bm'
+									local _bnm1 : word 1 of `_bnames'
+									di as txt "First-order bias (local linear counterfactual):" ///
+										_col(`=`_bW'-35') as txt "`_bnm1'" ///
+										_col(`=`_bW'-10') as res %10.6g `_bm'[1,1]
+									forvalues _bj = 2/7 {
+										local _bnm : word `_bj' of `_bnames'
+										di as txt _col(`=`_bW'-35') as txt "`_bnm'" ///
+											_col(`=`_bW'-10') as res %10.6g `_bm'[1,`_bj']
+									}
+									di as txt "{hline `_bW'}"
+
+									// Store in e()
+									ereturn scalar bias_h           = `_bh'
+									ereturn scalar bias_slope       = `_bsl'
+									ereturn scalar bias_lambda      = `_bla'
+									ereturn scalar bias_B           = `_bB'
+									ereturn scalar bias_response    = `_br'
+									ereturn scalar bias_shift       = `_bs'
+									ereturn scalar bias_elasticity  = `_be'
+									ereturn matrix bias             = `_bm'
+								}
 							}
 						}
 					
@@ -987,7 +1089,6 @@
 				`bw_est', ///
 				`k', ///
 				`estimator', ///
-				`normalized0', ///
 				`islog0', ///
 				`zl_excl_orig', ///
 				`zh_excl_orig', ///
@@ -1127,7 +1228,7 @@
 
 			/* Use delta-method VCE only if e(V) exists and nograd is not specified */
 			local dograd = 0
-			if "`grad'" != "nograd" {
+			if "`nograd'" == "" {
 				capture confirm matrix e(V)
 				if !_rc {
 					matrix `Vtheta' = e(V)
@@ -1139,8 +1240,6 @@
 			local islog       = ("`log'"      != "")
 			local constant0   = ("`constant'" != "")
 			local hastax0 = ("`t0'" != "" & "`t1'" != "")
-			local normalized0 = ("`normalize'" != "nonormalize")
-
 			if `hastax0' {
 				if "`t0'" == "" | "`t1'" == "" {
 					di as err "options t0() and t1() are required when tax options are used"
@@ -1170,15 +1269,12 @@
 				`bworig', ///
 				`bwest', ///
 				`xscale', ///
-				`low', ///
-				`high', ///
 				`islog', ///
 				`constant0', ///
 				`hastax0', ///
 				`t0', ///
 				`t1', ///
 				`dograd', ///
-				`normalized0', ///
 				`zbar', ///
 				`massobs', ///
 				`Btype2', ///
@@ -1360,9 +1456,8 @@ program define saez_transform, eclass
         exit 503
     }
 	
-	noi di "`dograd'"
     local islog  = ("`log'" != "")
-    local dograd = ("`grad'" != "nograd")
+    local dograd = ("`nograd'" == "")
 
     local zstarorig : word 1 of `zstarorig'
     local bworig    : word 1 of `bworig'
@@ -1595,14 +1690,13 @@ cap program drop bunch_saez
 			zbar(real) ///
 			[ nonormalize log ]
 
-		local normalized0 = ("`normalize'" != "nonormalize")
-		local islog0      = ("`log'" != "")
+		local islog0 = ("`log'" != "")
 
 		mata: polbunch_modeldiff_mata( ///
 			"`bu'", "`br'", ///
 			`estimator', `k', ///
 			`cutofforig', `bworig', `cutoffest',`bwest',`zbar', ///
-			`normalized0', `islog0' ///
+			`islog0' ///
 		)
 
 		matrix d = r(pb_model_d)
@@ -1639,8 +1733,7 @@ cap program drop bunch_saez
 			ZBAR(real) ///
 			[ NONORMALIZE LOG ]
 
-		local normalized0 = ("`normalize'" != "nonormalize")
-		local islog0      = ("`log'" != "")
+		local islog0 = ("`log'" != "")
 
 		mata: polbunch_modeltest_mata( ///
 			"`bu'", "`gu'", ///
@@ -1653,7 +1746,6 @@ cap program drop bunch_saez
 			`cutoffest', ///
 			`bwest', ///
 			`zbar', ///
-			`normalized0', ///
 			`islog0' ///
 		)
 
@@ -1699,8 +1791,7 @@ cap program drop bunch_saez
 			matrix `b' = e(b)
 			matrix `V' = e(V)
 
-			local normalized0 = ("`normalize'" != "nonormalize")
-			local islog0      = ("`log'" != "")
+			local islog0 = ("`log'" != "")
 
 			mata: polbunch_wald_from_unrestricted( ///
 				"`b'", ///
@@ -1711,7 +1802,6 @@ cap program drop bunch_saez
 				`cutoffest', ///
 				`bwest', ///
 				`k', ///
-				`normalized0', ///
 				`islog0', ///
 				`zbar' ///
 			)
@@ -1781,9 +1871,8 @@ cap program drop bunch_saez
 		matrix `b' = e(b)
 		matrix `V' = e(V)
 
-		local normalized0 = ("`normalize'" != "nonormalize")
-		local islog0      = ("`log'" != "")
-		local positive0   = ("`positive'" != "")
+		local islog0   = ("`log'" != "")
+		local positive0 = ("`positive'" != "")
 
 		capture noisily mata: polbunch_mdt_mata( ///
 			"`b'", ///
@@ -1794,7 +1883,6 @@ cap program drop bunch_saez
 			`cutoffest', ///
 			`bwest', ///
 			`k', ///
-			`normalized0', ///
 			`islog0', ///
 			`zbar', ///
 			`positive0', ///
@@ -1923,7 +2011,6 @@ cap program drop bunch_saez
 		real scalar delta,
 		real scalar cutoff_orig,
 		real scalar bw_orig,
-		real scalar cutoff_est,
 		real scalar bw_est,
 		real scalar islog
 	)
@@ -1941,7 +2028,6 @@ cap program drop bunch_saez
 		real scalar delta,
 		real scalar cutoff_orig,
 		real scalar bw_orig,
-		real scalar cutoff_est,
 		real scalar bw_est,
 		real scalar islog
 	)
@@ -2018,7 +2104,6 @@ cap program drop bunch_saez
 		real scalar bw_orig,
 		real scalar cutoff_est,
 		real scalar bw_est,
-		real scalar normalized,
 		real scalar islog,
 		real scalar deriv
 	)
@@ -2175,7 +2260,6 @@ cap program drop bunch_saez
 		real scalar bw_orig,
 		real scalar cutoff_est,
 		real scalar bw_est,
-		real scalar normalized,
 		real scalar islog,
 		real scalar dograd
 	)
@@ -2198,7 +2282,6 @@ cap program drop bunch_saez
 			bw_orig,
 			cutoff_est,
 			bw_est,
-			normalized,
 			islog,
 			0
 		)
@@ -2214,7 +2297,6 @@ cap program drop bunch_saez
 				bw_orig,
 				cutoff_est,
 				bw_est,
-				normalized,
 				islog,
 				1
 			)
@@ -2240,11 +2322,8 @@ cap program drop bunch_saez
 		real scalar bw_est,
 		real scalar K,
 		real scalar estimator,
-		real scalar normalized,
 		real scalar islog,
-		real scalar dograd,
-		real scalar zL_excl_est,
-		real scalar zH_excl_est
+		real scalar dograd
 	)
 	{
 		struct hdesign_out scalar out
@@ -2260,7 +2339,6 @@ cap program drop bunch_saez
 			bw_orig,
 			cutoff_est,
 			bw_est,
-			normalized,
 			islog,
 			0
 		)
@@ -2274,7 +2352,6 @@ cap program drop bunch_saez
 				bw_orig,
 				cutoff_est,
 				bw_est,
-				normalized,
 				islog,
 				1
 			)
@@ -2298,7 +2375,6 @@ cap program drop bunch_saez
 			real scalar bw_est,
 			real scalar K,
 			real scalar estimator,
-			real scalar normalized,
 			real scalar islog,
 			real scalar zbar_est
 		)
@@ -2309,14 +2385,14 @@ cap program drop bunch_saez
 			if (1 + delta <= 0) {
 				_error(3498, "delta must be greater than -1")
 			}
-		
+
 			if (estimator == 2) {
 				/* Chetty restriction: bw * B = delta * int_{zstar}^{zbar} h0(z) dz */
 				R = (delta / bw_est) * intbasis(cutoff_est, zbar_est, K)
 			}
 			else if (estimator == 3) {
 				/* Theoretically consistent restriction: bw * B = int_{zstar}^{zstar+r(delta)} h0(z) dz */
-				r = response_length(delta, cutoff_orig, bw_orig, cutoff_est,bw_est,islog)
+				r = response_length(delta, cutoff_orig, bw_orig, bw_est, islog)
 				R = intbasis(cutoff_est, cutoff_est + r, K) / bw_est
 			}
 			else {
@@ -2333,7 +2409,6 @@ cap program drop bunch_saez
 		real scalar bw_est,
 		real scalar K,
 		real scalar estimator,
-		real scalar normalized,
 		real scalar islog,
 		real scalar zbar_est,
 		real scalar ntheta
@@ -2358,7 +2433,6 @@ cap program drop bunch_saez
 				bw_est,
 				K,
 				estimator,
-				normalized,
 				islog,
 				zbar_est
 			)
@@ -2378,7 +2452,6 @@ cap program drop bunch_saez
 		real scalar bw_est,
 		real scalar K,
 		real scalar estimator,
-		real scalar normalized,
 		real scalar islog,
 		real scalar zbar_est
 	)
@@ -2394,8 +2467,8 @@ cap program drop bunch_saez
 		}
 
 		if (estimator == 3) {
-			r  = response_length(delta, cutoff_orig, bw_orig,cutoff_est,bw_est, islog)
-			dr = d_response_length_ddelta(delta, cutoff_orig, bw_orig,cutoff_est,bw_est,islog)
+			r  = response_length(delta, cutoff_orig, bw_orig, bw_est, islog)
+			dr = d_response_length_ddelta(delta, cutoff_orig, bw_orig, bw_est, islog)
 
 			return(pbasis_row(cutoff_est + r, K) * dr / bw_est)
 		}
@@ -2416,7 +2489,6 @@ cap program drop bunch_saez
 			real scalar bw_est,
 			real scalar K,
 			real scalar estimator,
-			real scalar normalized,
 			real scalar islog,
 			real scalar zL_excl_orig,
 			real scalar zH_excl_orig,
@@ -2457,7 +2529,6 @@ cap program drop bunch_saez
 					bw_orig,
 					cutoff_est,
 					bw_est,
-					normalized,
 					islog,
 					1
 				)
@@ -2479,7 +2550,6 @@ cap program drop bunch_saez
 		real scalar bw_est,
 		real scalar K,
 		real scalar estimator,
-		real scalar normalized,
 		real scalar islog,
 		real scalar zL_excl_orig,
 		real scalar zH_excl_orig,
@@ -2517,7 +2587,6 @@ cap program drop bunch_saez
 				bw_orig,
 				cutoff_est,
 				bw_est,
-				normalized,
 				islog,
 				1
 			)
@@ -2539,17 +2608,14 @@ cap program drop bunch_saez
 			real scalar bw_est,
 			real scalar K,
 			real scalar estimator,
-			real scalar normalized,
 			real scalar islog,
 			real scalar zbar_est,
-			real scalar ntheta,
-			real scalar zL_excl_est,
-			real scalar zH_excl_est
+			real scalar ntheta
 		)
 		{
 			real scalar r
 			real rowvector R
-			
+
 			if (1 + delta <= 0) {
 				_error(3498, "delta must be greater than -1")
 			}
@@ -2560,12 +2626,11 @@ cap program drop bunch_saez
 				return(R)
 			}
 
-
 			if (estimator == 2) {
 				R[1, 1..(K+1)] = (delta / bw_est) * intbasis(cutoff_est, zbar_est, K)
 			}
 			else if (estimator == 3) {
-				r = response_length(delta, cutoff_orig, bw_orig, cutoff_est,bw_est,islog)
+				r = response_length(delta, cutoff_orig, bw_orig, bw_est, islog)
 				R[1, 1..(K+1)] = intbasis(cutoff_est, cutoff_est + r, K) / bw_est
 			}
 			else {
@@ -2607,7 +2672,6 @@ cap program drop bunch_saez
 			real scalar bw_est,
 			real scalar K,
 			real scalar estimator,
-			real scalar normalized,
 			real scalar islog,
 			real scalar zL_excl_orig,
 			real scalar zH_excl_orig,
@@ -2636,7 +2700,7 @@ cap program drop bunch_saez
 				nR = rows(XR)
 				ntheta = 2*Kb + 1
 
-				Xcf = cf_mass_row(delta, cutoff_orig, bw_orig,cutoff_est,bw_est, K, estimator, normalized, islog, zL_excl_orig, zH_excl_orig,zL_excl_est,zH_excl_est, ntheta)
+				Xcf = cf_mass_row(delta, cutoff_orig, bw_orig, cutoff_est, bw_est, K, estimator, islog, zL_excl_orig, zH_excl_orig, zL_excl_est, zH_excl_est, ntheta)
 				Xmass = Xcf
 				Xmass[1, ntheta] = 1
 
@@ -2653,7 +2717,7 @@ cap program drop bunch_saez
 				n0 = rows(X0)
 				ntheta = Kb + 1
 
-				Xcf = cf_mass_row(delta, cutoff_orig, bw_orig,cutoff_est,bw_est, K, estimator, normalized, islog, zL_excl_orig, zH_excl_orig,zL_excl_est,zH_excl_est, ntheta)
+				Xcf = cf_mass_row(delta, cutoff_orig, bw_orig, cutoff_est, bw_est, K, estimator, islog, zL_excl_orig, zH_excl_orig, zL_excl_est, zH_excl_est, ntheta)
 				Xmass = Xcf
 				Xmass[1, ntheta] = 1
 
@@ -2668,11 +2732,11 @@ cap program drop bunch_saez
 				zR = select(z, (bunch :== 0) :& (side :==  1))
 
 				XL = pbasis(zL, K)
-				h1 = h1design23(delta, zR, cutoff_orig, bw_orig,cutoff_est,bw_est, K, estimator, normalized, islog, dograd,zL_excl_est,zH_excl_est)
+				h1 = h1design23(delta, zR, cutoff_orig, bw_orig, cutoff_est, bw_est, K, estimator, islog, dograd)
 
 				ntheta = Kb
-				Xcf    = cf_mass_row(delta, cutoff_orig, bw_orig,cutoff_est,bw_est, K, estimator, normalized, islog, zL_excl_orig, zH_excl_orig,zL_excl_est,zH_excl_est, ntheta)
-				Xbmod  = bmodel_row(delta, cutoff_orig, bw_orig,cutoff_est,bw_est, K, estimator, normalized, islog, zbar_est, ntheta,zL_excl_est,zH_excl_est)
+				Xcf    = cf_mass_row(delta, cutoff_orig, bw_orig, cutoff_est, bw_est, K, estimator, islog, zL_excl_orig, zH_excl_orig, zL_excl_est, zH_excl_est, ntheta)
+				Xbmod  = bmodel_row(delta, cutoff_orig, bw_orig, cutoff_est, bw_est, K, estimator, islog, zbar_est, ntheta)
 				Xmass  = Xcf + Xbmod
 
 				out.X = XL \ h1.X \ Xmass
@@ -2687,7 +2751,6 @@ cap program drop bunch_saez
 						bw_est,
 						K,
 						estimator,
-						normalized,
 						islog,
 						zL_excl_orig,
 						zH_excl_orig,
@@ -2704,7 +2767,6 @@ cap program drop bunch_saez
 						bw_est,
 						K,
 						estimator,
-						normalized,
 						islog,
 						zbar_est,
 						ntheta
@@ -2738,7 +2800,6 @@ cap program drop bunch_saez
 			real scalar bw_est,
 			real scalar K,
 			real scalar estimator,
-			real scalar normalized,
 			real scalar islog,
 			real scalar zL_excl_orig,
 			real scalar zH_excl_orig,
@@ -2752,7 +2813,7 @@ cap program drop bunch_saez
 
 			ystack = make_ystack(y, side, bunch, estimator, Hstar_obs)
 
-			D = make_design(delta, z, side, bunch, cutoff_orig, bw_orig, cutoff_est,bw_est,K, estimator, normalized, islog, zL_excl_orig, zH_excl_orig,zL_excl_est,zH_excl_est, zbar_est, 0)
+			D = make_design(delta, z, side, bunch, cutoff_orig, bw_orig, cutoff_est, bw_est, K, estimator, islog, zL_excl_orig, zH_excl_orig, zL_excl_est, zH_excl_est, zbar_est, 0)
 
 			theta = qrsolve(D.X, ystack)
 			return(theta')
@@ -2770,7 +2831,6 @@ cap program drop bunch_saez
 			real scalar bw_est,
 			real scalar K,
 			real scalar estimator,
-			real scalar normalized,
 			real scalar islog,
 			real scalar zL_excl_orig,
 			real scalar zH_excl_orig,
@@ -2807,7 +2867,6 @@ cap program drop bunch_saez
 				bw_est,
 				K,
 				estimator,
-				normalized,
 				islog,
 				zL_excl_orig,
 				zH_excl_orig,
@@ -2968,15 +3027,12 @@ cap program drop bunch_saez
 			real scalar bw_orig,
 			real scalar bw_est,
 			real scalar xscale,
-			real scalar L,
-			real scalar H,
 			real scalar islog,
 			real scalar constant,
 			real scalar hastax,
 			real scalar t0,
 			real scalar t1,
 			real scalar dograd,
-			real scalar normalized,
 			real scalar zbar_est,
 			real scalar Hstar_obs,
 			real scalar Btype2,
@@ -3077,7 +3133,6 @@ cap program drop bunch_saez
 					bw_orig,
 					cutoff_est,
 					bw_est,
-					normalized,
 					islog,
 					dograd
 				)
@@ -3098,14 +3153,14 @@ cap program drop bunch_saez
 			else if (estimator == 2) {
 				if (Btype2 == 0) {
 					/* Estimator 2, model-implied B: B_model = delta/bw * int_{z*}^{zbar} h0(z) dz */
-					RB = bmodel_row23(delta, cutoff_orig, bw_orig,cutoff_est,bw_est, K, estimator, normalized, islog, zbar_est)
+					RB = bmodel_row23(delta, cutoff_orig, bw_orig, cutoff_est, bw_est, K, estimator, islog, zbar_est)
 
 					B = RB * beta'
 					b[1,oB] = B
 
 					if (dograd) {
 						G[oB, ibeta] = RB
-						dRB = d_bmodel_row23_ddelta(delta, cutoff_orig, bw_orig,cutoff_est,bw_est, K, estimator, normalized, islog, zbar_est)
+						dRB = d_bmodel_row23_ddelta(delta, cutoff_orig, bw_orig, cutoff_est, bw_est, K, estimator, islog, zbar_est)
 						G[oB, idelta] = dRB * beta'
 					}
 				}
@@ -3126,14 +3181,14 @@ cap program drop bunch_saez
 			}
 			else if (estimator == 3) {
 				/* Estimator 3 always reports the theoretically consistent model-implied B. */
-				RB = bmodel_row23(delta, cutoff_orig, bw_orig,cutoff_est, bw_est, K, estimator, normalized, islog, zbar_est)
+				RB = bmodel_row23(delta, cutoff_orig, bw_orig, cutoff_est, bw_est, K, estimator, islog, zbar_est)
 
 				B = RB * beta'
 				b[1,oB] = B
 
 				if (dograd) {
 					G[oB, ibeta] = RB
-					dRB = d_bmodel_row23_ddelta(delta, cutoff_orig, bw_orig,cutoff_est,bw_est, K, estimator, normalized, islog, zbar_est)
+					dRB = d_bmodel_row23_ddelta(delta, cutoff_orig, bw_orig, cutoff_est, bw_est, K, estimator, islog, zbar_est)
 					G[oB, idelta] = dRB * beta'
 				}
 			}
@@ -3306,26 +3361,25 @@ cap program drop bunch_saez
 			real matrix hess
 		)
 		{
-			real scalar Hstar_obs, cutoff_orig, bw_orig,cutoff_est,bw_est, K
-			real scalar estimator, normalized, islog
+			real scalar Hstar_obs, cutoff_orig, bw_orig, cutoff_est, bw_est, K
+			real scalar estimator, islog
 			real scalar zL_excl_orig, zH_excl_orig, zbar_est, positive
 			real scalar delta
 
 			Hstar_obs    = pars[1]
 			cutoff_orig  = pars[2]
 			bw_orig      = pars[3]
-			cutoff_est 	 = pars[4]
-			bw_est 		 = pars[5]
+			cutoff_est   = pars[4]
+			bw_est       = pars[5]
 			K            = pars[6]
 			estimator    = pars[7]
-			normalized   = pars[8]
-			islog        = pars[9]
-			zL_excl_orig = pars[10]
-			zH_excl_orig = pars[11]
-			zL_excl_est = pars[12]
-			zH_excl_est = pars[13]
-			zbar_est     = pars[14]
-			positive     = pars[15]
+			islog        = pars[8]
+			zL_excl_orig = pars[9]
+			zH_excl_orig = pars[10]
+			zL_excl_est  = pars[11]
+			zH_excl_est  = pars[12]
+			zbar_est     = pars[13]
+			positive     = pars[14]
 
 			delta = p[1]
 
@@ -3342,7 +3396,6 @@ cap program drop bunch_saez
 				bw_est,
 				K,
 				estimator,
-				normalized,
 				islog,
 				zL_excl_orig,
 				zH_excl_orig,
@@ -3364,7 +3417,6 @@ cap program drop bunch_saez
 			real scalar bw_est,
 			real scalar K,
 			real scalar estimator,
-			real scalar normalized,
 			real scalar islog,
 			real scalar zL_excl_orig,
 			real scalar zH_excl_orig,
@@ -3376,17 +3428,17 @@ cap program drop bunch_saez
 			real scalar positive
 
 		)
-		{ 
+		{
 			real colvector y, z, side, bunch
-			real scalar Kb, Hstar_obs, lndelta_hat, delta_hat, gi, lb
-			real rowvector theta_hat, beta_hat, b, pars, phat, dgrid, qgrid
+			real scalar Kb, Hstar_obs, delta_hat, lb
+			real rowvector theta_hat, beta_hat, b, pars, phat
 			real matrix Vout
 			transmorphic S
-			
+
 			struct design_out scalar D
 			real colvector ystack, mu
 			real matrix Gv
-			
+
 
 			Kb = K + 1
 
@@ -3416,7 +3468,6 @@ cap program drop bunch_saez
 					bw_est,
 					K,
 					estimator,
-					normalized,
 					islog,
 					zL_excl_orig,
 					zH_excl_orig,
@@ -3435,7 +3486,6 @@ cap program drop bunch_saez
 					bw_est,
 					K,
 					estimator,
-					normalized,
 					islog,
 					zL_excl_orig,
 					zH_excl_orig,
@@ -3484,7 +3534,6 @@ cap program drop bunch_saez
 					bw_est,
 					K,
 					estimator,
-					normalized,
 					islog,
 					zL_excl_orig,
 					zH_excl_orig,
@@ -3502,8 +3551,8 @@ cap program drop bunch_saez
 
 			if (dovar == 1) {
 				D = make_design(delta_hat, z, side, bunch,
-					cutoff_orig, bw_orig,cutoff_est,bw_est, K, estimator, normalized, islog,
-					zL_excl_orig, zH_excl_orig,zL_excl_est,zH_excl_est, zbar_est, 1)
+					cutoff_orig, bw_orig, cutoff_est, bw_est, K, estimator, islog,
+					zL_excl_orig, zH_excl_orig, zL_excl_est, zH_excl_est, zbar_est, 1)
 
 				ystack = make_ystack(y, side, bunch, estimator, Hstar_obs)
 
@@ -3541,7 +3590,6 @@ cap program drop bunch_saez
 		real scalar cutoff_est,
 		real scalar bw_est,
 		real scalar K,
-		real scalar normalized,
 		real scalar islog
 	)
 	{
@@ -3575,7 +3623,6 @@ cap program drop bunch_saez
 			bw_est,
 			K,
 			3,
-			normalized,
 			islog,
 			0
 		)
@@ -3594,7 +3641,6 @@ cap program drop bunch_saez
 				bw_est,
 				K,
 				3,
-				normalized,
 				islog,
 				0
 			)
@@ -3614,7 +3660,6 @@ cap program drop bunch_saez
 						bw_est,
 						K,
 						3,
-						normalized,
 						islog,
 						0
 					)
@@ -3652,7 +3697,6 @@ cap program drop bunch_saez
 		real scalar cutoff_est,
 		real scalar bw_est,
 		real scalar K,
-		real scalar normalized,
 		real scalar islog,
 		real scalar zbar_est,
 		real scalar positive
@@ -3722,11 +3766,10 @@ cap program drop bunch_saez
 			bw_orig,
 			cutoff_est,
 			bw_est,
-			normalized,
 			islog,
 			1
 		)
-		
+
 		R = bmodel_row23(
 			delta,
 			cutoff_orig,
@@ -3735,7 +3778,6 @@ cap program drop bunch_saez
 			bw_est,
 			K,
 			estimator,
-			normalized,
 			islog,
 			zbar_est
 		)
@@ -3770,7 +3812,6 @@ cap program drop bunch_saez
 		real scalar cutoff_est,
 		real scalar bw_est,
 		real scalar K,
-		real scalar normalized,
 		real scalar islog,
 		real scalar zbar_est,
 		real scalar positive
@@ -3790,7 +3831,6 @@ cap program drop bunch_saez
 			cutoff_est,
 			bw_est,
 			K,
-			normalized,
 			islog,
 			zbar_est,
 			positive
@@ -3826,7 +3866,6 @@ cap program drop bunch_saez
 		real scalar cutoff_est,
 		real scalar bw_est,
 		real scalar K,
-		real scalar normalized,
 		real scalar islog,
 		real scalar zbar_est,
 		real scalar positive,
@@ -3834,10 +3873,10 @@ cap program drop bunch_saez
 	)
 	{
 		real scalar Kb, ntheta, df, pval
-		real scalar delta_hat, W_hat, W0
-		real scalar lo, hi, center, span
-		real scalar i, j, d, W, bestd, bestW
-		real scalar a, b, c, x1, x2, f1, f2, gr, iter
+		real scalar delta_hat, W_hat
+		real scalar lo, span
+		real scalar j, d, W, bestd, bestW
+		real scalar a, b, x1, x2, f1, f2, gr, iter
 		real rowvector theta, grid, candidates
 		real matrix V
 
@@ -3884,7 +3923,6 @@ cap program drop bunch_saez
 				cutoff_est,
 				bw_est,
 				K,
-				normalized,
 				islog,
 				zbar_est,
 				positive
@@ -3951,12 +3989,7 @@ cap program drop bunch_saez
 		for (j = 1; j <= cols(candidates); j++) {
 			d = candidates[j]
 
-			if (positive == 1) {
-				if (d <= lo) continue
-			}
-			else {
-				if (d <= lo) continue
-			}
+			if (d <= lo) continue
 
 			W = polbunch_mdt_crit(
 				d,
@@ -3968,7 +4001,6 @@ cap program drop bunch_saez
 				cutoff_est,
 				bw_est,
 				K,
-				normalized,
 				islog,
 				zbar_est,
 				positive
@@ -4025,7 +4057,6 @@ cap program drop bunch_saez
 			cutoff_est,
 			bw_est,
 			K,
-			normalized,
 			islog,
 			zbar_est,
 			positive
@@ -4041,7 +4072,6 @@ cap program drop bunch_saez
 			cutoff_est,
 			bw_est,
 			K,
-			normalized,
 			islog,
 			zbar_est,
 			positive
@@ -4066,7 +4096,6 @@ cap program drop bunch_saez
 					cutoff_est,
 					bw_est,
 					K,
-					normalized,
 					islog,
 					zbar_est,
 					positive
@@ -4088,7 +4117,6 @@ cap program drop bunch_saez
 					cutoff_est,
 					bw_est,
 					K,
-					normalized,
 					islog,
 					zbar_est,
 					positive
@@ -4183,7 +4211,6 @@ cap program drop bunch_saez
 		real scalar cutoff_est,
 		real scalar bw_est,
 		real scalar zbar_est,
-		real scalar normalized,
 		real scalar islog
 	)
 	{
@@ -4210,7 +4237,6 @@ cap program drop bunch_saez
 				bw_orig,
 				cutoff_est,
 				bw_est,
-				normalized,
 				islog,
 				0
 			)
@@ -4223,7 +4249,6 @@ cap program drop bunch_saez
 				bw_est,
 				K,
 				estimator,
-				normalized,
 				islog,
 				zbar_est
 			)
@@ -4256,7 +4281,6 @@ cap program drop bunch_saez
 		real scalar cutoff_est,
 		real scalar bw_est,
 		real scalar zbar_est,
-		real scalar normalized,
 		real scalar islog
 	)
 	{
@@ -4360,7 +4384,6 @@ cap program drop bunch_saez
 				bw_orig,
 				cutoff_est,
 				bw_est,
-				normalized,
 				islog,
 				1
 			)
@@ -4373,7 +4396,6 @@ cap program drop bunch_saez
 				bw_est,
 				K,
 				estimator,
-				normalized,
 				islog,
 				zbar_est
 			)
@@ -4385,7 +4407,6 @@ cap program drop bunch_saez
 				bw_est,
 				K,
 				estimator,
-				normalized,
 				islog,
 				zbar_est
 			)
@@ -4512,7 +4533,6 @@ cap program drop bunch_saez
 			real scalar cutoff_est,
 			real scalar bw_est,
 			real scalar K,
-			real scalar normalized,
 			real scalar islog,
 			real scalar zbar_est
 		)
@@ -4648,7 +4668,6 @@ cap program drop bunch_saez
 					cutoff_est,
 					bw_est,
 					K,
-					normalized,
 					islog
 				)
 
@@ -4671,7 +4690,6 @@ cap program drop bunch_saez
 					bw_orig,
 					cutoff_est,
 					bw_est,
-					normalized,
 					islog,
 					1
 				)
@@ -4686,7 +4704,6 @@ cap program drop bunch_saez
 					bw_est,
 					K,
 					3,
-					normalized,
 					islog,
 					zbar_est
 				)
@@ -4700,7 +4717,6 @@ cap program drop bunch_saez
 						bw_est,
 						K,
 						3,
-						normalized,
 						islog,
 						zbar_est
 					) * beta'
@@ -4797,7 +4813,7 @@ real rowvector saez_transform(
     }
     else {
         // B = zstarorig/(2*bworig) * (x-1)*(hminus + hplus/x)
-        A    = 2 * B * bworig / zstarorig
+        A    = 2 * B * bworig / zstarorig 
         q    = hplus - hminus - A
         disc = q^2 + 4*hminus*hplus
         if (disc < 0) return(out)

@@ -1,10 +1,10 @@
-v0.1
+v1.0
 d polbunch efficient polynomial bunching estimation.
 d
 d {bf:M. E. Andresen, Department of Economics, University of Oslo}
-d Efficient bunching estimation with inference for binned data. After installation, see help {bf:polbunch}, help {bf:polbunchplot}.
+d Efficient bunching estimation with inference for binned data. After installation, see help {bf:polbunch}, help {bf:polbunchplot}, help {bf:polbunchbias}.
 d
-d Distribution-Date: 20250117
+d Distribution-Date: 20260623
 f polbunch.ado
 f polbunchplot.ado
 f polbunch.sthlp
@@ -12,3 +12,5 @@ f polbunchplot.sthlp
 f polbunchgendata.ado
 f polbunchgendata.sthlp
 f polbunchsim.ado
+f polbunchbias.ado
+f polbunchbias.sthlp
