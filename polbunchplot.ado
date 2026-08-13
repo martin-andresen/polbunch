@@ -552,86 +552,67 @@ program define polbunchplot
 
             local modelcolor : word `colorpos' of `colors'
 
-            /*
-                One composite model curve:
+			/*
+				One composite model curve:
 
-                    h0 solid below the excluded region;
-                    h0 dotted from lower excluded limit to cutoff;
-                    h1 dotted from cutoff to upper excluded limit;
-                    h1 solid above the excluded region.
+					h0 solid below the excluded region;
+					h0 dotted from lower excluded limit to upper excluded limit;
+					h1 solid above the excluded region.
 
-                Only the first available segment gets a legend entry.
-            */
-            local range_h0solid_lo = `xmin'
-            local range_h0solid_hi = min(`lower_m', `xmax')
+				Only the first available segment gets a legend entry.
+			*/
+			local range_h0solid_lo = `xmin'
+			local range_h0solid_hi = min(`lower_m', `xmax')
 
-            local range_h0dot_lo = max(`lower_m', `xmin')
-            local range_h0dot_hi = min(`cutoff_m', `xmax')
+			local range_h0dot_lo = max(`lower_m', `xmin')
+			local range_h0dot_hi = min(`upper_m', `xmax')
 
-            local range_h1dot_lo = max(`cutoff_m', `xmin')
-            local range_h1dot_hi = min(`upper_m', `xmax')
+			local range_h1solid_lo = max(`upper_m', `xmin')
+			local range_h1solid_hi = `xmax'
 
-            local range_h1solid_lo = max(`upper_m', `xmin')
-            local range_h1solid_hi = `xmax'
+			local legendplot = .
 
-            local legendplot = .
+			if `range_h0solid_hi' > `range_h0solid_lo' {
 
-            if `range_h0solid_hi' > `range_h0solid_lo' {
+				local ++plotnum
+				local legendplot = `plotnum'
 
-                local ++plotnum
-                local legendplot = `plotnum'
+				local plots `plots' ///
+					(function y=`h0plot_m', ///
+						range(`range_h0solid_lo' `range_h0solid_hi') ///
+						lcolor(`modelcolor') ///
+						lpattern(solid))
+			}
 
-                local plots `plots' ///
-                    (function y=`h0plot_m', ///
-                        range(`range_h0solid_lo' `range_h0solid_hi') ///
-                        lcolor(`modelcolor') ///
-                        lpattern(solid))
-            }
+			if `range_h0dot_hi' > `range_h0dot_lo' {
 
-            if `range_h0dot_hi' > `range_h0dot_lo' {
+				local ++plotnum
 
-                local ++plotnum
+				if missing(`legendplot') {
+					local legendplot = `plotnum'
+				}
 
-                if missing(`legendplot') {
-                    local legendplot = `plotnum'
-                }
+				local plots `plots' ///
+					(function y=`h0plot_m', ///
+						range(`range_h0dot_lo' `range_h0dot_hi') ///
+						lcolor(`modelcolor') ///
+						lpattern(shortdash))
+			}
 
-                local plots `plots' ///
-                    (function y=`h0plot_m', ///
-                        range(`range_h0dot_lo' `range_h0dot_hi') ///
-                        lcolor(`modelcolor') ///
-                        lpattern(shortdash))
-            }
+			if `range_h1solid_hi' > `range_h1solid_lo' {
 
-            if `range_h1dot_hi' > `range_h1dot_lo' {
+				local ++plotnum
 
-                local ++plotnum
+				if missing(`legendplot') {
+					local legendplot = `plotnum'
+				}
 
-                if missing(`legendplot') {
-                    local legendplot = `plotnum'
-                }
-
-                local plots `plots' ///
-                    (function y=`h1plot_m', ///
-                        range(`range_h1dot_lo' `range_h1dot_hi') ///
-                        lcolor(`modelcolor') ///
-                        lpattern(shortdash))
-            }
-
-            if `range_h1solid_hi' > `range_h1solid_lo' {
-
-                local ++plotnum
-
-                if missing(`legendplot') {
-                    local legendplot = `plotnum'
-                }
-
-                local plots `plots' ///
-                    (function y=`h1plot_m', ///
-                        range(`range_h1solid_lo' `range_h1solid_hi') ///
-                        lcolor(`modelcolor') ///
-                        lpattern(solid))
-            }
+				local plots `plots' ///
+					(function y=`h1plot_m', ///
+						range(`range_h1solid_lo' `range_h1solid_hi') ///
+						lcolor(`modelcolor') ///
+						lpattern(solid))
+			}
 
             if missing(`legendplot') {
                 noisily display as error ///
