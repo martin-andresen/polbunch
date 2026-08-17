@@ -293,7 +293,7 @@ program define polbunchplot
                     (function y=`h1c', ///
                         range(`upper_plot' `xmax') ///
                         lcolor(navy) ///
-                        lpattern(solid)), ///
+                        lpattern(solid)),`graph_opts' ///
                     xline(`cutoff_plot', ///
                         lcolor(maroon) ///
                         lpattern(dash)) ///
@@ -316,8 +316,7 @@ program define polbunchplot
                         cols(4) ///
                         order(1 2 6 4) ///
                         pos(6)) ///
-                    `yscale' ///
-                    `graph_opts'
+                    `yscale'
             }
             else {
 
@@ -341,7 +340,7 @@ program define polbunchplot
                     (function y=`h1plot', ///
                         range(`cutoff_plot' `upper_plot') ///
                         lcolor(navy) ///
-                        lpattern(shortdash)), ///
+                        lpattern(shortdash)),  `graph_opts' ///
                     xline(`cutoff_plot', ///
                         lcolor(maroon) ///
                         lpattern(dash)) ///
@@ -361,8 +360,7 @@ program define polbunchplot
                         cols(3) ///
                         order(1 2 4) ///
                         pos(6)) ///
-                    `yscale' ///
-                    `graph_opts'
+                    `yscale' 
             }
 
             restore
@@ -1151,7 +1149,7 @@ if `range_h0dot_hi' > `range_h0dot_lo' {
         */
 
         twoway ///
-            `plots', ///
+            `plots', `graph_opts' ///
             xscale(range(`xmin_global' `xmax_global')) ///
             xline(`cutoff_first', ///
                 lcolor(maroon) ///
@@ -1166,8 +1164,7 @@ if `range_h0dot_hi' > `range_h0dot_lo' {
                 order(`legend_order') ///
                 cols(`legend_cols') ///
                 pos(6)) ///
-            `yscale' ///
-            `graph_opts'
+            `yscale'
 
         /*
             THE ONLY restore in the multiple-model branch.
