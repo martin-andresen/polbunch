@@ -867,45 +867,55 @@ program define polbunchplot
             local modelcolor : word `colorpos' of `colors'
 
 
-            /*
-            ============================================================
-            MODEL-SPECIFIC PLOTTING RANGES
+			/*
+			================================================================
+			MODEL-SPECIFIC PLOTTING RANGES
 
-            h0:
-                solid  = model range -> lower excluded limit
-                dotted = lower excluded limit -> UPPER excluded limit
+			First-stage bunching-mass representation:
 
-            h1:
-                solid  = UPPER excluded limit -> model range
+				h0 solid:
+					model minimum -> lower excluded limit
 
-            Thus h0 extends all the way through the excluded region,
-            and h1 starts exactly at upper_m.
-            ============================================================
-            */
+				h0 dotted:
+					lower excluded limit -> cutoff
 
-            local range_h0solid_lo = ///
-                `xmin_m'
+				h1 dotted:
+					cutoff -> upper excluded limit
 
-            local range_h0solid_hi = ///
-                min(`lower_m', `xmax_m')
+				h1 solid:
+					upper excluded limit -> model maximum
 
+			Each segment is restricted to THIS MODEL'S own estimation
+			range.
+			================================================================
+			*/
 
-            local range_h0dot_lo = ///
-                max(`lower_m', `xmin_m')
+			local range_h0solid_lo = ///
+				`xmin_m'
 
-            local range_h0dot_hi = ///
-                min(`upper_m', `xmax_m')
-
-
-            local range_h1solid_lo = ///
-                max(`upper_m', `xmin_m')
-
-            local range_h1solid_hi = ///
-                `xmax_m'
+			local range_h0solid_hi = ///
+				min(`lower_m', `xmax_m')
 
 
-            local legendplot = .
+			local range_h0dot_lo = ///
+				max(`lower_m', `xmin_m')
 
+			local range_h0dot_hi = ///
+				min(`cutoff_m', `xmax_m')
+
+
+			local range_h1dot_lo = ///
+				max(`cutoff_m', `xmin_m')
+
+			local range_h1dot_hi = ///
+				min(`upper_m', `xmax_m')
+
+
+			local range_h1solid_lo = ///
+				max(`upper_m', `xmin_m')
+
+			local range_h1solid_hi = ///
+				`xmax_m'
 
             /*
             ------------------------------------------------------------
@@ -953,6 +963,100 @@ program define polbunchplot
                         lpattern(shortdash))
             }
 
+
+			/*
+------------------------------------------------------------
+h0 BELOW excluded region
+------------------------------------------------------------
+*/
+
+if `range_h0solid_hi' > `range_h0solid_lo' {
+
+    local ++plotnum
+    local legendplot = `plotnum'
+
+    local plots `plots' ///
+        (function y=`h0plot_m', ///
+            range(`range_h0solid_lo' `range_h0solid_hi') ///
+            lcolor(`modelcolor') ///
+            lpattern(solid))
+}
+
+
+/*
+------------------------------------------------------------
+h0: LOWER LIMIT -> CUTOFF
+
+This is the h0 reference density used to identify the
+bunching mass on the left side of the threshold.
+------------------------------------------------------------
+*/
+
+if `range_h0dot_hi' > `range_h0dot_lo' {
+
+    local ++plotnum
+
+    if missing(`legendplot') {
+        local legendplot = `plotnum'
+    }
+
+    local plots `plots' ///
+        (function y=`h0plot_m', ///
+            range(`range_h0dot_lo' `range_h0dot_hi') ///
+            lcolor(`modelcolor') ///
+            lpattern(shortdash))
+}
+
+
+	/*
+	------------------------------------------------------------
+	h1: CUTOFF -> UPPER LIMIT
+
+	This is the h1 reference density used to identify the
+	bunching mass on the right side of the threshold.
+
+	IMPORTANT:
+	We are NOT using the Saez trapezoid here. This is purely
+	the first-stage/reference-density representation.
+	------------------------------------------------------------
+	*/
+
+	if `range_h1dot_hi' > `range_h1dot_lo' {
+
+		local ++plotnum
+
+		if missing(`legendplot') {
+			local legendplot = `plotnum'
+		}
+
+		local plots `plots' ///
+			(function y=`h1plot_m', ///
+				range(`range_h1dot_lo' `range_h1dot_hi') ///
+				lcolor(`modelcolor') ///
+				lpattern(shortdash))
+	}
+
+
+	/*
+	------------------------------------------------------------
+	h1 ABOVE excluded region
+	------------------------------------------------------------
+	*/
+
+	if `range_h1solid_hi' > `range_h1solid_lo' {
+
+		local ++plotnum
+
+		if missing(`legendplot') {
+			local legendplot = `plotnum'
+		}
+
+		local plots `plots' ///
+			(function y=`h1plot_m', ///
+				range(`range_h1solid_lo' `range_h1solid_hi') ///
+				lcolor(`modelcolor') ///
+				lpattern(solid))
+	}
 
             /*
             ------------------------------------------------------------
