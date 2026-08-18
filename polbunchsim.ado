@@ -211,15 +211,16 @@ program polbunchsim, eclass
                                             local oldcoef = substr("`oldcoef'", 2, .)
                                         }
                                         /*
-                                            simulate builds each result variable's
-                                            name from eq+coef together, capped at
-                                            32 chars; if we only cap the eq part,
-                                            the combined name can still overflow
-                                            and simulate silently falls back to
-                                            generic names like _sim_43. Reserve
-                                            room for the coefficient part first.
+                                            simulate names each result variable
+                                            eqname + "_b_" + coefname (a literal
+                                            3-char "_b_" token, not just "_"),
+                                            capped at 32 chars total. Reserve
+                                            room for "_b_" + the coefficient
+                                            part before truncating the eq part,
+                                            or overflow silently falls back to
+                                            generic names like _sim_43.
                                         */
-                                        local _avail = 32 - strlen("`oldcoef'") - 1
+                                        local _avail = 32 - 3 - strlen("`oldcoef'")
                                         if `_avail' < 1 local _avail = 1
                                         local neweq = substr("`modelname'_`oldeq'", 1, `_avail')
                                         local newnames `newnames' `neweq':`oldcoef'
@@ -248,7 +249,7 @@ program polbunchsim, eclass
                                                 if "`_cn'" == "" local _cn "`_eq'"
                                                 else local _cn = substr("`_cn'", 2, .)
                                                 local _suffix _`bt'_`e'_`cval'
-                                                local _avail = 32 - strlen("`_suffix'")
+                                                local _avail = 32 - 3 - strlen("`_suffix'")
                                                 if `_avail' < 1 local _avail = 1
                                                 local _news `_news' `=substr("`_cn'", 1, `_avail')'`_suffix'
                                             }
