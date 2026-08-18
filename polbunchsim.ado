@@ -7,7 +7,7 @@ program polbunchsim, eclass
         distribution(string) opts(string) ///
         estimator(numlist integer) btype(numlist integer) ///
         clist(string) sample(string)  ///
-        est4limits(numlist) limits(numlist)]
+        est4limits(numlist) limits(numlist) report(string)]
 
     quietly {
         if "`zmin'" == "" local zmin "-."
@@ -18,6 +18,27 @@ program polbunchsim, eclass
         if "`clist'" == "" local clist `"noconstant"'
 
         local misscode = -1e300
+
+        // Split report() into coefficient names (from e(b)) and scalar names
+        local _report_coefs ""
+        local _report_scals ""
+        if "`report'" != "" {
+            foreach _item of local report {
+                if inlist("`_item'", "hausman", "wald", "minimumdistance") {
+                    local _report_scals `_report_scals' chi2_`_item' p_`_item'
+                }
+                else if inlist("`_item'", ///
+                    "chi2_wald","p_wald", ///
+                    "chi2_hausman","p_hausman", ///
+                    "chi2_minimumdistance","p_minimumdistance", ///
+                    "delta_md") {
+                    local _report_scals `_report_scals' `_item'
+                }
+                else {
+                    local _report_coefs `_report_coefs' `_item'
+                }
+            }
+        }
 
         local numc : word count `clist'
         if `numc' > 2 {
@@ -61,7 +82,7 @@ program polbunchsim, eclass
                         if "`c'" == "constant" local cval = 1
                         else local cval = 0
 
-                        local modelname m_`bt'_`e'_`cval'_b
+                        local modelname b`bt'e`e'c`cval'
 
                         timer clear
                         timer on 1
@@ -132,9 +153,10 @@ program polbunchsim, eclass
                         local time = r(t1)
                         timer clear
 
-                        local elast = .
-                        local se    = .
-                        local p     = .
+                        local elast    = .
+                        local se       = .
+                        local p        = .
+                        local delta_md = .
                         local novar = 1
                         foreach _tt in wald minimumdistance hausman {
                             local chi2_`_tt' = .
@@ -162,36 +184,93 @@ program polbunchsim, eclass
                                 capture local p_`_tt' = e(p_`_tt')
                                 if _rc local p_`_tt' = .
                             }
+                            capture local delta_md = e(delta_md)
+                            if _rc local delta_md = .
 
                             if `numest' == 1 {
                                 estimates store `esthold'
                             }
                             else {
-                                /*
-                                    Retain only the coefficients originally posted
-                                    by polbunch in the combined e(b). Prefix the
-                                    original equation names by the model identifier
-                                    so that all coefficient names remain unique.
-                                */
-                                tempname this_b
-                                matrix `this_b' = e(b)
+                                if "`report'" == "" {
+                                    /*
+                                        No filter: include all e(b) columns with
+                                        model-prefixed equation names for uniqueness.
+                                    */
+                                    tempname this_b
+                                    matrix `this_b' = e(b)
 
-                                local oldnames : colfullnames `this_b'
-                                local newnames
-                                foreach nm of local oldnames {
-                                    gettoken oldeq oldcoef : nm, parse(":")
-                                    if "`oldcoef'" == "" {
-                                        local oldcoef "`oldeq'"
-                                        local oldeq "b"
+                                    local oldnames : colfullnames `this_b'
+                                    local newnames
+                                    foreach nm of local oldnames {
+                                        gettoken oldeq oldcoef : nm, parse(":")
+                                        if "`oldcoef'" == "" {
+                                            local oldcoef "`oldeq'"
+                                            local oldeq "b"
+                                        }
+                                        else {
+                                            local oldcoef = substr("`oldcoef'", 2, .)
+                                        }
+                                        /*
+                                            simulate builds each result variable's
+                                            name from eq+coef together, capped at
+                                            32 chars; if we only cap the eq part,
+                                            the combined name can still overflow
+                                            and simulate silently falls back to
+                                            generic names like _sim_43. Reserve
+                                            room for the coefficient part first.
+                                        */
+                                        local _avail = 32 - strlen("`oldcoef'") - 1
+                                        if `_avail' < 1 local _avail = 1
+                                        local neweq = substr("`modelname'_`oldeq'", 1, `_avail')
+                                        local newnames `newnames' `neweq':`oldcoef'
                                     }
-                                    else {
-                                        local oldcoef = substr("`oldcoef'", 2, .)
-                                    }
-                                    local neweq = substr("`modelname'_`oldeq'", 1, 32)
-                                    local newnames `newnames' `neweq':`oldcoef'
+                                    matrix colnames `this_b' = `newnames'
+                                    matrix `sim_b' = nullmat(`sim_b'), `this_b'
                                 }
-                                matrix colnames `this_b' = `newnames'
-                                matrix `sim_b' = nullmat(`sim_b'), `this_b'
+                                else {
+                                    /*
+                                        report() specified: flat naming {item}_{bt}_{e}_{cval}
+                                        with empty equations, combining coef and scalar columns.
+                                    */
+                                    tempname this_b
+
+                                    if "`_report_coefs'" != "" {
+                                        tempname _cof_b
+                                        mata: _pbsim_filter_b("e(b)", "`_cof_b'", "`_report_coefs'")
+                                        capture confirm matrix `_cof_b'
+                                        if !_rc {
+                                            local _nc = colsof(`_cof_b')
+                                            local _news ""
+                                            forvalues _j = 1/`_nc' {
+                                                local _allnm : colfullnames `_cof_b'
+                                                local _nm : word `_j' of `_allnm'
+                                                gettoken _eq _cn : _nm, parse(":")
+                                                if "`_cn'" == "" local _cn "`_eq'"
+                                                else local _cn = substr("`_cn'", 2, .)
+                                                local _suffix _`bt'_`e'_`cval'
+                                                local _avail = 32 - strlen("`_suffix'")
+                                                if `_avail' < 1 local _avail = 1
+                                                local _news `_news' `=substr("`_cn'", 1, `_avail')'`_suffix'
+                                            }
+                                            mata: _pbsim_set_flat_stripe("`_cof_b'", "`_news'")
+                                            matrix `this_b' = `_cof_b'
+                                        }
+                                    }
+
+                                    foreach _sc of local _report_scals {
+                                        local _scval = ``_sc''
+                                        if missing(`_scval') continue
+                                        tempname _scol
+                                        matrix `_scol' = (`_scval')
+                                        mata: _pbsim_set_flat_stripe("`_scol'", "`_sc'_`bt'_`e'_`cval'")
+                                        capture confirm matrix `this_b'
+                                        if _rc matrix `this_b' = `_scol'
+                                        else  matrix `this_b' = `this_b', `_scol'
+                                    }
+
+                                    capture confirm matrix `this_b'
+                                    if !_rc matrix `sim_b' = nullmat(`sim_b'), `this_b'
+                                }
                             }
                         }
 
@@ -224,16 +303,16 @@ program polbunchsim, eclass
                             `modelname'_chi2_hausman `modelname'_p_hausman ///
                             `modelname'_rc
 
-                        local scalar_`modelname'_time             = `time_post'
-                        local scalar_`modelname'_se               = `se_post'
-                        local scalar_`modelname'_p                = `p_post'
-                        local scalar_`modelname'_chi2_wald        = `chi2_wald_post'
-                        local scalar_`modelname'_p_wald           = `p_wald_post'
-                        local scalar_`modelname'_chi2_minimumdistance = `chi2_minimumdistance_post'
-                        local scalar_`modelname'_p_minimumdistance   = `p_minimumdistance_post'
-                        local scalar_`modelname'_chi2_hausman     = `chi2_hausman_post'
-                        local scalar_`modelname'_p_hausman        = `p_hausman_post'
-                        local scalar_`modelname'_rc               = `rc_post'
+                        local `modelname'_time                 = `time_post'
+                        local `modelname'_se                   = `se_post'
+                        local `modelname'_p                    = `p_post'
+                        local `modelname'_chi2_wald            = `chi2_wald_post'
+                        local `modelname'_p_wald               = `p_wald_post'
+                        local `modelname'_chi2_minimumdistance = `chi2_minimumdistance_post'
+                        local `modelname'_p_minimumdistance    = `p_minimumdistance_post'
+                        local `modelname'_chi2_hausman         = `chi2_hausman_post'
+                        local `modelname'_p_hausman            = `p_hausman_post'
+                        local `modelname'_rc                   = `rc_post'
 
                         if `rc' local anyfail = 1
 
@@ -265,7 +344,7 @@ program polbunchsim, eclass
                 ereturn scalar failed  = 1
                 ereturn scalar misscode = `misscode'
                 foreach s of local scalar_names {
-                    ereturn scalar `s' = `scalar_`s''
+                    ereturn scalar `s' = ``s''
                 }
                 ereturn local cmd "polbunchsim"
                 exit
@@ -279,7 +358,7 @@ program polbunchsim, eclass
             ereturn post `sim_b'
 
             foreach s of local scalar_names {
-                ereturn scalar `s' = `scalar_`s''
+                ereturn scalar `s' = ``s''
             }
 
             ereturn scalar failed = `anyfail'
@@ -304,7 +383,7 @@ program polbunchsim, eclass
                 ereturn clear
 
                 foreach s of local scalar_names {
-                    ereturn scalar `s' = `scalar_`s''
+                    ereturn scalar `s' = ``s''
                 }
 
                 ereturn scalar failed  = 1
@@ -329,12 +408,74 @@ program polbunchsim, eclass
             /*
                 Restoring the stored result restores the original polbunch
                 e(b), e(V), matrices, macros, and scalars. We then add only
-                simulation diagnostics as e() scalars; e(b) is untouched.
+                simulation diagnostics as e() scalars.
             */
             estimates restore `esthold'
 
+            if "`report'" != "" {
+                tempname combined_b
+
+                // Coefficient columns: preserve polbunch equation names
+                if "`_report_coefs'" != "" {
+                    tempname _filt_b
+                    mata: _pbsim_filter_b("e(b)", "`_filt_b'", "`_report_coefs'")
+                    capture confirm matrix `_filt_b'
+                    if !_rc {
+                        capture confirm matrix `combined_b'
+                        if _rc matrix `combined_b' = `_filt_b'
+                        else  matrix `combined_b' = `combined_b', `_filt_b'
+                    }
+                }
+
+                // Scalar columns: eq = test name, coef = stat type
+                foreach _sc of local _report_scals {
+                    local _scval = ``_sc''
+                    if missing(`_scval') continue
+                    local _sc_eq "test"
+                    local _sc_cn "`_sc'"
+                    foreach _test in wald hausman minimumdistance {
+                        if "`_sc'" == "chi2_`_test'" {
+                            local _sc_eq `_test'
+                            local _sc_cn chi2
+                        }
+                        if "`_sc'" == "p_`_test'" {
+                            local _sc_eq `_test'
+                            local _sc_cn p
+                        }
+                    }
+                    if "`_sc'" == "delta_md" {
+                        local _sc_eq minimumdistance
+                        local _sc_cn delta
+                    }
+                    tempname _scol
+                    matrix `_scol' = (`_scval')
+                    matrix colnames `_scol' = `_sc_cn'
+                    matrix coleq   `_scol' = `_sc_eq'
+                    capture confirm matrix `combined_b'
+                    if _rc matrix `combined_b' = `_scol'
+                    else  matrix `combined_b' = `combined_b', `_scol'
+                }
+
+                // Post combined_b; include V only when there are no scalar columns
+                capture confirm matrix `combined_b'
+                if !_rc {
+                    if "`_report_scals'" == "" {
+                        capture confirm matrix e(V)
+                        if !_rc {
+                            tempname _filt_V
+                            mata: _pbsim_filter_V("e(V)", "`_filt_V'", "`_report_coefs'")
+                            capture confirm matrix `_filt_V'
+                            if !_rc ereturn post `combined_b' `_filt_V'
+                            else    ereturn post `combined_b'
+                        }
+                        else ereturn post `combined_b'
+                    }
+                    else ereturn post `combined_b'
+                }
+            }
+
             foreach s of local scalar_names {
-                ereturn scalar `s' = `scalar_`s''
+                ereturn scalar `s' = ``s''
             }
 
             ereturn scalar failed = 0
@@ -369,4 +510,56 @@ program polbunchsim, eclass
             ereturn local cmd "polbunchsim"
         }
     }
+end
+
+mata:
+void _pbsim_filter_b(string scalar src, string scalar dst, string scalar keep_str) {
+    real matrix B
+    string matrix stripe
+    real rowvector idx
+    real scalar j
+    string colvector keep
+
+    B      = st_matrix(src)
+    stripe = st_matrixcolstripe(src)
+    keep   = tokens(keep_str)'
+
+    idx = J(1, 0, .)
+    for (j = 1; j <= rows(stripe); j++) {
+        if (anyof(keep, stripe[j, 2])) idx = (idx, j)
+    }
+    if (length(idx) == 0) return
+
+    st_matrix(dst, B[., idx])
+    st_matrixcolstripe(dst, stripe[idx',])
+    st_matrixrowstripe(dst, st_matrixrowstripe(src))
+}
+
+void _pbsim_filter_V(string scalar src, string scalar dst, string scalar keep_str) {
+    real matrix V
+    string matrix stripe
+    real rowvector idx
+    real scalar j
+    string colvector keep
+
+    V      = st_matrix(src)
+    stripe = st_matrixcolstripe(src)
+    keep   = tokens(keep_str)'
+
+    idx = J(1, 0, .)
+    for (j = 1; j <= rows(stripe); j++) {
+        if (anyof(keep, stripe[j, 2])) idx = (idx, j)
+    }
+    if (length(idx) == 0) return
+
+    st_matrix(dst, V[idx, idx])
+    st_matrixcolstripe(dst, stripe[idx',])
+    st_matrixrowstripe(dst, stripe[idx',])
+}
+
+void _pbsim_set_flat_stripe(string scalar mat, string scalar names_str) {
+    string colvector names
+    names = tokens(names_str)'
+    st_matrixcolstripe(mat, (J(rows(names), 1, ""), names))
+}
 end
