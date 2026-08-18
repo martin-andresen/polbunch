@@ -1,7 +1,12 @@
 *! polbunchsim_relabel - clean up simulate's auto-generated result names,
 *! then (by default) reshape the results to long format.
+*!
+*! For a single btype()/estimator()/clist() combination (numest==1),
+*! polbunchsim keeps polbunch's own equation names with no model prefix,
+*! so btype/estimator/cval must be supplied explicitly to include those
+*! columns in the reshape: polbunchsim_relabel, btype(1) estimator(1) cval(0)
 program define polbunchsim_relabel
-    syntax [, NOLong]
+    syntax [, NOLong BType(string) ESTimator(string) CVal(string)]
 
     /*
         simulate collects e(b) columns by default and names each result
@@ -79,11 +84,16 @@ program define polbunchsim_relabel
         local est`k' ""
         local cv`k'  ""
         local sub`k' ""
+        local hasprefix`k' = 0
         if regexm("`eq'", "^b([0-9]+)e([0-9]+)c([0-9]+)(_(.+))?$") {
             local bt`k'  = regexs(1)
             local est`k' = regexs(2)
             local cv`k'  = regexs(3)
             local sub`k' = regexs(5)
+            local hasprefix`k' = 1
+        }
+        else if "`eq'" != "b" {
+            local sub`k' "`eq'"
         }
     }
 
@@ -91,13 +101,43 @@ program define polbunchsim_relabel
 
     if "`nolong'" != "" exit
 
+    /*
+        With only one btype()/estimator()/clist() combination, polbunchsim
+        never builds a b<btype>e<estimator>c<cval> prefix at all -- it just
+        keeps polbunch's own equation names (h0, h1, bunching, ...), since
+        there's nothing to disambiguate between models. Those columns are
+        still reshapable, but btype/estimator/cval are constants that only
+        the caller knows (they lived in the polbunchsim syntax, not in any
+        e()-return that survives past `simulate`) -- pass them here.
+    */
+    local have_const = ("`btype'" != "" & "`estimator'" != "" & "`cval'" != "")
+
     local matched ""
+    local skipped = 0
     forvalues i = 1/`k' {
-        if "`bt`i''" != "" local matched `matched' `i'
+        if `hasprefix`i'' {
+            local matched `matched' `i'
+        }
+        else if `have_const' {
+            local bt`i'  "`btype'"
+            local est`i' "`estimator'"
+            local cv`i'  "`cval'"
+            local matched `matched' `i'
+        }
+        else local ++skipped
     }
+
     if "`matched'" == "" {
-        display as text "polbunchsim_relabel: no b<btype>e<estimator>c<cval>-style columns found; skipping reshape"
+        if `skipped' > 0 {
+            display as error "polbunchsim_relabel: found `skipped' column(s) with no b<btype>e<estimator>c<cval> prefix (a single-combo simulate run). Re-run with btype()/estimator()/cval() to supply the fixed values, e.g. polbunchsim_relabel, btype(1) estimator(1) cval(0)"
+        }
+        else {
+            display as text "polbunchsim_relabel: no b<btype>e<estimator>c<cval>-style columns found; skipping reshape"
+        }
         exit
+    }
+    if `skipped' > 0 {
+        display as text "polbunchsim_relabel: `skipped' column(s) with no model prefix were skipped (pass btype()/estimator()/cval() to include them)"
     }
 
     capture confirm variable simid
