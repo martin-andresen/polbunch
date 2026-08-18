@@ -40,6 +40,22 @@ program define polbunchsim_relabel
         else local base "`eq'_`coef'"
         local base = subinstr("`base'", " ", "_", .)
 
+        /*
+            polbunch's polynomial terms use factor-variable notation
+            (c.z#c.z, c.z#c.z#c.z, ...) which is valid in a matrix
+            coefficient name but not in a Stata variable name: "." and
+            "#" would make -rename- error out. Strip the "c." operator
+            prefix and turn "#" into "_" so the name stays readable and
+            valid; the untouched original text is still kept as the
+            -stat- value if this gets reshaped to long below.
+        */
+        local base = subinstr("`base'", "c.", "", .)
+        local base = subinstr("`base'", "i.", "", .)
+        local base = subinstr("`base'", "b.", "", .)
+        local base = subinstr("`base'", "o.", "", .)
+        local base = subinstr("`base'", "#", "_", .)
+        local base = subinstr("`base'", ".", "_", .)
+
         local newname = substr("`base'", 1, 32)
         if "`newname'" != "`v'" {
             local sfx_k = 1
