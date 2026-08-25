@@ -220,12 +220,25 @@ program polbunchsim, eclass
                             if missing(`p_post')    local p_post    = `misscode'
                             if missing(`se_post')   local se_post   = `misscode'
 
-                            foreach _tt in wald minimumdistance hausman {
+                            foreach _tt in minimumdistance hausman {
                                 local chi2_`_tt'_post = `chi2_`_tt''
                                 local p_`_tt'_post    = `p_`_tt''
                                 if missing(`chi2_`_tt'_post') local chi2_`_tt'_post = `misscode'
                                 if missing(`p_`_tt'_post')    local p_`_tt'_post    = `misscode'
                             }
+                            /*
+                                chi2_wald/p_wald are left as genuine Stata
+                                missing, not the misscode sentinel, when wald
+                                wasn't computed. Unlike hausman/minimum-
+                                distance -- which polbunch always attempts
+                                for estimator 2/3 -- wald simply isn't part
+                                of the default test set for those estimators
+                                (only estimator 1/4 run it by default), so
+                                missing here means "not applicable" rather
+                                than "failed to compute".
+                            */
+                            local chi2_wald_post = `chi2_wald'
+                            local p_wald_post    = `p_wald'
                             local delta_md_post = `delta_md'
                             if missing(`delta_md_post') local delta_md_post = `misscode'
 
@@ -300,6 +313,19 @@ program polbunchsim, eclass
                                     local _diageq = substr("`modelname'_diag", 1, 32)
                                     foreach _sc of local _report_scals {
                                         local _scval = ``_sc'_post'
+                                        /*
+                                            chi2_wald/p_wald are left as
+                                            genuine missing above (not
+                                            applicable, not failed) for the
+                                            e()-scalar aliases, but a matrix
+                                            posted via -ereturn post- can't
+                                            contain missing values ("matrix
+                                            has missing values") -- substitute
+                                            misscode here, at the point of
+                                            building the matrix column, same
+                                            as every other diagnostic.
+                                        */
+                                        if missing(`_scval') local _scval = `misscode'
                                         tempname _scol
                                         matrix `_scol' = (`_scval')
                                         matrix colnames `_scol' = `_sc'
@@ -458,6 +484,10 @@ program polbunchsim, eclass
                 // there's only one model): eq = diag, coef = stat name.
                 foreach _sc of local _report_scals {
                     local _scval = ``_sc'_post'
+                    // See the numest>1 branch: -ereturn post- rejects a
+                    // missing value in the matrix even though the
+                    // e()-scalar alias is allowed to show genuine missing.
+                    if missing(`_scval') local _scval = `misscode'
                     tempname _scol
                     matrix `_scol' = (`_scval')
                     matrix colnames `_scol' = `_sc'
