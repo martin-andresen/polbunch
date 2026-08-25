@@ -690,22 +690,46 @@
 								
 							//bootstrap inference sunmmary & test
 							if inlist("`vce'","bootstrap","bayes") {
+								/*
+									clear+svmat+corr needs an empty dataset to
+									load the bootstrap draws into, but the
+									TEST RESTRICTIONS and POST RESULTS code
+									below still needs the original estimation
+									sample (z, side, ...) back afterward.
+									-preserve- can't be used here: Stata only
+									allows one preserve active at a time, and
+									this whole command is already running
+									inside its own outer preserve, so a second
+									one errors with "already preserved". Round
+									-trip through a tempfile instead, which
+									doesn't touch the preserve stack -- without
+									it, z stays cleared for the rest of the
+									command, surfacing later as "variable z
+									not found".
+								*/
+								tempfile _pbsim_boot_data
+								quietly save `_pbsim_boot_data'
+
 								clear
 								svmat double `bs'
 								corr _all, cov
 								mat `Vmain'=r(C)
+								quietly use `_pbsim_boot_data', clear
+
 								if `dotest' {
 									if inlist("`test'","hausman","all") & !inlist(`estimator',1,4) {
 										clear
 										svmat double `ds'
 										corr _all, cov
 										matrix `VD' = r(C)
+										quietly use `_pbsim_boot_data', clear
 									}
 									if !inlist("`test'","hausman") & `estimator'!=4 {
 										clear
 										svmat `b0s'
 										corr _all, cov
 										matrix `V0' = r(C)
+										quietly use `_pbsim_boot_data', clear
 									}
 
 								}

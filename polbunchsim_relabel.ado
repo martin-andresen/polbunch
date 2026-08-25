@@ -19,10 +19,14 @@ program define polbunchsim_relabel
         and coef that's easy to get wrong).
 
         polbunchsim's equation names follow a fixed pattern of its own:
-        b<btype>e<estimator>c<cval>[_<subeq>], where <subeq> is polbunch's
-        own equation (h0, h1, bunching, ...). That pattern -- not the
-        number of underscores in a coefficient's name -- is what drives
-        the optional reshape to long below, so coefficient names like
+        [b<btype>][e<estimator>][c<cval>][_<subeq>] -- each of b/e/c is
+        present only when that dimension actually varies in the call (a
+        run that only sweeps estimator()/clist() gets "e3c0", one that
+        only sweeps btype() gets "b1"), and <subeq> is either polbunch's
+        own equation (h0, h1, bunching, ...) or "diag" for a report()-
+        requested diagnostic. That pattern -- not the number of
+        underscores in a coefficient's name -- is what drives the
+        optional reshape to long below, so coefficient names like
         "number_bunchers" or "marginal_response" don't need special-casing
         the way they would with plain string-splitting.
     */
@@ -84,16 +88,16 @@ program define polbunchsim_relabel
         local est`k' ""
         local cv`k'  ""
         local sub`k' ""
-        local hasprefix`k' = 0
-        if regexm("`eq'", "^b([0-9]+)e([0-9]+)c([0-9]+)(_(.+))?$") {
-            local bt`k'  = regexs(1)
-            local est`k' = regexs(2)
-            local cv`k'  = regexs(3)
-            local sub`k' = regexs(5)
-            local hasprefix`k' = 1
-        }
-        else if "`eq'" != "b" {
-            local sub`k' "`eq'"
+        if "`eq'" != "b" {
+            if regexm("`eq'", "^(b([0-9]+))?(e([0-9]+))?(c([0-9]+))?(_(.+))?$") {
+                local bt`k'  = regexs(2)
+                local est`k' = regexs(4)
+                local cv`k'  = regexs(6)
+                local sub`k' = regexs(8)
+            }
+            else {
+                local sub`k' "`eq'"
+            }
         }
     }
 
@@ -105,70 +109,54 @@ program define polbunchsim_relabel
         With only one btype()/estimator()/clist() combination, polbunchsim
         never builds a b<btype>e<estimator>c<cval> prefix at all -- it just
         keeps polbunch's own equation names (h0, h1, bunching, ...), since
-        there's nothing to disambiguate between models. Those columns are
-        still reshapable, but btype/estimator/cval are constants that only
-        the caller knows (they lived in the polbunchsim syntax, not in any
-        e()-return that survives past `simulate`) -- pass them here.
+        there's nothing to disambiguate between models. Likewise, a run
+        that only sweeps one or two of btype/estimator/clist omits the
+        dimensions that don't vary from the tag. Either way, btype/
+        estimator/cval are constants only the caller knows (they lived in
+        the polbunchsim syntax, not in any e()-return that survives past
+        `simulate`) -- supply whichever ones the column names don't carry
+        via btype()/estimator()/cval(); anything still unresolved is left
+        as missing (.) rather than blocking the reshape.
     */
-    local have_const = ("`btype'" != "" & "`estimator'" != "" & "`cval'" != "")
-
-    local matched ""
-    local skipped = 0
-    forvalues i = 1/`k' {
-        if `hasprefix`i'' {
-            local matched `matched' `i'
-        }
-        else if `have_const' {
-            local bt`i'  "`btype'"
-            local est`i' "`estimator'"
-            local cv`i'  "`cval'"
-            local matched `matched' `i'
-        }
-        else local ++skipped
-    }
-
-    if "`matched'" == "" {
-        if `skipped' > 0 {
-            display as error "polbunchsim_relabel: found `skipped' column(s) with no b<btype>e<estimator>c<cval> prefix (a single-combo simulate run). Re-run with btype()/estimator()/cval() to supply the fixed values, e.g. polbunchsim_relabel, btype(1) estimator(1) cval(0)"
-        }
-        else {
-            display as text "polbunchsim_relabel: no b<btype>e<estimator>c<cval>-style columns found; skipping reshape"
-        }
-        exit
-    }
-    if `skipped' > 0 {
-        display as text "polbunchsim_relabel: `skipped' column(s) with no model prefix were skipped (pass btype()/estimator()/cval() to include them)"
-    }
-
     capture confirm variable simid
     if _rc gen long simid = _n
 
+    local nunresolved = 0
     tempfile _long
     local first = 1
-    foreach i of local matched {
-        preserve
-            keep simid `var`i''
-            rename `var`i'' value
-            gen btype     = `bt`i''
-            gen estimator = `est`i''
-            gen cval      = `cv`i''
-            gen subeq     = "`sub`i''"
-            gen stat      = "`coef`i''"
-            if `first' {
-                save `_long', replace
-            }
-            else {
-                append using `_long'
-                save `_long', replace
-            }
-        restore
+    forvalues i = 1/`k' {
+        local _bt  = cond("`bt`i''"  != "", "`bt`i''",  cond("`btype'"     != "", "`btype'",     "."))
+        local _est = cond("`est`i''" != "", "`est`i''", cond("`estimator'" != "", "`estimator'", "."))
+        local _cv  = cond("`cv`i''"  != "", "`cv`i''",  cond("`cval'"      != "", "`cval'",      "."))
+        if "`_bt'" == "." | "`_est'" == "." | "`_cv'" == "." local ++nunresolved
+
+        quietly {
+            preserve
+                keep simid `var`i''
+                rename `var`i'' value
+                gen btype     = `_bt'
+                gen estimator = `_est'
+                gen cval      = `_cv'
+                gen subeq     = "`sub`i''"
+                gen stat      = "`coef`i''"
+                if `first' {
+                    save `_long', replace
+                }
+                else {
+                    append using `_long'
+                    save `_long', replace
+                }
+            restore
+        }
         local first = 0
     }
 
-    use `_long', clear
+    quietly use `_long', clear
     order simid btype estimator cval subeq stat value
     sort simid btype estimator cval subeq stat
 
-    local nmatched : word count `matched'
-    display as text "polbunchsim_relabel: reshaped `nmatched' matched column(s) to long; other columns (if any) were dropped"
+    display as text "polbunchsim_relabel: reshaped `k' column(s) to long"
+    if `nunresolved' > 0 {
+        display as text "polbunchsim_relabel: `nunresolved' column(s) left btype/estimator/cval as missing (.) -- pass btype()/estimator()/cval() to fill in whichever dimension didn't vary in this simulate call"
+    }
 end

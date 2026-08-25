@@ -22,16 +22,18 @@ program polbunchsim, eclass
         // Split report() into coefficient names (from e(b)) and scalar names
         local _report_coefs ""
         local _report_scals ""
+        /*
+            inlist() for strings caps out at 10 comparison values -- this
+            list has 11, so membership is checked with strpos() against a
+            padded, space-delimited list instead.
+        */
+        local _scalarnames " chi2_wald p_wald chi2_hausman p_hausman chi2_minimumdistance p_minimumdistance delta_md time se p rc "
         if "`report'" != "" {
             foreach _item of local report {
                 if inlist("`_item'", "hausman", "wald", "minimumdistance") {
                     local _report_scals `_report_scals' chi2_`_item' p_`_item'
                 }
-                else if inlist("`_item'", ///
-                    "chi2_wald","p_wald", ///
-                    "chi2_hausman","p_hausman", ///
-                    "chi2_minimumdistance","p_minimumdistance", ///
-                    "delta_md") {
+                else if strpos("`_scalarnames'", " `_item' ") > 0 {
                     local _report_scals `_report_scals' `_item'
                 }
                 else {
@@ -59,6 +61,17 @@ program polbunchsim, eclass
         local numc : word count `clist'
         local numest = `numb' * `nume' * `numc'
 
+        /*
+            Only stamp a dimension into the model tag when it actually
+            varies in this call, so e.g. a run that only sweeps
+            estimator()/clist() gets tags like "e3c0" instead of the
+            noisier "b1e3c0" -- and a run that only sweeps btype() gets
+            "b1", "b2", etc.
+        */
+        local vary_bt = (`numb' > 1)
+        local vary_e  = (`nume' > 1)
+        local vary_c  = (`numc' > 1)
+
         tempname sim_b sim_extra sim_oldb sim_oldV sim_newb sim_newV
         tempname esthold
 
@@ -82,7 +95,10 @@ program polbunchsim, eclass
                         if "`c'" == "constant" local cval = 1
                         else local cval = 0
 
-                        local modelname b`bt'e`e'c`cval'
+                        local modelname ""
+                        if `vary_bt' local modelname "`modelname'b`bt'"
+                        if `vary_e'  local modelname "`modelname'e`e'"
+                        if `vary_c'  local modelname "`modelname'c`cval'"
 
                         timer clear
                         timer on 1
@@ -187,116 +203,125 @@ program polbunchsim, eclass
                             capture local delta_md = e(delta_md)
                             if _rc local delta_md = .
 
+                            /*
+                                Quantities computed by polbunchsim, rather than
+                                coefficients estimated by polbunch, get the same
+                                missing -> misscode treatment applied up front,
+                                so both the numest==1 e()-scalar aliases below
+                                and the numest>1 report()-scalar matrix columns
+                                can just read the "_post" locals directly.
+                            */
+                            local time_post = `time'
+                            local p_post    = `p'
+                            local se_post   = `se'
+                            local rc_post   = `rc'
+
+                            if missing(`time_post') local time_post = `misscode'
+                            if missing(`p_post')    local p_post    = `misscode'
+                            if missing(`se_post')   local se_post   = `misscode'
+
+                            foreach _tt in wald minimumdistance hausman {
+                                local chi2_`_tt'_post = `chi2_`_tt''
+                                local p_`_tt'_post    = `p_`_tt''
+                                if missing(`chi2_`_tt'_post') local chi2_`_tt'_post = `misscode'
+                                if missing(`p_`_tt'_post')    local p_`_tt'_post    = `misscode'
+                            }
+                            local delta_md_post = `delta_md'
+                            if missing(`delta_md_post') local delta_md_post = `misscode'
+
                             if `numest' == 1 {
                                 estimates store `esthold'
                             }
                             else {
-                                if "`report'" == "" {
-                                    /*
-                                        No filter: include all e(b) columns with
-                                        model-prefixed equation names for uniqueness.
-                                    */
-                                    tempname this_b
-                                    matrix `this_b' = e(b)
+                                /*
+                                    Real polbunch coefficients (filtered to
+                                    report()'s coefficient names when given,
+                                    otherwise all of e(b)) and report()-
+                                    requested diagnostics both land in the
+                                    same combined matrix, under the exact
+                                    same [eq]_b[coef] convention: real
+                                    coefficients keep polbunch's own equation
+                                    names prefixed by the model tag, and
+                                    diagnostics ride along as extra
+                                    "coefficients" under a <model>_diag
+                                    equation. One convention for both means
+                                    simulate's default _b collection picks up
+                                    everything with no expression list, and
+                                    polbunchsim_relabel's reshape needs no
+                                    special-casing between the two.
+                                */
+                                tempname this_b
 
-                                    local oldnames : colfullnames `this_b'
-                                    local newnames
-                                    foreach nm of local oldnames {
-                                        gettoken oldeq oldcoef : nm, parse(":")
-                                        if "`oldcoef'" == "" {
-                                            local oldcoef "`oldeq'"
-                                            local oldeq "b"
-                                        }
-                                        else {
-                                            local oldcoef = substr("`oldcoef'", 2, .)
-                                        }
-                                        /*
-                                            simulate names each result variable
-                                            eqname + "_b_" + coefname (a literal
-                                            3-char "_b_" token, not just "_"),
-                                            capped at 32 chars total. Reserve
-                                            room for "_b_" + the coefficient
-                                            part before truncating the eq part,
-                                            or overflow silently falls back to
-                                            generic names like _sim_43.
-                                        */
-                                        local _avail = 32 - 3 - strlen("`oldcoef'")
-                                        if `_avail' < 1 local _avail = 1
-                                        local neweq = substr("`modelname'_`oldeq'", 1, `_avail')
-                                        local newnames `newnames' `neweq':`oldcoef'
+                                local _want_coefs = ("`report'" == "" | "`_report_coefs'" != "")
+                                if `_want_coefs' {
+                                    tempname _cof_b
+                                    if "`report'" == "" {
+                                        matrix `_cof_b' = e(b)
                                     }
-                                    matrix colnames `this_b' = `newnames'
-                                    matrix `sim_b' = nullmat(`sim_b'), `this_b'
-                                }
-                                else {
-                                    /*
-                                        report() specified: flat naming {item}_{bt}_{e}_{cval}
-                                        with empty equations, combining coef and scalar columns.
-                                    */
-                                    tempname this_b
-
-                                    if "`_report_coefs'" != "" {
-                                        tempname _cof_b
+                                    else {
                                         mata: _pbsim_filter_b("e(b)", "`_cof_b'", "`_report_coefs'")
-                                        capture confirm matrix `_cof_b'
-                                        if !_rc {
-                                            local _nc = colsof(`_cof_b')
-                                            local _news ""
-                                            forvalues _j = 1/`_nc' {
-                                                local _allnm : colfullnames `_cof_b'
-                                                local _nm : word `_j' of `_allnm'
-                                                gettoken _eq _cn : _nm, parse(":")
-                                                if "`_cn'" == "" local _cn "`_eq'"
-                                                else local _cn = substr("`_cn'", 2, .)
-                                                local _suffix _`bt'_`e'_`cval'
-                                                local _avail = 32 - 3 - strlen("`_suffix'")
-                                                if `_avail' < 1 local _avail = 1
-                                                local _news `_news' `=substr("`_cn'", 1, `_avail')'`_suffix'
-                                            }
-                                            mata: _pbsim_set_flat_stripe("`_cof_b'", "`_news'")
-                                            matrix `this_b' = `_cof_b'
-                                        }
                                     }
+                                    capture confirm matrix `_cof_b'
+                                    if !_rc {
+                                        local oldnames : colfullnames `_cof_b'
+                                        local newnames
+                                        foreach nm of local oldnames {
+                                            gettoken oldeq oldcoef : nm, parse(":")
+                                            if "`oldcoef'" == "" {
+                                                local oldcoef "`oldeq'"
+                                                local oldeq "b"
+                                            }
+                                            else {
+                                                local oldcoef = substr("`oldcoef'", 2, .)
+                                            }
+                                            /*
+                                                Matrix equation names are
+                                                capped at 32 chars. simulate's
+                                                own flattened result-variable
+                                                name (eq+coef) can still
+                                                exceed 32 and fall back to a
+                                                generic _sim_N name; don't
+                                                fight that here --
+                                                polbunchsim_relabel fixes
+                                                names up afterward using the
+                                                [eq]_b[coef] label simulate
+                                                always attaches, regardless
+                                                of which name it picked.
+                                            */
+                                            local neweq = substr("`modelname'_`oldeq'", 1, 32)
+                                            local newnames `newnames' `neweq':`oldcoef'
+                                        }
+                                        matrix colnames `_cof_b' = `newnames'
+                                        matrix `this_b' = `_cof_b'
+                                    }
+                                }
 
+                                if "`_report_scals'" != "" {
+                                    local _diageq = substr("`modelname'_diag", 1, 32)
                                     foreach _sc of local _report_scals {
-                                        local _scval = ``_sc''
-                                        if missing(`_scval') continue
+                                        local _scval = ``_sc'_post'
                                         tempname _scol
                                         matrix `_scol' = (`_scval')
-                                        mata: _pbsim_set_flat_stripe("`_scol'", "`_sc'_`bt'_`e'_`cval'")
+                                        matrix colnames `_scol' = `_sc'
+                                        matrix coleq   `_scol' = `_diageq'
                                         capture confirm matrix `this_b'
                                         if _rc matrix `this_b' = `_scol'
                                         else  matrix `this_b' = `this_b', `_scol'
                                     }
-
-                                    capture confirm matrix `this_b'
-                                    if !_rc matrix `sim_b' = nullmat(`sim_b'), `this_b'
                                 }
+
+                                capture confirm matrix `this_b'
+                                if !_rc matrix `sim_b' = nullmat(`sim_b'), `this_b'
                             }
                         }
 
                         /*
                             Quantities computed by polbunchsim, rather than
                             coefficients estimated by polbunch, are returned as
-                            model-specific e() scalars. simulate can collect them
+                            model-specific e() scalars (the "_post" values were
+                            already computed above). simulate can collect them
                             explicitly as e(<model>_<name>).
                         */
-                        local time_post = `time'
-                        local p_post    = `p'
-                        local se_post   = `se'
-                        local rc_post   = `rc'
-
-                        if missing(`time_post') local time_post = `misscode'
-                        if missing(`p_post')    local p_post    = `misscode'
-                        if missing(`se_post')   local se_post   = `misscode'
-
-                        foreach _tt in wald minimumdistance hausman {
-                            local chi2_`_tt'_post = `chi2_`_tt''
-                            local p_`_tt'_post    = `p_`_tt''
-                            if missing(`chi2_`_tt'_post') local chi2_`_tt'_post = `misscode'
-                            if missing(`p_`_tt'_post')    local p_`_tt'_post    = `misscode'
-                        }
-
                         local scalar_names `scalar_names' ///
                             `modelname'_time `modelname'_se `modelname'_p ///
                             `modelname'_chi2_wald `modelname'_p_wald ///
@@ -428,30 +453,15 @@ program polbunchsim, eclass
                     }
                 }
 
-                // Scalar columns: eq = test name, coef = stat type
+                // Scalar columns, under the same <model>_diag convention
+                // used for numest>1 (here with no model tag to prefix, since
+                // there's only one model): eq = diag, coef = stat name.
                 foreach _sc of local _report_scals {
-                    local _scval = ``_sc''
-                    if missing(`_scval') continue
-                    local _sc_eq "test"
-                    local _sc_cn "`_sc'"
-                    foreach _test in wald hausman minimumdistance {
-                        if "`_sc'" == "chi2_`_test'" {
-                            local _sc_eq `_test'
-                            local _sc_cn chi2
-                        }
-                        if "`_sc'" == "p_`_test'" {
-                            local _sc_eq `_test'
-                            local _sc_cn p
-                        }
-                    }
-                    if "`_sc'" == "delta_md" {
-                        local _sc_eq minimumdistance
-                        local _sc_cn delta
-                    }
+                    local _scval = ``_sc'_post'
                     tempname _scol
                     matrix `_scol' = (`_scval')
-                    matrix colnames `_scol' = `_sc_cn'
-                    matrix coleq   `_scol' = `_sc_eq'
+                    matrix colnames `_scol' = `_sc'
+                    matrix coleq   `_scol' = diag
                     capture confirm matrix `combined_b'
                     if _rc matrix `combined_b' = `_scol'
                     else  matrix `combined_b' = `combined_b', `_scol'
@@ -556,11 +566,5 @@ void _pbsim_filter_V(string scalar src, string scalar dst, string scalar keep_st
     st_matrix(dst, V[idx, idx])
     st_matrixcolstripe(dst, stripe[idx',])
     st_matrixrowstripe(dst, stripe[idx',])
-}
-
-void _pbsim_set_flat_stripe(string scalar mat, string scalar names_str) {
-    string colvector names
-    names = tokens(names_str)'
-    st_matrixcolstripe(mat, (J(rows(names), 1, ""), names))
 }
 end
