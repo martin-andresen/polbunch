@@ -2,6 +2,30 @@ capture program drop polbunchbias
 program define polbunchbias, rclass
     version 16.0
 
+    /*
+        iterate(): when to use it vs. not.
+
+        The bias formula answers "if the true (elasticity, lambda) were X,
+        how biased would this estimator be?" That's a different question
+        depending on where X comes from:
+
+        - Standalone mode with elasticity()/lambda() supplied from a KNOWN
+          DGP (e.g. validating this formula against a Monte Carlo): X is
+          already the truth. One evaluation of bias() at that point is the
+          right answer; iterate() would search for a different fixed point
+          than the one you already know is correct, so it should stay off
+          (the default).
+
+        - Post-estimation mode (letting polbunchbias pull elasticity/lambda
+          from e()): both quantities come from the same biased estimator --
+          lambda is computed from the fitted h0 polynomial, which is
+          contaminated by the same bunching-induced misspecification that
+          biases the elasticity estimate. Treating the raw estimates as a
+          first guess at the truth and solving for the self-consistent
+          fixed point theta_hat = theta_true + bias(theta_true) is exactly
+          what iterate() does, which is why polbunch.ado's inline display
+          turns it on by default.
+    */
     syntax [, ESTimator(numlist max=1) ZSTAR(numlist max=1) ///
         T0(numlist max=1) T1(numlist max=1) ///
         LAMBDA(numlist max=1) ELasticity(numlist max=1) ///
@@ -9,7 +33,7 @@ program define polbunchbias, rclass
         ZL(numlist max=1) ZH(numlist max=1) ///
         BMODEL(integer 0) LOG ///
         BW(numlist max=1) ITERate TOLerance(real 1e-10) ///
-        MAXITER(integer 100) CONstant ]
+        MAXITER(integer 100) UNDERRELAX(real 0.5) CONstant ]
 
     // ----------------------------------------------------------------
     // Mode detection: count how many of the 9 primary required
@@ -119,8 +143,21 @@ program define polbunchbias, rclass
                     if `_k' > 1 local _zterm "`_zterm'#c.`_zname'"
                     capture local _bk = _b[h0:`_zterm']
                     if !_rc & !missing(`_bk') {
-                        local _hval  = `_hval'  + `_bk' * `_cest'^`_k'
-                        local _dhval = `_dhval' + `_k' * `_bk' * `_cest'^(`_k'-1)
+                        /*
+                            cutoff_est is frequently negative (z gets
+                            recentered around a midpoint, and the cutoff
+                            often lands on the negative side). Substituting
+                            a negative local straight into `_cest'^n lets
+                            Stata parse the unary minus as binding looser
+                            than "^", so -.12^0 becomes -(.12^0) = -1
+                            instead of (-.12)^0 = 1 -- silently flipping the
+                            sign of every term with an even exponent
+                            (including 0). Parenthesize the base so the
+                            whole negative value gets exponentiated, not
+                            just its absolute value.
+                        */
+                        local _hval  = `_hval'  + `_bk' * (`_cest')^`_k'
+                        local _dhval = `_dhval' + `_k' * `_bk' * (`_cest')^(`_k'-1)
                     }
                 }
                 if `_hval' > 0 {
@@ -148,6 +185,18 @@ program define polbunchbias, rclass
         }
         di as error "Specify all required options, or none to use polbunch results from e()"
         di as error "Missing: `missing_opts'"
+        exit 198
+    }
+
+    /*
+        pb_fobias_core only has bias formulas derived for estimator 1, 2,
+        and 4 -- anything else (including estimator 0 and estimator 3, the
+        latter being polbunch's actual default) falls through its final
+        branch and returns a row of missing values with no indication why.
+        Catch that here instead of silently returning missing.
+    */
+    if !inlist(`estimator', 1, 2, 4) {
+        di as error "polbunchbias: bias correction is only implemented for estimator(1), estimator(2), or estimator(4); estimator(`estimator') is not supported"
         exit 198
     }
 
@@ -183,8 +232,19 @@ program define polbunchbias, rclass
             local lnew = `lhat' - scalar(__bias_l)
             local diff = max(abs(`enew' - `ecur'), abs(`lnew' - `lcur'))
 
-            local ecur = `enew'
-            local lcur = `lnew'
+            /*
+                Plain fixed-point substitution (ecur = enew) oscillates
+                with growing amplitude for this bias map -- it's a stable
+                mapping in the sense that the correct fixed point exists
+                and the single-step correction is accurate, but the raw
+                iteration's local derivative exceeds 1 in magnitude, so
+                naive substitution diverges rather than converging no
+                matter how many iterations run. Under-relaxation (moving
+                only underrelax() of the way to the candidate each step)
+                damps that below the divergence threshold.
+            */
+            local ecur = `ecur' + `underrelax' * (`enew' - `ecur')
+            local lcur = `lcur' + `underrelax' * (`lnew' - `lcur')
             local iter = `k'
 
             if `diff' < `tolerance' {
