@@ -384,6 +384,7 @@ real rowvector pb_fobias_core(
 	real scalar q, dqdD
 	real scalar gu0, gu1
 	real scalar uM, Sbar, Sright
+	real scalar lo_right, lo_true, hi_true, trueRightMass, trueMass
 	real rowvector beta0
 	real rowvector Rall, Rlo, Rhi, Rbar, Jm
 	
@@ -863,18 +864,23 @@ real rowvector pb_fobias_core(
 		/*
 			Add the production estimator-2 mass row.
 
-			Hstar true is represented as:
-				int_{zL}^{zH} h0 dz / bw + B_true.
-
 			Model mass row is:
 				counterfactual excluded mass under estimator 2
 				+ delta * int_{zstar}^{zbar} h0 dz / bw.
 
 			Here zbar is taken to be zhi, matching the usual upper support
-			used in this fobias setup.
-		*/
+			used in this fobias setup. This is the model's own restriction
+			-- it need not (and generally does not) equal the true mass,
+			which is what the residual below is for.
 
-		Rall = pb_intP(L,H)/bw
+			True mass under the exact iso-elastic relocation z0 = x*z is
+			NOT int_{zL}^{zH} h0 + B: below the cutoff mass is untouched,
+			but above the marginal bunching threshold r = zstar*Delta the
+			true map is s0 = x*s + r, so the window edge H pulls in mass
+			whose counterfactual sat as high as x*H + r -- possibly beyond
+			zH itself. Verified against direct Monte-Carlo-style numerical
+			integration of the true relocation.
+		*/
 
 		Rlo = J(1,2,0)
 		if (L < 0) {
@@ -909,9 +915,32 @@ real rowvector pb_fobias_core(
 		Jm[1,3]    = dqdD*Sright + Sbar
 
 		/*
+			True mass in [L,H] under the exact relocation s0 = x*s + r
+			(r = zstar*Delta, the marginal bunching threshold). Below 0:
+			untouched, contributes through Rlo (already plain h0). At s=0:
+			the point mass B, present iff the window straddles the cutoff.
+			Above max(L,0,r): continuous compressed mass, remapped through
+			s0 = x*s + r; below r (and above max(L,0)) the true continuous
+			density is exactly zero (that range bunches to the point at 0),
+			so it contributes nothing on its own.
+		*/
+		lo_right = max((L,0))
+		if (H > max((lo_right,r))) {
+			lo_true = x*max((lo_right,r)) + r
+			hi_true = x*H + r
+			trueRightMass = (a*(hi_true-lo_true) + 0.5*m*(hi_true^2-lo_true^2))/bw
+		}
+		else {
+			trueRightMass = 0
+		}
+
+		trueMass = Rlo*beta0' + trueRightMass
+		if (L < 0 & H > 0) trueMass = trueMass + B
+
+		/*
 			Residual in the mass row at the true beta and true Delta.
 		*/
-		uM = (Rall*beta0' + B) - ((Rlo + q*Rhi + Delta*Rbar)*beta0')
+		uM = trueMass - ((Rlo + q*Rhi + Delta*Rbar)*beta0')
 
 		GtG = GtG + Jm'Jm
 		Gtu = Gtu + Jm'*uM
