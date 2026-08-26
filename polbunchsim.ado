@@ -202,46 +202,58 @@ program polbunchsim, eclass
                             }
                             capture local delta_md = e(delta_md)
                             if _rc local delta_md = .
+                        }
 
-                            /*
-                                Quantities computed by polbunchsim, rather than
-                                coefficients estimated by polbunch, get the same
-                                missing -> misscode treatment applied up front,
-                                so both the numest==1 e()-scalar aliases below
-                                and the numest>1 report()-scalar matrix columns
-                                can just read the "_post" locals directly.
-                            */
-                            local time_post = `time'
-                            local p_post    = `p'
-                            local se_post   = `se'
-                            local rc_post   = `rc'
+                        /*
+                            Quantities computed by polbunchsim, rather than
+                            coefficients estimated by polbunch, get the same
+                            missing -> misscode treatment applied up front,
+                            so both the numest==1 e()-scalar aliases below
+                            and the numest>1 report()-scalar matrix columns
+                            can just read the "_post" locals directly. This
+                            runs unconditionally (not gated on rc==0): when
+                            the underlying polbunch call itself failed,
+                            elast, se, p, the chi2 stats, and delta_md are
+                            still at their missing() initial values from the
+                            top of the loop, and the scalar_names bookkeeping
+                            below reads these "_post" locals regardless of
+                            whether this iteration succeeded -- leaving them
+                            undefined on failure previously crashed with
+                            "invalid syntax" from a local assignment with
+                            nothing on the right-hand side.
+                        */
+                        local time_post = `time'
+                        local p_post    = `p'
+                        local se_post   = `se'
+                        local rc_post   = `rc'
 
-                            if missing(`time_post') local time_post = `misscode'
-                            if missing(`p_post')    local p_post    = `misscode'
-                            if missing(`se_post')   local se_post   = `misscode'
+                        if missing(`time_post') local time_post = `misscode'
+                        if missing(`p_post')    local p_post    = `misscode'
+                        if missing(`se_post')   local se_post   = `misscode'
 
-                            foreach _tt in minimumdistance hausman {
-                                local chi2_`_tt'_post = `chi2_`_tt''
-                                local p_`_tt'_post    = `p_`_tt''
-                                if missing(`chi2_`_tt'_post') local chi2_`_tt'_post = `misscode'
-                                if missing(`p_`_tt'_post')    local p_`_tt'_post    = `misscode'
-                            }
-                            /*
-                                chi2_wald/p_wald are left as genuine Stata
-                                missing, not the misscode sentinel, when wald
-                                wasn't computed. Unlike hausman/minimum-
-                                distance -- which polbunch always attempts
-                                for estimator 2/3 -- wald simply isn't part
-                                of the default test set for those estimators
-                                (only estimator 1/4 run it by default), so
-                                missing here means "not applicable" rather
-                                than "failed to compute".
-                            */
-                            local chi2_wald_post = `chi2_wald'
-                            local p_wald_post    = `p_wald'
-                            local delta_md_post = `delta_md'
-                            if missing(`delta_md_post') local delta_md_post = `misscode'
+                        foreach _tt in minimumdistance hausman {
+                            local chi2_`_tt'_post = `chi2_`_tt''
+                            local p_`_tt'_post    = `p_`_tt''
+                            if missing(`chi2_`_tt'_post') local chi2_`_tt'_post = `misscode'
+                            if missing(`p_`_tt'_post')    local p_`_tt'_post    = `misscode'
+                        }
+                        /*
+                            chi2_wald/p_wald are left as genuine Stata
+                            missing, not the misscode sentinel, when wald
+                            wasn't computed. Unlike hausman/minimum-
+                            distance -- which polbunch always attempts
+                            for estimator 2/3 -- wald simply isn't part
+                            of the default test set for those estimators
+                            (only estimator 1/4 run it by default), so
+                            missing here means "not applicable" rather
+                            than "failed to compute".
+                        */
+                        local chi2_wald_post = `chi2_wald'
+                        local p_wald_post    = `p_wald'
+                        local delta_md_post = `delta_md'
+                        if missing(`delta_md_post') local delta_md_post = `misscode'
 
+                        if `rc' == 0 {
                             if `numest' == 1 {
                                 estimates store `esthold'
                             }

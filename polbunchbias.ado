@@ -635,16 +635,129 @@ real rowvector pb_fobias_core(
 
  if (estimator == 2) {
     if (islog) {
-        M = pb_intPP(lo,L) + pb_intPP(H,hi)
-        Gtu = pb_intP(H,hi)' * (m*rho)
-        biaspar = invsym(M)*Gtu
+        /*
+            Estimator 2, log-earnings case.
+
+            Chetty's own production restriction is unit-agnostic -- it
+            says h1=h0/(1+Delta) at the same argument s, same q=1/(1+Delta)
+            scaling, regardless of whether s is a level or log deviation --
+            so the shape-fitting design (GtG's q, dqdD structure below) is
+            identical to the level case. What changes is the truth being
+            fit against: under the log-earnings iso-elastic model, the
+            true right-side density is the pure translation h0(s+rho), not
+            the proportional relocation x*h0(xs) of the level case, and the
+            true excluded-region mass is the integral of h0 extended by
+            rho past H -- bunchers collapse exactly onto the cutoff,
+            refilling the window from what would otherwise have sat just
+            above it -- rather than the level mass row's separate
+            Delta*int_0^zbar h0 term standing in for the excess mass.
+        */
+        q     = 1/x
+        dqdD  = -1/(x^2)
+        beta0 = (a, m)
+
+        A0 = hi-H
+        A1 = (hi^2-H^2)/2
+        A2 = (hi^3-H^3)/3
+
+        /*
+            True right-side density minus estimator-2 model right-side
+            density:
+                true h1 - h0 = m*rho   (translating a linear h0 by rho
+                                         changes only the level, not the
+                                         slope, unlike the level case's
+                                         proportional relocation)
+                true h1 - q*h0 = (true h1 - h0) + (1-q)h0
+        */
+        gu0 = m*rho + (1-q)*a
+        gu1 = (1-q)*m
+
+        GtG = J(3,3,0)
+        Gtu = J(3,1,0)
+
+        GtG[1..2,1..2] = GtG[1..2,1..2] + pb_intPP(lo,L)
+
+        GtG[1,1] = GtG[1,1] + q^2*A0
+        GtG[1,2] = GtG[1,2] + q^2*A1
+        GtG[2,1] = GtG[1,2]
+        GtG[2,2] = GtG[2,2] + q^2*A2
+
+        GtG[1,3] = GtG[1,3] + q*dqdD*(a*A0 + m*A1)
+        GtG[3,1] = GtG[1,3]
+
+        GtG[2,3] = GtG[2,3] + q*dqdD*(a*A1 + m*A2)
+        GtG[3,2] = GtG[2,3]
+
+        GtG[3,3] = GtG[3,3] + dqdD^2 * ///
+            (a^2*A0 + 2*a*m*A1 + m^2*A2)
+
+        Gtu[1] = q*(gu0*A0 + gu1*A1)
+        Gtu[2] = q*(gu0*A1 + gu1*A2)
+        Gtu[3] = dqdD * ///
+            (a*gu0*A0 + (a*gu1 + m*gu0)*A1 + m*gu1*A2)
+
+        /*
+            Mass row. The model-implied mass row is unchanged from the
+            level case (a property of the estimating equations, not of
+            the true DGP): the right portion of the excluded window is
+            assumed to hold q*h0, plus a Delta-scaled reference integral
+            standing in for the excess mass. What differs is the true
+            mass actually in the window: the true integral simply extends
+            to H+rho instead of stopping at H, with no separate "B" term
+            needed (unlike the level case, where B enters as a standalone
+            addend because the level relocation isn't a simple extension
+            of the same integration range).
+        */
+        Rall = pb_intP(L, H+rho)/bw
+
+        Rlo = J(1,2,0)
+        if (L < 0) {
+            if (H <= 0) {
+                Rlo = pb_intP(L,H)/bw
+            }
+            else {
+                Rlo = pb_intP(L,0)/bw
+            }
+        }
+
+        Rhi = J(1,2,0)
+        if (H > 0) {
+            if (L >= 0) {
+                Rhi = pb_intP(L,H)/bw
+            }
+            else {
+                Rhi = pb_intP(0,H)/bw
+            }
+        }
+
+        Rbar = pb_intP(0,hi)/bw
+
+        Sbar   = Rbar * beta0'
+        Sright = Rhi  * beta0'
+
+        Jm = J(1,3,0)
+        Jm[1,1..2] = Rlo + q*Rhi + Delta*Rbar
+        Jm[1,3]    = dqdD*Sright + Sbar
+
+        uM = (Rall*beta0') - ((Rlo + q*Rhi + Delta*Rbar)*beta0')
+
+        GtG = GtG + Jm'Jm
+        Gtu = Gtu + Jm'*uM
+
+        biaspar = invsym(GtG)*Gtu
 
         bias_h = biaspar[1]
         bias_slope = biaspar[2]
         bias_lambda = zstar * (bias_slope/a - (m/a)*(bias_h/a))
 
+        /*
+            Final reported B is reduced-form (Hstar minus the integral of
+            the fitted h0 over the original, unextended window), matching
+            the level case's reduced-form route -- this note derives only
+            that route, per Section~sec:chetty.
+        */
         R = pb_intP(L,H)/bw
-        bias_B = -(R*biaspar)[1]
+        bias_B = -(R*biaspar[1..2])[1]
 
         if (useconstant) {
             bias_resp  = rho*(bias_B/B - bias_h/a)

@@ -53,7 +53,8 @@
 							noi di as error "Option estimator can take only values 0 (using data to the left only),  1 (no adjustment), 2 (Chetty et. al. adjustment),  3 (theoretically consistent and efficient estimator) or 4 (Saez trapezoid approximation)."
 							exit 301
 						}
-						
+
+
 						if "`test'"=="" {
 							if inlist(`estimator',1,4) loc test wald
 							else loc test all
