@@ -9,7 +9,7 @@ program define polbunchbias, rclass
         how biased would this estimator be?" That's a different question
         depending on where X comes from:
 
-        - Standalone mode with elasticity()/lambda() supplied from a KNOWN
+        - Standalone mode with elasticity()/relslope() supplied from a KNOWN
           DGP (e.g. validating this formula against a Monte Carlo): X is
           already the truth. One evaluation of bias() at that point is the
           right answer; iterate() would search for a different fixed point
@@ -28,7 +28,7 @@ program define polbunchbias, rclass
     */
     syntax [, ESTimator(numlist max=1) ZSTAR(numlist max=1) ///
         T0(numlist max=1) T1(numlist max=1) ///
-        LAMBDA(numlist max=1) ELasticity(numlist max=1) ///
+        RELSLOPE(numlist max=1) ELasticity(numlist max=1) ///
         ZLO(numlist max=1) ZHI(numlist max=1) ///
         ZL(numlist max=1) ZH(numlist max=1) ///
         BMODEL(integer 0) LOG ///
@@ -37,7 +37,11 @@ program define polbunchbias, rclass
 
     // ----------------------------------------------------------------
     // Mode detection: count how many of the 9 primary required
-    // options were supplied.  lambda is handled separately.
+    // options were supplied.  relslope is required too once in standalone
+    // (explicit) mode, but it must NOT participate in this particular
+    // count -- ncore==0 is what triggers e() mode, and "polbunchbias,
+    // relslope(#)" alone (overriding just the slope, everything else read
+    // from e()) has to keep landing there.
     // ----------------------------------------------------------------
     local ncore = ("`estimator'"!="") + ("`zstar'"!="") + ///
         ("`t0'"!="") + ("`t1'"!="") + ("`elasticity'"!="") + ///
@@ -90,8 +94,8 @@ program define polbunchbias, rclass
         }
         local elasticity = `_elast'
 
-        // lambda: compute from e(b) unless overridden by user
-        if "`lambda'" == "" {
+        // lambda: compute from e(b) unless overridden by user via relslope()
+        if "`relslope'" == "" {
             if `estimator' == 4 {
                 // Saez: recover slope from the implicit two-point counterfactual
                 local _hminus = _b[h0:_cons]
@@ -166,21 +170,24 @@ program define polbunchbias, rclass
                 else local lambda = 0
             }
         }
+        else {
+            local lambda = `relslope' * `zstar'
+        }
 
         if "`bw'" == "" local bw = `_bw'
     }
-    else if `ncore' == 9 {
+    else if `ncore' == 9 & "`relslope'" != "" {
         // ============================================================
-        // EXPLICIT MODE: all 9 primary options supplied
+        // EXPLICIT MODE: all 9 primary options plus relslope() supplied
         // ============================================================
-        if "`lambda'"     == "" local lambda = 0
+        local lambda = `relslope' * `zstar'
         if "`bw'"         == "" local bw = 1
         local islog_val = ("`log'" != "")
     }
     else {
         // Partial specification — error
         local missing_opts
-        foreach v in estimator zstar t0 t1 elasticity zlo zhi zl zh {
+        foreach v in estimator zstar t0 t1 elasticity zlo zhi zl zh relslope {
             if "``v''" == "" local missing_opts `missing_opts' `v'()
         }
         di as error "Specify all required options, or none to use polbunch results from e()"

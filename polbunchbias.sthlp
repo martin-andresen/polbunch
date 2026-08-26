@@ -38,7 +38,7 @@ Standalone mode (all required options supplied explicitly):
 {cmd:zhi(}{it:#}{cmd:)}
 {cmd:zl(}{it:#}{cmd:)}
 {cmd:zh(}{it:#}{cmd:)}
-[{cmd:lambda(}{it:#}{cmd:)}]
+{cmd:relslope(}{it:#}{cmd:)}
 [{it:options}]
 
 {synoptset 24 tabbed}{...}
@@ -54,9 +54,9 @@ Standalone mode (all required options supplied explicitly):
 {synopt :{cmd:zhi(}{it:#}{cmd:)}}upper support point used in the bias calculation{p_end}
 {synopt :{cmd:zl(}{it:#}{cmd:)}}lower edge of the excluded or bunching region{p_end}
 {synopt :{cmd:zh(}{it:#}{cmd:)}}upper edge of the excluded or bunching region{p_end}
+{synopt :{cmd:relslope(}{it:#}{cmd:)}}relative slope of the counterfactual density at z* (h0'(z*)/h0(z*), not scaled by z*); required in standalone mode, optional override in post-estimation mode (computed automatically from {cmd:e(b)} if omitted there){p_end}
 
 {syntab:Optional (both modes)}
-{synopt :{cmd:lambda(}{it:#}{cmd:)}}relative slope of the counterfactual density at z*; in post-estimation mode, computed automatically from {cmd:e(b)} if omitted{p_end}
 {synopt :{cmd:bmodel(}{it:#}{cmd:)}}report model-implied bunching response for estimators that support it; default is {cmd:bmodel(0)}{p_end}
 {synopt :{cmd:log}}perform the calculation in log z rather than level z (standalone mode only; post-estimation mode reads this from {cmd:e(log)}){p_end}
 {synopt :{cmd:bw(}{it:#}{cmd:)}}bin width used to scale bunching mass; default is {cmd:e(bw_orig)} in post-estimation mode and {cmd:bw(1)} in standalone mode{p_end}
@@ -84,22 +84,22 @@ the nine required options, it enters {it:post-estimation mode} and reads all
 parameters from the most recent {cmd:polbunch} results stored in {cmd:e()}.
 The kink point, bin width, excluded-region endpoints, estimation window,
 log/level flag, tax rates, and elasticity are all read automatically.
-For polynomial estimators (1–3), the relative slope lambda is derived from
-the first-order coefficient in {cmd:h0}.  For the Saez estimator (4), lambda
+For polynomial estimators (1–3), the relative slope is derived from
+the first-order coefficient in {cmd:h0}.  For the Saez estimator (4), it
 is imputed from the implicit two-point counterfactual defined by
-{cmd:_b[h0:_cons]} and {cmd:_b[h1:_cons]}.  The user may override lambda by
-supplying {cmd:lambda()} explicitly.
+{cmd:_b[h0:_cons]} and {cmd:_b[h1:_cons]}.  The user may override this by
+supplying {cmd:relslope()} explicitly.
 
 {pstd}
-When all nine required options are supplied, the command operates in
-{it:standalone mode} and uses only the supplied values.  Supplying a subset
-of the nine required options is an error.
+When all nine required options plus {cmd:relslope()} are supplied, the
+command operates in {it:standalone mode} and uses only the supplied values.
+Supplying a subset of these ten required options is an error.
 
 {pstd}
 The command assumes a normalized counterfactual density with height one at
-the bunching point. The local relative slope is supplied by {cmd:lambda()}.
-Internally, the density slope is set to {it:m=lambda/zstar}. The tax change
-implies
+the bunching point. The local relative slope is supplied by {cmd:relslope()}.
+Internally, the density slope is set to {it:m=relslope} (equivalently,
+{it:lambda=relslope*zstar} and {it:m=lambda/zstar}). The tax change implies
 
 {p 12 12 2}
 {it:tau} = (1 - {it:t0})/(1 - {it:t1})
@@ -155,9 +155,10 @@ tax rates. The tax ratio is computed as
 {it:tau = (1 - t0)/(1 - t1)}.
 
 {phang}
-{cmd:lambda(}{it:#}{cmd:)} specifies the relative slope of the counterfactual
-density at z*. With the normalization h0(z*) = 1, the level slope is
-{it:m = lambda/zstar}.
+{cmd:relslope(}{it:#}{cmd:)} specifies the relative slope of the counterfactual
+density at z*, h0'(z*)/h0(z*) (not scaled by z*). With the normalization
+h0(z*) = 1, the level slope is {it:m = relslope}; internally this is
+converted to {it:lambda = relslope*zstar} for use in the bias formulas.
 
 {phang}
 {cmd:elasticity(}{it:#}{cmd:)} specifies the elasticity used to generate the
@@ -188,7 +189,7 @@ The default is {cmd:bw(1)}.
 {phang}
 {cmd:iterate} iteratively subtracts the estimated bias from the input
 elasticity and slope parameters and recomputes the bias at the corrected
-values. Iteration updates both elasticity and lambda.
+values. Iteration updates both elasticity and the internal lambda.
 
 {phang}
 {cmd:tolerance(}{it:#}{cmd:)} specifies the convergence tolerance for
@@ -215,9 +216,9 @@ Post-estimation mode (immediately after polbunch):
 {phang2}{cmd:. polbunchbias}
 
 {pstd}
-Post-estimation mode, overriding lambda:
+Post-estimation mode, overriding the relative slope:
 
-{phang2}{cmd:. polbunchbias, lambda(0.3)}
+{phang2}{cmd:. polbunchbias, relslope(0.3)}
 
 {pstd}
 Estimator 1, standalone level calculation:
@@ -225,22 +226,22 @@ Estimator 1, standalone level calculation:
 {pstd}
 Estimator 1 using the constant-density approximation:
 
-{phang2}{cmd:. polbunchbias, estimator(1) zstar(1) t0(0.2) t1(0.6) lambda(0.5) elasticity(0.4) zlo(0) zhi(2) zl(0.99) zh(1) constant}
+{phang2}{cmd:. polbunchbias, estimator(1) zstar(1) t0(0.2) t1(0.6) relslope(0.5) elasticity(0.4) zlo(0) zhi(2) zl(0.99) zh(1) constant}
 
 {pstd}
 Estimator 2 with the model-implied response:
 
-{phang2}{cmd:. polbunchbias, estimator(2) bmodel(1) zstar(1) t0(0.2) t1(0.6) lambda(0.5) elasticity(0.4) zlo(0) zhi(2) zl(0.99) zh(1)}
+{phang2}{cmd:. polbunchbias, estimator(2) bmodel(1) zstar(1) t0(0.2) t1(0.6) relslope(0.5) elasticity(0.4) zlo(0) zhi(2) zl(0.99) zh(1)}
 
 {pstd}
 Saez-style estimator:
 
-{phang2}{cmd:. polbunchbias, estimator(4) zstar(1) t0(0.2) t1(0.6) lambda(0) elasticity(0.4) zlo(0) zhi(2.2) zl(0.99) zh(1)}
+{phang2}{cmd:. polbunchbias, estimator(4) zstar(1) t0(0.2) t1(0.6) relslope(0) elasticity(0.4) zlo(0) zhi(2.2) zl(0.99) zh(1)}
 
 {pstd}
 Iterated bias correction:
 
-{phang2}{cmd:. polbunchbias, estimator(1) zstar(1) t0(0.2) t1(0.6) lambda(0.5) elasticity(0.4) zlo(0) zhi(2) zl(0.99) zh(1) iterate}
+{phang2}{cmd:. polbunchbias, estimator(1) zstar(1) t0(0.2) t1(0.6) relslope(0.5) elasticity(0.4) zlo(0) zhi(2) zl(0.99) zh(1) iterate}
 
 
 {marker results}{...}
@@ -278,7 +279,7 @@ Iterated bias correction:
 {synopt :{cmd:r(bias_lambda)}}bias in the estimated relative slope{p_end}
 {synopt :{cmd:r(constant)}}1 if {cmd:constant} was specified; 0 otherwise{p_end}
 {synopt :{cmd:r(input_elasticity)}}elasticity originally supplied by the user{p_end}
-{synopt :{cmd:r(input_lambda)}}lambda originally supplied by the user{p_end}
+{synopt :{cmd:r(input_lambda)}}lambda implied by {cmd:relslope()} (or computed automatically), before iteration{p_end}
 {synopt :{cmd:r(corrected_elasticity)}}final elasticity after iteration, or input elasticity if not iterated{p_end}
 {synopt :{cmd:r(corrected_lambda)}}final lambda after iteration, or input lambda if not iterated{p_end}
 {synopt :{cmd:r(iterations)}}number of iterations performed{p_end}
