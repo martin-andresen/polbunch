@@ -919,14 +919,18 @@ real rowvector pb_fobias_core(
 			(r = zstar*Delta, the marginal bunching threshold). Below 0:
 			untouched, contributes through Rlo (already plain h0). At s=0:
 			the point mass B, present iff the window straddles the cutoff.
-			Above max(L,0,r): continuous compressed mass, remapped through
-			s0 = x*s + r; below r (and above max(L,0)) the true continuous
-			density is exactly zero (that range bunches to the point at 0),
-			so it contributes nothing on its own.
+			Above 0: continuous mass remapped through s0 = x*s + r -- there
+			is NO dead zone in actual-earnings space here (only in
+			counterfactual space): non-bunchers with s0 just above r land
+			at actual locations just above 0, so the continuous density
+			starts immediately at the cutoff, not at r. Concretely, mass
+			over (max(L,0), H] maps from counterfactual (x*max(L,0)+r,
+			x*H+r] -- verified against direct numerical integration of the
+			true relocation.
 		*/
 		lo_right = max((L,0))
-		if (H > max((lo_right,r))) {
-			lo_true = x*max((lo_right,r)) + r
+		if (H > lo_right) {
+			lo_true = x*lo_right + r
 			hi_true = x*H + r
 			trueRightMass = (a*(hi_true-lo_true) + 0.5*m*(hi_true^2-lo_true^2))/bw
 		}
