@@ -988,8 +988,15 @@
 								}
 								di as txt "{hline `W'}"
 							}
-							// First-order bias (suppressed by nobias option)
-							if "`nobias'" == "" & inlist(`estimator', 1, 2, 4) & ///
+							// First-order bias (suppressed by nobias option).
+							// Estimator 3 is included here too: it is
+							// theoretically consistent and so has no bias to
+							// report without constant (polbunchbias errors in
+							// that case; the capture below swallows it
+							// silently, so nothing is displayed), but with
+							// constant specified it correctly reports the
+							// constant-density-approximation bias.
+							if "`nobias'" == "" & inlist(`estimator', 1, 2, 3, 4) & ///
 									"`transform'" != "notransform" & "`t0'" != "" & "`t1'" != "" {
 								local _bmodelopt
 								if "`bmodel'" != "" local _bmodelopt "bmodel(1)"

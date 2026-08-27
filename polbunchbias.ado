@@ -197,13 +197,29 @@ program define polbunchbias, rclass
 
     /*
         pb_fobias_core only has bias formulas derived for estimator 1, 2,
-        and 4 -- anything else (including estimator 0 and estimator 3, the
-        latter being polbunch's actual default) falls through its final
-        branch and returns a row of missing values with no indication why.
-        Catch that here instead of silently returning missing.
+        and 4 -- anything else (including estimator 0) falls through its
+        final branch and returns a row of missing values with no
+        indication why. Catch that here instead of silently returning
+        missing.
+
+        Estimator 3 (the theoretically consistent estimator) is a special
+        case: it correctly models the shift-and-stretch above the cutoff,
+        so under exact integration (constant not specified) its bias is
+        zero by construction -- there is nothing to report, and asking for
+        it is almost certainly a mistake, so we error rather than silently
+        report zero. With constant specified, the only bias left is the
+        constant-density-approximation bias of Section~sec:constant-approx
+        evaluated at the truth (there is no fitting-stage bias to add to
+        it, since estimator 3 has none) -- that case is implemented below.
     */
-    if !inlist(`estimator', 1, 2, 4) {
-        di as error "polbunchbias: bias correction is only implemented for estimator(1), estimator(2), or estimator(4); estimator(`estimator') is not supported"
+    local useconstant = ("`constant'" != "")
+
+    if `estimator' == 3 & !`useconstant' {
+        di as error "polbunchbias: estimator(3) is theoretically consistent under exact integration and has zero bias by construction; specify constant to compute its constant-density-approximation bias, or use estimator(1), estimator(2), or estimator(4) to check the other estimators"
+        exit 198
+    }
+    if !inlist(`estimator', 1, 2, 3, 4) {
+        di as error "polbunchbias: bias correction is only implemented for estimator(1), estimator(2), estimator(3) with constant, or estimator(4); estimator(`estimator') is not supported"
         exit 198
     }
 
@@ -212,7 +228,6 @@ program define polbunchbias, rclass
     // ----------------------------------------------------------------
     // Common: run the bias calculation
     // ----------------------------------------------------------------
-    local useconstant = ("`constant'" != "")
 
     local ehat = `elasticity'
     local lhat = `lambda'
@@ -377,6 +392,7 @@ real rowvector pb_fobias_core(
     real scalar bias_h, bias_B, bias_resp, bias_shift, bias_e
     real scalar bias_slope, bias_lambda
     real scalar atilde, mtilde, Btilde, rtilde
+    real scalar r_const_bias
     real matrix M, GtG, Gtu, biaspar
     real rowvector R
     real scalar lo, hi, L, H, A0, A1, A2
@@ -993,6 +1009,45 @@ real rowvector pb_fobias_core(
 			zlo,zhi,zL,zH,dL,dR,B,bias_h,bias_B,bias_resp,bias_shift,bias_e, ///
 			bias_slope,bias_lambda))
 	}
+
+    if (estimator == 3) {
+        /*
+            Estimator 3: theoretically consistent, so there is no
+            fitting-stage bias at all -- (a,m) are exactly the truth, and
+            the only possible bias is the constant-density-approximation
+            bias of Section~sec:constant-approx, which only arises if the
+            caller chose the constant shortcut instead of exact
+            integration. The .ado-level guard above only lets this branch
+            run when useconstant is set; the check is repeated here for
+            robustness.
+        */
+        bias_h = bias_B = 0
+        bias_slope = bias_lambda = 0
+
+        if (useconstant) {
+            // r_exact - r_const, to first order in the true slope,
+            // evaluated at the truth: r_const = (B*bw)/a.
+            r_const_bias = -m*(B*bw)^2/(2*a^3)
+
+            if (islog) {
+                bias_resp  = r_const_bias
+                bias_shift = .
+                bias_e     = bias_resp/Ltau
+            }
+            else {
+                bias_resp  = r_const_bias
+                bias_shift = r_const_bias/zstar
+                bias_e     = bias_shift/(x*Ltau)
+            }
+        }
+        else {
+            bias_resp = bias_shift = bias_e = 0
+        }
+
+        return((estimator,bmodel,islog,zstar,t0,t1,tau,lambda,elast,x,rho,Delta, ///
+            zlo,zhi,zL,zH,dL,dR,B,bias_h,bias_B,bias_resp,bias_shift,bias_e, ///
+            bias_slope,bias_lambda))
+    }
 
     return(J(1,26,.))
 }
