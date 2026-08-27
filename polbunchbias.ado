@@ -507,7 +507,15 @@ real rowvector pb_fobias_core(
 			bias_lambda = zstar*(m_saez/a_saez - m/a)
 
 			if (hminus > 0 & hplus > 0) {
-				dlogzhat = 2*Bsaez*bw/(hminus + hplus)
+				/*
+					Constant-density approximation: use hminus alone as
+					the counterfactual reference, dropping hplus -- Bsaez
+					itself is untouched. At hminus==hplus this coincides
+					exactly with the exact formula below (no approximation
+					error), same as in saez_transform.
+				*/
+				if (useconstant) dlogzhat = Bsaez*bw/hminus
+				else             dlogzhat = 2*Bsaez*bw/(hminus + hplus)
 				xhat     = exp(dlogzhat)
 				bias_B    = Bsaez - B
 				bias_resp = dlogzhat - rho
@@ -576,16 +584,32 @@ real rowvector pb_fobias_core(
 		bias_lambda = zstar*(m_saez/a_saez - m/a)
 
 		if (hminus > 0) {
-			A     = 2*Bsaez*bw/zstar
-			qsaez = hplus - hminus - A
-			disc  = qsaez^2 + 4*hminus*hplus
-			if (disc >= 0) {
-				xhat = (-qsaez + sqrt(disc))/(2*hminus)
-				if (xhat > 0) {
-					bias_B    = Bsaez - B
-					bias_resp = zstar*(xhat - x)
-					bias_shift = xhat - x
-					bias_e    = ln(xhat)/Ltau - elast
+			A = 2*Bsaez*bw/zstar
+			/*
+				Constant-density approximation: r_const = Bsaez*bw/hminus,
+				i.e. xhat = 1 + A/(2*hminus), dropping hplus (and the
+				quadratic in xhat) entirely -- coincides with the exact
+				solve below only to first order in the response, even at
+				hminus==hplus, mirroring saez_transform.
+			*/
+			if (useconstant) {
+				xhat = 1 + A/(2*hminus)
+				bias_B    = Bsaez - B
+				bias_resp = zstar*(xhat - x)
+				bias_shift = xhat - x
+				bias_e    = ln(xhat)/Ltau - elast
+			}
+			else {
+				qsaez = hplus - hminus - A
+				disc  = qsaez^2 + 4*hminus*hplus
+				if (disc >= 0) {
+					xhat = (-qsaez + sqrt(disc))/(2*hminus)
+					if (xhat > 0) {
+						bias_B    = Bsaez - B
+						bias_resp = zstar*(xhat - x)
+						bias_shift = xhat - x
+						bias_e    = ln(xhat)/Ltau - elast
+					}
 				}
 			}
 		}

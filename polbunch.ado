@@ -615,7 +615,7 @@
 										`bmodel'			
 								}
 								else {
-									saez_transform, zstarorig(`cutoff_orig') bworig(`bw_orig') t0(`t0') t1(`t1') `log' `grad'
+									saez_transform, zstarorig(`cutoff_orig') bworig(`bw_orig') t0(`t0') t1(`t1') `log' `grad' `constant'
 									}
 								}
 								
@@ -1478,7 +1478,7 @@ program define saez_transform, eclass
     version 16.0
 
     syntax , ZSTAROrig(numlist max=1) BWOrig(numlist max=1) ///
-        [T0(numlist max=1) T1(numlist max=1) log nograd]
+        [T0(numlist max=1) T1(numlist max=1) log nograd constant]
 
     tempname b0 V0 theta Vtheta b G V
 
@@ -1488,8 +1488,9 @@ program define saez_transform, eclass
         exit 503
     }
 	
-    local islog  = ("`log'" != "")
-    local dograd = ("`nograd'" == "")
+    local islog       = ("`log'" != "")
+    local dograd      = ("`nograd'" == "")
+    local useconstant = ("`constant'" != "")
 
     local zstarorig : word 1 of `zstarorig'
     local bworig    : word 1 of `bworig'
@@ -1532,7 +1533,7 @@ program define saez_transform, eclass
     mata: st_matrix("`b'", saez_transform( ///
         st_matrix("`theta'"), ///
         `zstarorig', `bworig', `t0', `t1', ///
-        `islog', `hastax', `dograd', "`G'" ///
+        `islog', `hastax', `dograd', `useconstant', "`G'" ///
     ))
 
     local outnames h0:_cons h1:_cons bunching:number_bunchers ///
@@ -4805,6 +4806,7 @@ real rowvector saez_transform(
     real scalar islog,
     real scalar hastax,
     real scalar dograd,
+    real scalar useconstant,
     string scalar Gname
 )
 {
@@ -4831,42 +4833,85 @@ real rowvector saez_transform(
     excess_mass = 2 * B / s
 
     if (islog) {
-        // hminus/hplus/B are bin counts, so convert bin-width mass to log distance
-        dlogz = 2 * B * bworig / s
-        x     = exp(dlogz)
+        if (useconstant) {
+            /*
+                Constant-density approximation: treat h0:_cons (hminus)
+                alone as the counterfactual reference, exactly as the
+                other estimators use hminus/h0(z*) alone -- Bsaez itself
+                (built from both hminus and hplus) is untouched; only the
+                B -> response step drops hplus. At hminus==hplus this
+                coincides exactly with the exact log formula below (no
+                approximation error at all, unlike the level case),
+                since dlogz is already linear in B with no further
+                nonlinearity to solve.
+            */
+            dlogz = B * bworig / hminus
+            x     = exp(dlogz)
 
-        shift             = x - 1
-        marginal_response = dlogz
+            shift             = x - 1
+            marginal_response = dlogz
 
-        if (dograd) {
-            dmr = (-2*B*bworig/s^2, -2*B*bworig/s^2, 2*bworig/s)
-            dshift = x * dmr
+            if (dograd) {
+                dmr = (-B*bworig/hminus^2, 0, bworig/hminus)
+                dshift = x * dmr
+            }
+        }
+        else {
+            // hminus/hplus/B are bin counts, so convert bin-width mass to log distance
+            dlogz = 2 * B * bworig / s
+            x     = exp(dlogz)
+
+            shift             = x - 1
+            marginal_response = dlogz
+
+            if (dograd) {
+                dmr = (-2*B*bworig/s^2, -2*B*bworig/s^2, 2*bworig/s)
+                dshift = x * dmr
+            }
         }
     }
     else {
-        // B = zstarorig/(2*bworig) * (x-1)*(hminus + hplus/x)
-        A    = 2 * B * bworig / zstarorig 
-        q    = hplus - hminus - A
-        disc = q^2 + 4*hminus*hplus
-        if (disc < 0) return(out)
+        if (useconstant) {
+            // Same idea in levels: r_const = B*bworig/hminus, dropping
+            // hplus (and hence the quadratic in x) entirely -- coincides
+            // with the exact solve below only to first order in the
+            // response, even at hminus==hplus, since the level relation
+            // is genuinely nonlinear in x (unlike logs).
+            A     = 2 * B * bworig / zstarorig
+            shift = A / (2*hminus)
+            x     = 1 + shift
+            marginal_response = zstarorig * shift
 
-        x = (-q + sqrt(disc)) / (2*hminus)
-        if (x <= 0) return(out)
+            if (dograd) {
+                dshift = (-A/(2*hminus^2), 0, bworig/(hminus*zstarorig))
+                dmr    = zstarorig * dshift
+            }
+        }
+        else {
+            // B = zstarorig/(2*bworig) * (x-1)*(hminus + hplus/x)
+            A    = 2 * B * bworig / zstarorig
+            q    = hplus - hminus - A
+            disc = q^2 + 4*hminus*hplus
+            if (disc < 0) return(out)
 
-        shift             = x - 1
-        marginal_response = zstarorig * shift
+            x = (-q + sqrt(disc)) / (2*hminus)
+            if (x <= 0) return(out)
 
-        if (dograd) {
-            Fx = zstarorig/(2*bworig) * (hminus + hplus/x^2)
-            if (Fx == 0) return(out)
+            shift             = x - 1
+            marginal_response = zstarorig * shift
 
-            dx = J(1,3,0)
-            dx[1] = -(zstarorig/(2*bworig)) * (x-1) / Fx
-            dx[2] = -(zstarorig/(2*bworig)) * (x-1) / x / Fx
-            dx[3] =  1 / Fx
+            if (dograd) {
+                Fx = zstarorig/(2*bworig) * (hminus + hplus/x^2)
+                if (Fx == 0) return(out)
 
-            dshift = dx
-            dmr    = zstarorig * dshift
+                dx = J(1,3,0)
+                dx[1] = -(zstarorig/(2*bworig)) * (x-1) / Fx
+                dx[2] = -(zstarorig/(2*bworig)) * (x-1) / x / Fx
+                dx[3] =  1 / Fx
+
+                dshift = dx
+                dmr    = zstarorig * dshift
+            }
         }
     }
 
