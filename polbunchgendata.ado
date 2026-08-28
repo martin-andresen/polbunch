@@ -19,10 +19,32 @@ program polbunchgendata, rclass
 	tempname r
 	if "`distribution'"=="" loc distribution triangular(0,3,0)
 	if strpos("`distribution'","triangular")>0 {
+		/*
+			Parse triangular(a,b,c) by locating its parentheses and
+			splitting on commas, rather than reading fixed character
+			positions (substr(...,12,1) etc.) -- the fixed-position
+			version silently misparsed anything but single-digit,
+			non-negative a/b/c (e.g. "triangular(-1,10,10)" or
+			"triangular(0.5,3,1)" would read nonsense substrings).
+			Done outside the "cap" below (with its own clear error
+			message) rather than inside it, so a bad argument count
+			doesn't just fall through to the generic "use a valid
+			distribution" message with no indication of what was
+			actually wrong.
+		*/
+		loc _popen  = strpos("`distribution'","(")
+		loc _pclose = strpos("`distribution'",")")
+		loc _argstr = substr("`distribution'", `_popen'+1, `_pclose'-`_popen'-1)
+		loc _argstr = subinstr("`_argstr'", ","," ",.)
+		loc _nargs : word count `_argstr'
+		if `_nargs' != 3 {
+			noi di as error "triangular(a,b,c) requires exactly 3 numeric arguments; got `_nargs' in distribution(`distribution')."
+			exit 198
+		}
+		loc a : word 1 of `_argstr'
+		loc b : word 2 of `_argstr'
+		loc c : word 3 of `_argstr'
 		cap {
-		loc a=substr("`distribution'",12,1)
-		loc b=substr("`distribution'",14,1)
-		loc c=substr("`distribution'",16,1)
 		gen double `r'=runiform()
 		gen double `varlist'=`a'+sqrt(`r'*(`b'-`a')*(`c'-`a')) if `r'<(`c'-`a')/(`b'-`a')
 		replace `varlist'=`b'- sqrt((1-`r')*(`b'-`a')*(`b'-`c')) if `r'>(`c'-`a')/(`b'-`a')

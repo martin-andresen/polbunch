@@ -7,7 +7,19 @@ program polbunchsim, eclass
         distribution(string) opts(string) ///
         estimator(numlist integer) btype(numlist integer) ///
         clist(string) sample(string)  ///
-        est4limits(numlist) limits(numlist) report(string)]
+        est4limits(numlist) limits(numlist) report(string) DEBUG]
+
+    /*
+        debug: the internal polbunch calls below are wrapped in a bare
+        "capture" (not "capture noisily"), so a failed replication's real
+        Stata/Mata error text is normally unrecoverable from outside --
+        even calling polbunchsim itself noisily reveals nothing, since
+        the inner capture swallows it regardless. With debug specified,
+        those internal calls run noisily (still capture'd, so a single
+        failed replication still doesn't abort the caller), so the
+        actual error surfaces in the log instead of only a bare rc.
+    */
+    local dbgpfx = cond("`debug'" != "", "noisily", "")
 
     quietly {
         if "`zmin'" == "" local zmin "-."
@@ -116,44 +128,44 @@ program polbunchsim, eclass
                         local rc = 0
 
                         if `bt' == 0 {
-                            capture polbunch z `iff', cutoff(`cutoff') ///
+                            capture `dbgpfx' polbunch z `iff', cutoff(`cutoff') ///
                                 pol(`polynomial') bw(`bw') t0(`t0') t1(`t1') ///
                                 `log' estimator(`e') vce(none) `c' ///
                                  `uselimits' `opts'
                         }
                         else if `bt' == 1 {
-                            capture  polbunch z `iff', cutoff(`cutoff') ///
+                            capture `dbgpfx' polbunch z `iff', cutoff(`cutoff') ///
                                 pol(`polynomial') bw(`bw') t0(`t0') t1(`t1') ///
                                 `log' estimator(`e') vce(analytic) `c' ///
-                                `opts' `uselimits'  
+                                `opts' `uselimits'
                         }
                         else if `bt' == 2 {
-                            capture bootstrap, reps(`bootreps'): ///
+                            capture `dbgpfx' bootstrap, reps(`bootreps'): ///
                                 polbunch z `iff', cutoff(`cutoff') ///
                                 pol(`polynomial') bw(`bw') t0(`t0') t1(`t1') ///
                                 `log' estimator(`e') vce(none) `c' ///
-                                `opts' `uselimits' 
+                                `opts' `uselimits'
                         }
                         else if `bt' == 3 {
-                            capture polbunch z `iff', cutoff(`cutoff') ///
+                            capture `dbgpfx' polbunch z `iff', cutoff(`cutoff') ///
                                 pol(`polynomial') bw(`bw') t0(`t0') t1(`t1') ///
                                 `log' estimator(`e') bootreps(`bootreps') vce(bootstrap) ///
-                                 `c' `opts' `uselimits' 
+                                 `c' `opts' `uselimits'
                         }
                         else if `bt' == 4 {
-                            capture polbunch z `iff', cutoff(`cutoff') ///
+                            capture `dbgpfx' polbunch z `iff', cutoff(`cutoff') ///
                                 pol(`polynomial') bw(`bw') t0(`t0') t1(`t1') ///
                                 `log' estimator(`e') bootreps(`bootreps') vce(bayes) ///
                                  `c' `opts' `uselimits'
                         }
                         else if `bt' == 5 {
-                            capture  polbunch z `iff', cutoff(`cutoff') ///
+                            capture `dbgpfx' polbunch z `iff', cutoff(`cutoff') ///
                                 pol(`polynomial') bw(`bw') t0(`t0') t1(`t1') ///
                                 `log' estimator(`e') bootreps(`bootreps') vce(bootstrap) ///
-                                `c' `opts' `uselimits' nozero 
+                                `c' `opts' `uselimits' nozero
                         }
                         else if `bt' == 6 {
-                            capture polbunch z `iff', cutoff(`cutoff') ///
+                            capture `dbgpfx' polbunch z `iff', cutoff(`cutoff') ///
                                 pol(`polynomial') bw(`bw') t0(`t0') t1(`t1') ///
                                 `log' estimator(`e') bootreps(`bootreps') vce(bayes) ///
                                 nozero `c' `opts' `uselimits'

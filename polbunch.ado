@@ -620,10 +620,30 @@
 								}
 								
 								matrix `b' = e(b)
-								
+
 								if `s' == 0 {
 									matrix `bmain' = `b'
 									if "`vce'"=="analytic" matrix `Vmain' = e(V)
+
+									/*
+										bunch_transform sets e(hasresp), but
+										it's about to be overwritten by
+										polbunch's own final ereturn block
+										below (and, for bootstrap/bayes vce,
+										by later replications' calls to this
+										same transform step) -- capture it
+										from the MAIN (s==0) estimate only, so
+										it can be forwarded once the loop
+										finishes. saez_transform doesn't set
+										e(hasresp) (it signals an unsolved
+										draw differently, via an all-missing
+										b/V rather than a narrower one), so
+										default to missing rather than
+										erroring when it's absent.
+									*/
+									capture confirm scalar e(hasresp)
+									if !_rc local hasresp_main = e(hasresp)
+									else    local hasresp_main = .
 								}
 								else if `bootreps'>1 {
 									mat `bs'=nullmat(`bs') \ `b'
@@ -903,7 +923,18 @@
 						ereturn scalar upper_limit=`zH_excl_orig'
 						ereturn local normalize="`normalize'"
 						ereturn scalar estimator=`estimator'
-						if "`vce'"!="none" ereturn local cmd "polbunch"
+						/*
+							e(cmd) used to be set only when vce()!="none",
+							which broke "estimates store"/"estimates
+							restore" (and hence anything built on them,
+							e.g. polbunchsim's vce(none)/btype(0) path)
+							with "last estimation results not found" --
+							there's no postestimation companion command
+							here that would need e(V) to exist just
+							because e(cmd) is set, so this is set
+							unconditionally now.
+						*/
+						ereturn local cmd "polbunch"
 						ereturn local cmdname "polbunch"
 						ereturn local title 	"Polynomial bunching estimates"
 						ereturn local cmdline 	"polbunch `0'"
@@ -934,6 +965,18 @@
 						if "`t1'" != "" ereturn scalar t1 = `t1'
 						ereturn scalar zlo = `_zlo_val'
 						ereturn scalar zhi = `_zhi_val'
+						/*
+							Forwards bunch_transform's e(hasresp) (captured
+							from the main, s==0 estimate above, before it
+							got overwritten) -- whether shift/marginal_response/
+							elasticity are identified for this estimation.
+							Missing when the transform step wasn't the
+							bunch_transform path (e.g. Saez, estimator 4) or
+							didn't run (notransform).
+						*/
+						capture confirm number `hasresp_main'
+						if !_rc ereturn scalar hasresp = `hasresp_main'
+						else     ereturn scalar hasresp = .
 
 						//Display results
 						noi {
@@ -1377,7 +1420,7 @@
 				if `hastax0' {
 					local cnames `cnames' elasticity
 				}
-			} 
+			}
 			else {
 				noi di as text "Note: Could not find real root to solve the polynomial. Consider using the constant approximation."
 			}
@@ -1452,6 +1495,20 @@
 			}
 
 			ereturn local cmd "bunch_transform"
+			/*
+				hasresp: whether shift/marginal_response/elasticity are
+				identified for this draw (the exact Naive/Chetty/Saez
+				quadratic had a real root). When 0, those three
+				coefficients are absent from e(b) entirely and
+				"_b[bunching:elasticity]" (etc.) errors with "not found"
+				rather than returning a missing value -- Stata's
+				"ereturn post"/"ereturn repost" both unconditionally
+				refuse any b vector containing missing entries, so the
+				width has to vary rather than posting them as missing.
+				Check e(hasresp) BEFORE touching those coefficients
+				instead of wrapping the access in capture.
+			*/
+			ereturn scalar hasresp = `hasresp'
 
 			ereturn scalar estimator   = `estimator'
 			ereturn scalar K           = `k'
@@ -3308,9 +3365,20 @@ cap program drop bunch_saez
 
 				if (r >= .) {
 					/*
-						If no admissible root exists for the missing-mass equation,
-						report coefficients, B, EM, and delta if present, but drop
-						shift/marginal_response/elasticity from the posted vector.
+						If no admissible root exists for the missing-mass
+						equation, shift/marginal_response/elasticity are
+						not identified for this draw -- drop them from the
+						posted vector (as before). An earlier attempt to
+						post them as ordinary Stata missing values instead
+						ran into "ereturn post"/"ereturn repost" both
+						unconditionally refusing any b vector containing
+						missing entries ("matrix has missing values",
+						r(504), with no override option in this Stata
+						version) -- so the width genuinely has to vary
+						with hasresp. The .ado layer now exposes
+						e(hasresp) instead, so callers can check that
+						BEFORE touching _b[bunching:elasticity] rather
+						than needing capture at all.
 					*/
 					hasresp = 0
 					b = b[1, 1..(oshift-1)]
@@ -4951,7 +5019,7 @@ real rowvector saez_transform(
             }
             else {
                 if (islog) G[7,.] = dmr / L
-                else       G[7,.] = dx / (x * L)
+                else       G[7,.] = dshift / (x * L)
             }
         }
 
