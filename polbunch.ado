@@ -1,4 +1,4 @@
-				*! polbunch version date 20260618
+				*! polbunch version date 20260903
 				* Author: Martin Eckhoff Andresen
 				* This program is part of the polbunch package.
 				
@@ -19,11 +19,14 @@
 					vce(string) ///
 					log ///
 					constant ///
+					EXACT ///
+					POOLmass ///
+					SPLITmass ///
 					nodots /// suppress dots for bootstrap progress
 					test(string) ///
 					nozero ///
-					Bmodel ///
 					norankred ///
+					noRANKcheck ///
 					NOBias ///
 					NOITERate ///
 					]
@@ -54,6 +57,44 @@
 							exit 301
 						}
 
+						/*
+							Two toggle axes, mirroring polbunchbias:
+
+							  constant / exact -- how excess mass is turned into a
+							    response (constant-density approximation vs. exact
+							    inversion of the counterfactual-density integral).
+							    Default: constant for estimators 1 and 2, exact for
+							    estimators 0 and 3.
+
+							  poolmass / splitmass -- how the bunching mass B is
+							    formed from the observed excluded-region mass M:
+							      poolmass  : B = M - int_{zL}^{zH} h0
+							      splitmass : B = M - int_{zL}^{z*} h0
+							                       - int_{z*}^{zH} h1
+							    Default: poolmass for estimators 1 and 2, splitmass
+							    for estimators 0 and 3.  Irrelevant for estimator 1
+							    (h0 == h1) and ignored for estimator 4 (Saez has its
+							    own two-point mass calculation).
+						*/
+						if "`constant'" != "" & "`exact'" != "" {
+							noi di as error "Specify at most one of constant / exact."
+							exit 198
+						}
+						if "`poolmass'" != "" & "`splitmass'" != "" {
+							noi di as error "Specify at most one of poolmass / splitmass."
+							exit 198
+						}
+
+						if "`constant'" != ""      loc useconstant = 1
+						else if "`exact'" != ""    loc useconstant = 0
+						else                       loc useconstant = inlist(`estimator',1,2)
+
+						if "`poolmass'" != ""      loc nosplit = 1
+						else if "`splitmass'" != "" loc nosplit = 0
+						else                       loc nosplit = inlist(`estimator',1,2)
+						if `estimator' == 1        loc nosplit = 1
+
+						loc constant = cond(`useconstant',"constant","")
 
 						if "`test'"=="" {
 							if inlist(`estimator',1,4) loc test wald
@@ -85,10 +126,44 @@
 						
 						if "`vce'"=="" loc vce analytic
 						else {
-							if !inlist("`vce'","analytic","bootstrap","bayes","none") {
-								noi di as error "vce() can only contain none, analytic, bootstrap or bayes."
+							if !inlist("`vce'","analytic","bootstrap","bayes","none","robust","hc0","hc1","hc2") ///
+								& "`vce'"!="hc3" {
+								noi di as error "vce() can only contain none, analytic, robust, hc0, hc1, hc2, hc3, bootstrap or bayes."
 								exit 301
 							}
+						}
+						/*
+							Residual/Eicker-White delta-method VCE.
+
+							  hctype = -1  classic multinomial-count variance (the
+							               analytic default): Var(y_j) = model-implied
+							               multinomial ~ Poisson.
+							  hctype = 0..3  the polynomial-fit (bin-count) rows of
+							               the stacked system get the residual meat
+							               diag((y_j - yhat_j)^2), with the HC0/HC1/
+							               HC2/HC3 finite-sample correction; the
+							               trailing accounting row (observed bunching
+							               mass) keeps its multinomial variance, since
+							               it is an identity with no lack of fit.
+
+							This is robust to bin-level heteroskedasticity, to
+							polynomial misspecification treated as noise (round-number
+							heaping, secondary bumps), and to the marginal, per-bin
+							part of overdispersion from repeated individuals / year
+							effects.  It is NOT robust to cross-bin correlation
+							(off-diagonals stay multinomial) -- for that, cluster on
+							the microdata outside polbunch.  "robust" is an alias for
+							hc1.
+						*/
+						loc hctype = -1
+						if inlist("`vce'","robust","hc1") loc hctype = 1
+						else if "`vce'"=="hc0" loc hctype = 0
+						else if "`vce'"=="hc2" loc hctype = 2
+						else if "`vce'"=="hc3" loc hctype = 3
+						loc vcelabel "`vce'"
+						if `hctype'>=0 {
+							loc vcelabel "hc`hctype'"
+							loc vce analytic
 						}
 						local grad = cond("`vce'"=="analytic","","nograd")
 						
@@ -367,6 +442,27 @@
 								while `nmiss' {
 									regress `y' 0.`dum'#(`rhsvars') 0.`dum' 1.`dum2'#(`rhsvars') 1.`dum2' if `bunch' == 0, nocons
 
+									/*
+										norankcheck: skip the separate-sides
+										identification check entirely and keep the
+										requested polynomial order.  A restricted
+										estimator (2/3) can be identified at an order
+										where two free one-sided polynomials are not;
+										the unrestricted fit above is still run once
+										to seed the profile starting values.
+										Specification tests are disabled further
+										below because they DO need an identified
+										unrestricted fit.  The analytical bias does
+										NOT -- polbunchbias reads the counterfactual
+										polynomial, tax rates, window and elasticity
+										from e() and never touches the separate
+										one-sided polynomials -- so it is still run.
+									*/
+									if "`rankcheck'" == "norankcheck" {
+										local nmiss = 0
+										local rankforced 1
+									}
+									else {
 									local nmiss = e(rank) < (`polynomial' + 1)*2
 
 									if `nmiss' {
@@ -408,12 +504,20 @@
 											local nmiss = 0
 										}
 									}
+									} // end else (rank check performed)
 								}
 							}
 								if "`note'"=="note" {
 									noi di as text "Note: Polynomial order lowered to `polynomial' because of multicollinearity problems with the specified polynomial."
 								}
-						
+
+								if "`rankforced'" == "1" {
+									noi di as text "Note: norankcheck -- estimating with the requested polynomial(`polynomial') and no"
+									noi di as text "      separate-sides rank check. Specification tests are disabled (they require"
+									noi di as text "      an identified unrestricted fit); the analytical bias is still reported."
+									local test none
+								}
+
 						if inlist(`estimator',2,3) { //STARTING VALUES
 							tempname h0coefs h1coefs bu
 							mat `bu'=e(b)
@@ -517,7 +621,7 @@
 						local dotest = inlist(`estimator', 1, 2, 3,4) & "`test'" != "none" & "`vce'"!="none"
 						
 						//ESTIMATION AND INFERENCE
-						tempname b V bs bmain Vmain b0 V0 b0s bR_raw GR_raw y_raw bU_raw GU_raw d_raw ds Dmain VD
+						tempname b V bs bmain Vmain b0 V0 b0s bR_raw GR_raw y_raw bU_raw GU_raw muU_raw d_raw ds Dmain VD
 						
 						if inlist("`vce'","none","analytic") loc stop=0
 						else loc stop=`bootreps'
@@ -554,7 +658,7 @@
 										bw_orig(`bw_orig') ///
 										zl_excl_orig(`zL_excl_orig') ///
 										zh_excl_orig(`zH_excl_orig') ///
-										vce(`vce')
+										vce(`vce') hctype(`hctype')
 								}
 								else {
 									bunch_profile `y' `z' `side' `bunch', ///
@@ -562,7 +666,7 @@
 										cutoff_orig(`cutoff_orig') bw_orig(`bw_orig') ///
 										cutoff_est(`cutoff_est') bw_est(`bw_est') ///
 										l(`L') h(`H') ///
-										`log' `normalize' vce(`vce') ///
+										`log' `normalize' vce(`vce') hctype(`hctype') ///
 										initdelta(`dstart') ///
 										zbar_est(`zbar_est') ///
 										zl_excl_orig(`zL_excl_orig') ///
@@ -612,7 +716,7 @@
 										`normalize' ///
 										zbar(`zbar_est') ///
 										massobs(`Hstar_obs') ///
-										`bmodel'			
+										nosplit(`nosplit')
 								}
 								else {
 									saez_transform, zstarorig(`cutoff_orig') bworig(`bw_orig') t0(`t0') t1(`t1') `log' `grad' `constant'
@@ -657,7 +761,7 @@
 										cutoff_orig(`cutoff_orig') bw_orig(`bw_orig') ///
 										cutoff_est(`cutoff_est') bw_est(`bw_est') ///
 										l(`L') h(`H') ///
-										`log' `normalize' vce(`vce') ///
+										`log' `normalize' vce(`vce') hctype(`hctype') ///
 										initdelta(`dstart') ///
 										zbar_est(`zbar_est') ///
 										zl_excl_orig(`zL_excl_orig') ///
@@ -665,12 +769,13 @@
 										zl_excl_est(`zL_excl_est') ///
 										zh_excl_est(`zH_excl_est') ///
 										`positive'
-									
+
 									if inlist("`test'","hausman","all") & `estimator'!=1 {
 										matrix `bU_raw' = e(b)
 
 										if "`vce'"=="analytic" {
 											matrix `GU_raw' = e(G_stack)
+											capture matrix `muU_raw' = e(mu_stack)
 										}
 
 										polbunch_modeldiff, ///
@@ -841,6 +946,8 @@
 													bu(`bU_raw') gu(`GU_raw') ///
 													br(`bR_raw') gr(`GR_raw') ///
 													ystack(`y_raw') ///
+													mustack(`muU_raw') ///
+													hctype(`hctype') ///
 													cutofforig(`cutoff_orig') ///
 													bworig(`bw_orig') ///
 													cutoffest(`cutoff_est') ///
@@ -924,6 +1031,13 @@
 						ereturn local normalize="`normalize'"
 						ereturn scalar estimator=`estimator'
 						/*
+							Toggle axes, so a later stand-alone polbunchbias
+							(e() mode) reproduces the same response-inversion
+							and mass calculation this estimate used.
+						*/
+						ereturn scalar constant = `useconstant'
+						ereturn scalar nosplit  = `nosplit'
+						/*
 							e(cmd) used to be set only when vce()!="none",
 							which broke "estimates store"/"estimates
 							restore" (and hence anything built on them,
@@ -953,7 +1067,11 @@
 						ereturn local zname = "`z'"
 						ereturn local transform="`transform'"
 
-						if "`vce'"=="analytic" {
+						if `hctype'>=0 {
+							if "`transform'"=="notransform" estadd local vcetype "robust (residual, `vcelabel')"
+							else estadd local vcetype "delta method (residual, `vcelabel')"
+						}
+						else if "`vce'"=="analytic" {
 							if "`transform'"=="notransform" estadd local vcetype "analytic"
 							else estadd local vcetype "delta method"
 						}
@@ -1031,23 +1149,21 @@
 								}
 								di as txt "{hline `W'}"
 							}
-							// First-order bias (suppressed by nobias option).
-							// Estimator 3 is included here too: it is
-							// theoretically consistent and so has no bias to
-							// report without constant (polbunchbias errors in
-							// that case; the capture below swallows it
-							// silently, so nothing is displayed), but with
-							// constant specified it correctly reports the
-							// constant-density-approximation bias.
-							if "`nobias'" == "" & inlist(`estimator', 1, 2, 3, 4) & ///
+							// Analytical bias of the fitted estimator (suppressed
+							// by nobias).  polbunchbias reads the counterfactual
+							// polynomial, tax rates, window and elasticity from
+							// e(); we pass the response-inversion and mass axes
+							// explicitly so they match how this estimate was run.
+							// Estimators 0/3 are consistent under exact+splitmass, so
+							// polbunchbias errors there unless constant or poolmass is
+							// on -- the capture swallows that silently.
+							if "`nobias'" == "" & inlist(`estimator', 0, 1, 2, 3, 4) & ///
 									"`transform'" != "notransform" & "`t0'" != "" & "`t1'" != "" {
-								local _bmodelopt
-								if "`bmodel'" != "" local _bmodelopt "bmodel(1)"
-								local _bconstopt
-								if "`constant'" != "" local _bconstopt "constant"
+								local _binvopt = cond(`useconstant',"constant","exact")
+								local _bmassopt = cond(`nosplit',"poolmass","splitmass")
 								local _biteropt "iterate"
 								if "`noiterate'" != "" local _biteropt ""
-								capture quietly polbunchbias, `_bmodelopt' `_bconstopt' `_biteropt'
+								capture quietly polbunchbias, `_binvopt' `_bmassopt' `_biteropt'
 								if !_rc {
 									// Capture r() before any command can overwrite it
 									local _bh  = r(bias_h)
@@ -1057,8 +1173,11 @@
 									local _br  = r(bias_response)
 									local _bs  = r(bias_shift)
 									local _be  = r(bias_elasticity)
-									tempname _bm
-									matrix `_bm' = r(b)
+									local _bK  = r(polynomial)
+									local _bdiv = r(iterate_diverged)
+									tempname _bm _bbeta
+									matrix `_bm'    = r(b)
+									matrix `_bbeta' = r(bias_beta)
 
 									// Compute table width matching eret di
 									tempname _btab
@@ -1075,20 +1194,28 @@
 									local _bstub = max(`_bstub', 18)
 									local _bW    = `_bstub' + 67
 
-									// Append to eret di table: first row on same line as title, rest below
+									// Append to eret di table: title + one row per
+									// column of r(b) (b0..bK then the estimands).
 									local _bnames : colnames `_bm'
+									local _bncol  = colsof(`_bm')
 									local _bnm1 : word 1 of `_bnames'
-									di as txt "First-order bias (local linear counterfactual):" ///
+									di as txt "Bias of the polynomial bunching estimator (order `_bK'):" ///
 										_col(`=`_bW'-35') as txt "`_bnm1'" ///
 										_col(`=`_bW'-10') as res %10.6g `_bm'[1,1]
-									forvalues _bj = 2/7 {
+									forvalues _bj = 2/`_bncol' {
 										local _bnm : word `_bj' of `_bnames'
 										di as txt _col(`=`_bW'-35') as txt "`_bnm'" ///
 											_col(`=`_bW'-10') as res %10.6g `_bm'[1,`_bj']
 									}
 									di as txt "{hline `_bW'}"
 
+									if "`_bdiv'" == "1" {
+										di as error "Warning: the analytical-bias iterate loop did not converge; the un-iterated"
+										di as error "         bias is reported above (e(bias_iterate_diverged)=1)."
+									}
+
 									// Store in e()
+									ereturn scalar bias_iterate_diverged = cond("`_bdiv'"=="", ., real("`_bdiv'"))
 									ereturn scalar bias_h           = `_bh'
 									ereturn scalar bias_slope       = `_bsl'
 									ereturn scalar bias_lambda      = `_bla'
@@ -1096,6 +1223,7 @@
 									ereturn scalar bias_response    = `_br'
 									ereturn scalar bias_shift       = `_bs'
 									ereturn scalar bias_elasticity  = `_be'
+									ereturn matrix bias_beta        = `_bbeta'
 									ereturn matrix bias             = `_bm'
 								}
 							}
@@ -1125,7 +1253,7 @@
 				zh_excl_orig(real) ///
 				zl_excl_est(real) ///
 				zh_excl_est(real) ///
-				[ nonormalize LOG vce(string) initdelta(real 0.05) positive]
+				[ nonormalize LOG vce(string) initdelta(real 0.05) positive HCType(real -1) ]
 
 			gettoken yvar rest : varlist
 			gettoken zvar rest : rest
@@ -1172,7 +1300,8 @@
 				`zbar_est', ///
 				`dovar0', ///
 				`initdelta', ///
-				`positive0' ///
+				`positive0', ///
+				`hctype' ///
 			)
 
 			matrix `b' = r_b_profile
@@ -1279,7 +1408,7 @@
 				ZHEXCLEST(real) ///
 				LOW(integer) ///
 				HIGH(integer) ///
-				[ LOG CONSTANT T0(numlist min=1 max=1) T1(numlist min=1 max=1) nograd nonormalize ZBAR(real 0) MASSOBS(real 0) bmodel ]
+				[ LOG CONSTANT T0(numlist min=1 max=1) T1(numlist min=1 max=1) nograd nonormalize ZBAR(real 0) MASSOBS(real 0) NOSPLIT(integer 0) ]
 
 				loc z `varlist'
 				
@@ -1314,6 +1443,21 @@
 			/* Flags */
 			local islog       = ("`log'"      != "")
 			local constant0   = ("`constant'" != "")
+			/*
+				nosplit0: 1 = poolmass  (B = M - int_{zL}^{zH} h0)
+				          0 = splitmass (B = M - int_{zL}^{z*} h0
+				                              - int_{z*}^{zH} h1)
+				Ignored for estimator 1 (h0 == h1).
+			*/
+			local nosplit0 = `nosplit'
+			/*
+				A structural delta column is reported for estimator 2
+				always, and for estimator 3 whenever the reported response
+				is NOT the pure structural delta -- i.e. under constant
+				(constant-density inversion) or under poolmass (response
+				backed out from the pooled reduced-form B).
+			*/
+			local e3delta = (`estimator' == 3 & (`constant0' | `nosplit0'))
 			local hastax0 = ("`t0'" != "" & "`t1'" != "")
 			if `hastax0' {
 				if "`t0'" == "" | "`t1'" == "" {
@@ -1330,10 +1474,6 @@
 			tempvar touse
 			capture gen byte `touse' = e(sample)
 			local has_esample = !_rc
-
-			/* Call Mata transform */
-			local Btype2 = 1
-			if "`bmodel'" != "" local Btype2 = 0
 
 			mata: bunch_transform( ///
 				st_matrix("`theta'"), ///
@@ -1352,7 +1492,7 @@
 				`dograd', ///
 				`zbar', ///
 				`massobs', ///
-				`Btype2', ///
+				`nosplit0', ///
 				`zlexcl', ///
 				`zhexcl', ///
 				`zlexclest', ///
@@ -1408,7 +1548,7 @@
 				number_bunchers ///
 				excess_mass
 
-			if (`estimator' == 2 | (`estimator' == 3 & `constant0')) {
+			if (`estimator' == 2 | `e3delta') {
 				local cnames `cnames' delta
 			}
 
@@ -1448,7 +1588,7 @@
 
 			local eqnames `eqnames' bunching bunching
 
-			if (`estimator' == 2 | (`estimator' == 3 & `constant0')) {
+			if (`estimator' == 2 | `e3delta') {
 				local eqnames `eqnames' bunching
 			}
 
@@ -1521,6 +1661,7 @@
 			ereturn scalar H           = `high'
 			ereturn scalar islog       = `islog'
 			ereturn scalar constant    = `constant0'
+			ereturn scalar nosplit     = `nosplit0'
 			ereturn scalar hastax      = `hastax0'
 
 			if `hastax0' {
@@ -1640,7 +1781,7 @@ cap program drop bunch_saez
 			BW_orig(real) ///
 			ZL_excl_orig(real) ///
 			ZH_excl_orig(real) ///
-			[vce(string)]
+			[vce(string) HCType(real -1)]
 
 		gettoken yvar rest : varlist
 		gettoken zvar rest : rest
@@ -1721,7 +1862,7 @@ cap program drop bunch_saez
 		gen double `bunch_t' = `bunchvar' if `touse'
 		
 
-		mata: saez_run("`y_t'", "`side_t'", "`bunch_t'", `a0', `a1', `dovar0')
+		mata: saez_run("`y_t'", "`side_t'", "`bunch_t'", `a0', `a1', `dovar0', `hctype')
 
 		tempname b V Gstack mustack ystack
 
@@ -1821,9 +1962,14 @@ cap program drop bunch_saez
 			cutoffest(real) ///
 			bwest(real) ///
 			ZBAR(real) ///
-			[ NONORMALIZE LOG ]
+			[ NONORMALIZE LOG MUSTACK(name) HCType(real -1) ]
 
 		local islog0 = ("`log'" != "")
+		local muname "."
+		if `hctype'>=0 & "`mustack'"!="" {
+			capture confirm matrix `mustack'
+			if !_rc local muname "`mustack'"
+		}
 
 		mata: polbunch_modeltest_mata( ///
 			"`bu'", "`gu'", ///
@@ -1836,7 +1982,9 @@ cap program drop bunch_saez
 			`cutoffest', ///
 			`bwest', ///
 			`zbar', ///
-			`islog0' ///
+			`islog0', ///
+			"`muname'", ///
+			`hctype' ///
 		)
 
 		return scalar chi2 = r(pb_model_chi2)
@@ -2137,7 +2285,8 @@ cap program drop bunch_saez
 		string scalar bunchvar,
 		real scalar a0,
 		real scalar a1,
-		real scalar dovar
+		real scalar dovar,
+		real scalar hctype
 	)
 	{
 		real colvector y, side, bunch
@@ -2170,7 +2319,12 @@ cap program drop bunch_saez
 		mu = X * theta'
 
 		if (dovar == 1) {
-			Vout = variance_multinomial(X, ystack, 0)
+			if (hctype >= 0) {
+				Vout = variance_robust(X, ystack, mu, hctype, 1)
+			}
+			else {
+				Vout = variance_multinomial(X, ystack, 0)
+			}
 		}
 		else {
 			Vout = J(3, 3, .)
@@ -2477,8 +2631,19 @@ cap program drop bunch_saez
 			}
 
 			if (estimator == 2) {
-				/* Chetty restriction: bw * B = delta * int_{zstar}^{zbar} h0(z) dz */
-				R = (delta / bw_est) * intbasis(cutoff_est, zbar_est, K)
+				/*
+					Chetty restriction. Estimator 2's model is h1 = h0/(1+delta),
+					so the mass that left the region above the kink and piled up
+					at z* is
+						B = int_{zstar}^{zbar} (h0 - h1)
+						  = int_{zstar}^{zbar} h0 * (1 - 1/(1+delta))
+						  = delta/(1+delta) * int_{zstar}^{zbar} h0(z) dz
+						  = delta * int_{zstar}^{zbar} h1(z) dz.
+					i.e. delta multiplies the integral of the SHIFTED density h1,
+					not the counterfactual h0.  The support endpoints do not move
+					(vertical rescaling), so both integrals run to the same zbar.
+				*/
+				R = (delta / ((1 + delta) * bw_est)) * intbasis(cutoff_est, zbar_est, K)
 			}
 			else if (estimator == 3) {
 				/* Theoretically consistent restriction: bw * B = int_{zstar}^{zstar+r(delta)} h0(z) dz */
@@ -2553,7 +2718,8 @@ cap program drop bunch_saez
 		}
 
 		if (estimator == 2) {
-			return(intbasis(cutoff_est, zbar_est, K) / bw_est)
+			/* d/ddelta [ delta/(1+delta) ] = 1/(1+delta)^2 */
+			return(intbasis(cutoff_est, zbar_est, K) / ((1 + delta)^2 * bw_est))
 		}
 
 		if (estimator == 3) {
@@ -2717,7 +2883,12 @@ cap program drop bunch_saez
 			}
 
 			if (estimator == 2) {
-				R[1, 1..(K+1)] = (delta / bw_est) * intbasis(cutoff_est, zbar_est, K)
+				/*
+					h1 = h0/(1+delta) => missing mass above the kink is
+					delta/(1+delta) * int_{zstar}^{zbar} h0  (= delta * int h1).
+					See bmodel_row23() for the full derivation.
+				*/
+				R[1, 1..(K+1)] = (delta / ((1 + delta) * bw_est)) * intbasis(cutoff_est, zbar_est, K)
 			}
 			else if (estimator == 3) {
 				r = response_length(delta, cutoff_orig, bw_orig, bw_est, islog)
@@ -3019,6 +3190,123 @@ cap program drop bunch_saez
 	}
 
 
+	/*
+		Residual / Eicker-White delta-method variance of the stacked
+		count regression.
+
+		Identical plumbing to variance_multinomial -- same bread
+		pinv(G'G), same tiny multinomial off-diagonals -yi*yj/N -- but the
+		DIAGONAL of the meat matrix for the polynomial-fit rows is replaced
+		by the squared fit residual (y_j - mu_j)^2, with an HC finite-sample
+		correction:
+
+		    hctype 0 : (y_j - mu_j)^2                       (HC0)
+		    hctype 1 : * n/(n-p)                            (HC1)
+		    hctype 2 : / (1 - h_jj)                         (HC2)
+		    hctype 3 : / (1 - h_jj)^2                       (HC3)
+
+		with h_jj the leverage g_j (G'G)^-1 g_j'.  n counts only the
+		robust (bin) rows and p = cols(G).
+
+		The trailing `nmassrows' row(s) -- the observed bunching-mass
+		identity Hstar = int h0 (+ int h1) + B -- keep the multinomial
+		variance Hstar*(1 - Hstar/N): that row is an accounting identity
+		with no lack of fit, and its residual is ~0 by construction, so a
+		squared-residual meat there would spuriously zero out the (large)
+		sampling noise in the observed bunching mass.
+
+		Robust to: arbitrary bin-level heteroskedasticity; polynomial
+		misspecification treated as exchangeable noise (round-number
+		heaping, secondary bumps, a neighbouring kink); the marginal,
+		per-bin part of overdispersion from repeated individuals or random
+		year effects.
+
+		NOT robust to: cross-bin correlation of any kind (off-diagonals
+		stay at the multinomial value) -- individuals migrating between
+		adjacent bins across years, common shocks that move a band of bins
+		together, the covariance half of a panel design effect.  Cluster on
+		the microdata outside polbunch for that.
+	*/
+	real matrix variance_robust(
+		real matrix G_stack,
+		real colvector y_stack,
+		real colvector mu_stack,
+		real scalar hctype,
+		real scalar nmassrows
+	)
+	{
+		real scalar N, n, p, j, dfadj, hv
+		real matrix G, Vm, bread, V, PG
+		real colvector e, dm, dr, hjj
+
+		G = G_stack
+
+		if (rows(G) != rows(y_stack) | rows(G) != rows(mu_stack)) {
+			return(J(cols(G), cols(G), .))
+		}
+
+		if (missing(G) | missing(y_stack) | missing(mu_stack)) {
+			return(J(cols(G), cols(G), .))
+		}
+
+		N = sum(y_stack)
+
+		if (N <= 0 | N >= .) {
+			return(J(cols(G), cols(G), .))
+		}
+
+		n = rows(y_stack) - nmassrows
+		p = cols(G)
+
+		if (n < 1) {
+			return(J(cols(G), cols(G), .))
+		}
+
+		Vm = diag(y_stack) - (y_stack * y_stack') / N
+		Vm = (Vm + Vm') / 2
+
+		e  = y_stack - mu_stack
+		dm = diagonal(Vm)
+		dr = e :^ 2
+
+		if (hctype == 1) {
+			dfadj = (n > p ? n / (n - p) : 1)
+			dr = dr :* dfadj
+		}
+		else if (hctype == 2 | hctype == 3) {
+			bread = pinv(quadcross(G, G))
+			PG = G * bread
+			hjj = rowsum(PG :* G)
+			for (j = 1; j <= rows(hjj); j++) {
+				hv = hjj[j]
+				if (hv >= 0.9999) hv = 0.9999
+				if (hv < 0) hv = 0
+				if (hctype == 2) dr[j] = dr[j] / (1 - hv)
+				else             dr[j] = dr[j] / (1 - hv)^2
+			}
+		}
+
+		/* trailing accounting row(s): keep multinomial variance */
+		for (j = n + 1; j <= rows(y_stack); j++) {
+			dr[j] = dm[j]
+		}
+
+		if (missing(dr)) {
+			return(J(cols(G), cols(G), .))
+		}
+
+		Vm = Vm - diag(dm) + diag(dr)
+		Vm = (Vm + Vm') / 2
+
+		bread = pinv(quadcross(G, G))
+
+		V = bread * G' * Vm * G * bread
+		V = (V + V') / 2
+
+		return(V)
+	}
+
+
 
 		// -----------------------------------------------------------------------------
 		// Bunching-response inversion and transformed output
@@ -3125,7 +3413,7 @@ cap program drop bunch_saez
 			real scalar dograd,
 			real scalar zbar_est,
 			real scalar Hstar_obs,
-			real scalar Btype2,
+			real scalar nosplit,
 			real scalar zL_excl_orig,
 			real scalar zH_excl_orig,
 			real scalar zL_excl_est,
@@ -3140,7 +3428,8 @@ cap program drop bunch_saez
 			real matrix G
 			real rowvector b
 
-			real scalar Kb, nout, i, hasresp
+			real scalar Kb, nout, i, hasresp, e3delta
+			real rowvector Rlo, Rhi, Ihi
 			real scalar m, EM, B, delta
 			real scalar r, u, h_u, shift, MR, elast, A
 
@@ -3174,10 +3463,19 @@ cap program drop bunch_saez
 			// ALLOCATE OUTPUT
 			hasresp = 1
 
+			/*
+				A structural-delta column is reported for estimator 2
+				always, and for estimator 3 when the reported response is
+				NOT the pure structural delta -- under constant (constant-
+				density inversion) or under poolmass (nosplit==1, response
+				backed out from the pooled reduced-form B).
+			*/
+			e3delta = (estimator==3 & (constant | nosplit))
+
 			nout =
 				2*Kb +                                      // h0,h1
 				2 +                                         // B, EM
-				(estimator==2 | (estimator==3 & constant)) + // delta
+				(estimator==2 | e3delta) +                  // delta
 				2 +                                         // shift, MR
 				hastax
 
@@ -3190,7 +3488,7 @@ cap program drop bunch_saez
 			oB     = 2*Kb + 1
 			oEM    = 2*Kb + 2
 
-			if (estimator==2 | (estimator==3 & constant)) {
+			if (estimator==2 | e3delta) {
 				i = 1
 				odelta = 2*Kb + 3
 			}
@@ -3236,51 +3534,77 @@ cap program drop bunch_saez
 			}
 
 			// B
-			if (estimator == 0 | estimator == 1) {
+			//   poolmass  (nosplit==1): B = M - int_{zL}^{zH} h0hat
+			//   splitmass (nosplit==0): B = M - int_{zL}^{z*} h0hat
+			//                                 - int_{z*}^{zH} h1hat
+			// Estimator 1 has h0==h1, so the two coincide -- keep the free
+			// profile B and ignore nosplit.
+			if (estimator == 1) {
 				b[1,oB] = B
 				if (dograd) G[oB,iBraw] = 1
 			}
-			else if (estimator == 2) {
-				if (Btype2 == 0) {
-					/* Estimator 2, model-implied B: B_model = delta/bw * int_{z*}^{zbar} h0(z) dz */
-					RB = bmodel_row23(delta, cutoff_orig, bw_orig, cutoff_est, bw_est, K, estimator, islog, zbar_est)
-
-					B = RB * beta'
-					b[1,oB] = B
-
-					if (dograd) {
-						G[oB, ibeta] = RB
-						dRB = d_bmodel_row23_ddelta(delta, cutoff_orig, bw_orig, cutoff_est, bw_est, K, estimator, islog, zbar_est)
-						G[oB, idelta] = dRB * beta'
-					}
+			else if (estimator == 0) {
+				if (nosplit) {
+					// poolmass: extrapolate the fitted left polynomial h0hat
+					// across the whole excluded region
+					RB = intbasis(zL_excl_est, zH_excl_est, K) / bw_est
+					B  = Hstar_obs - RB * beta'
+					if (dograd) G[oB, ibeta] = -RB
 				}
-				else if (Btype2 == 1) {
-					/* Estimator 2, Chetty-style reduced-form B: B_reduced = Hstar_obs - int_{lower}^{upper} h0(z) dz / bw */
-					RB = intbasis(zL_excl_est,zH_excl_est, K) / bw_est
-					B = Hstar_obs - RB * beta'
-					b[1,oB] = B
-
+				else {
+					// splitmass: the stacked-fit B row already equals
+					//   M - int_{zL}^{z*} h0hat - int_{z*}^{zH} h1hat
+					// (h1hat is the separately fitted right polynomial)
+					if (dograd) G[oB, iBraw] = 1
+				}
+				b[1,oB] = B
+			}
+			else if (estimator == 2) {
+				if (nosplit) {
+					// poolmass (default): reduced-form B from the pooled
+					// h0hat integral (Chetty-style)
+					RB = intbasis(zL_excl_est, zH_excl_est, K) / bw_est
+					B  = Hstar_obs - RB * beta'
 					if (dograd) {
 						G[oB, ibeta]  = -RB
 						G[oB, idelta] = 0
 					}
 				}
 				else {
-					_error(3498, "Btype2 must be 0 for B_model or 1 for B_reduced")
+					// splitmass: h1hat = h0hat/(1+delta) on the right
+					Rlo = intbasis(zL_excl_est, cutoff_est, K) / bw_est
+					Ihi = intbasis(cutoff_est, zH_excl_est, K)
+					Rhi = Ihi / ((1 + delta) * bw_est)
+					B   = Hstar_obs - (Rlo + Rhi) * beta'
+					if (dograd) {
+						G[oB, ibeta]  = -(Rlo + Rhi)
+						G[oB, idelta] = (Ihi / ((1 + delta)^2 * bw_est)) * beta'
+					}
 				}
+				b[1,oB] = B
 			}
 			else if (estimator == 3) {
-				/* Estimator 3 always reports the theoretically consistent model-implied B. */
-				RB = bmodel_row23(delta, cutoff_orig, bw_orig, cutoff_est, bw_est, K, estimator, islog, zbar_est)
-
-				B = RB * beta'
-				b[1,oB] = B
-
-				if (dograd) {
-					G[oB, ibeta] = RB
-					dRB = d_bmodel_row23_ddelta(delta, cutoff_orig, bw_orig, cutoff_est, bw_est, K, estimator, islog, zbar_est)
-					G[oB, idelta] = dRB * beta'
+				if (nosplit) {
+					// poolmass: reduced-form B from the pooled h0hat integral
+					RB = intbasis(zL_excl_est, zH_excl_est, K) / bw_est
+					B  = Hstar_obs - RB * beta'
+					if (dograd) {
+						G[oB, ibeta]  = -RB
+						G[oB, idelta] = 0
+					}
 				}
+				else {
+					// splitmass (default): theoretically consistent
+					// model-implied B,  bw*B = int_{z*}^{z*+r(delta)} h0hat
+					RB = bmodel_row23(delta, cutoff_orig, bw_orig, cutoff_est, bw_est, K, estimator, islog, zbar_est)
+					B  = RB * beta'
+					if (dograd) {
+						G[oB, ibeta] = RB
+						dRB = d_bmodel_row23_ddelta(delta, cutoff_orig, bw_orig, cutoff_est, bw_est, K, estimator, islog, zbar_est)
+						G[oB, idelta] = dRB * beta'
+					}
+				}
+				b[1,oB] = B
 			}
 
 			if (dograd) dB = G[oB,.]
@@ -3298,8 +3622,8 @@ cap program drop bunch_saez
 				G[oEM,.] = dB/m - (B/(m^2))*dm
 			}
 
-			// delta for estimator 2 and estimator 3 with constant approximation
-			if (estimator == 2 | (estimator == 3 & constant)) {
+			// structural delta column (see e3delta above)
+			if (estimator == 2 | e3delta) {
 				b[1,odelta] = delta
 				if (dograd) G[odelta,idelta] = 1
 			}
@@ -3334,8 +3658,9 @@ cap program drop bunch_saez
 					G[oMR,.]    = dMR
 				}
 			}
-			else if (estimator == 3) {
-				// estimator 3: shift is structural delta
+			else if (estimator == 3 & !nosplit) {
+				// estimator 3, splitmass: shift is the structural delta
+				// (model-consistent bunching mass; exact inversion)
 				if (islog == 0) {
 					shift = delta
 					MR    = delta*cutoff_orig
@@ -3360,7 +3685,9 @@ cap program drop bunch_saez
 				}
 			}
 			else {
-				// estimators 0/1/2: solve integral equation using eresp()
+				// estimators 0/1/2, and estimator 3 under poolmass:
+				// back the response out of B by solving the counterfactual-
+				// density integral equation with eresp()
 				r = eresp(B, cutoff_est, beta, bw_est, xscale)
 
 				if (r >= .) {
@@ -3526,7 +3853,8 @@ cap program drop bunch_saez
 			real scalar zbar_est,
 			real scalar dovar,
 			real scalar initdelta,
-			real scalar positive
+			real scalar positive,
+			real scalar hctype
 
 		)
 		{
@@ -3667,12 +3995,17 @@ cap program drop bunch_saez
 					mu = D.X * beta_hat'
 				}
 
-				Vout = variance_multinomial(Gv, ystack, 0)
+				if (hctype >= 0) {
+					Vout = variance_robust(Gv, ystack, mu, hctype, 1)
+				}
+				else {
+					Vout = variance_multinomial(Gv, ystack, 0)
+				}
 			}
 			else {
 				Vout = J(cols(b), cols(b), .)
 			}
-					
+
 			st_matrix("r_b_profile", b)
 			st_matrix("r_V_profile", Vout)
 
@@ -4382,7 +4715,9 @@ cap program drop bunch_saez
 		real scalar cutoff_est,
 		real scalar bw_est,
 		real scalar zbar_est,
-		real scalar islog
+		real scalar islog,
+		string scalar muUname,
+		real scalar hctype
 	)
 	{
 		real scalar Kb, N, df, stat, pval
@@ -4391,6 +4726,9 @@ cap program drop bunch_saez
 		real matrix GU, GR, AU, AR, Jg, Ad, Vm, Vd
 		struct hcoef_out scalar hmap
 		real rowvector RB, dRB
+		real colvector muU, eU, dmU, drU, hxU
+		real scalar nbinU, pU, jj, hvU, adjU
+		real matrix PGU
 
 		st_numscalar("r(pb_model_chi2)", .)
 		st_numscalar("r(pb_model_p)", .)
@@ -4425,6 +4763,52 @@ cap program drop bunch_saez
 
 		Vm = diag(y) - (y * y') / N
 		Vm = (Vm + Vm') / 2
+
+		/*
+			Residual / Eicker-White meat for the Hausman variance, matching
+			vce(robust) on the coefficient table.  Splice the squared
+			residual of the UNRESTRICTED (estimator-0) fit onto the diagonal
+			of the bin rows; keep the multinomial variance on the trailing
+			bunching-mass row.  Silently falls back to the multinomial Vm if
+			the fitted values were not passed or do not conform.
+		*/
+		if (hctype >= 0 & muUname != "" & muUname != ".") {
+			muU = st_matrix(muUname)
+			if (rows(muU) == 1) muU = muU'
+
+			if (rows(muU) == rows(y) & !missing(muU)) {
+				eU  = y - muU
+				dmU = diagonal(Vm)
+				drU = eU :^ 2
+				nbinU = rows(y) - 1
+				pU = cols(GU)
+
+				if (hctype == 1) {
+					adjU = (nbinU > pU ? nbinU / (nbinU - pU) : 1)
+					drU = drU :* adjU
+				}
+				else if (hctype == 2 | hctype == 3) {
+					PGU = GU * pinv(quadcross(GU, GU))
+					hxU = rowsum(PGU :* GU)
+					for (jj = 1; jj <= nbinU; jj++) {
+						hvU = hxU[jj]
+						if (hvU >= 0.9999) hvU = 0.9999
+						if (hvU < 0) hvU = 0
+						if (hctype == 2) drU[jj] = drU[jj] / (1 - hvU)
+						else             drU[jj] = drU[jj] / (1 - hvU)^2
+					}
+				}
+
+				for (jj = nbinU + 1; jj <= rows(y); jj++) {
+					drU[jj] = dmU[jj]
+				}
+
+				if (!missing(drU)) {
+					Vm = Vm - diag(dmU) + diag(drU)
+					Vm = (Vm + Vm') / 2
+				}
+			}
+		}
 
 		real rowvector sU, sR
 		real matrix GUs, GRs
@@ -4685,35 +5069,39 @@ cap program drop bunch_saez
 			else if (estimator == 2) {
 				/*
 					Estimator 2:
-						B = delta * int_{cutoff}^{zbar} h0(z) dz / bw
 						gamma = beta / (1 + delta)
+						B = delta/(1+delta) * int_{cutoff}^{zbar} h0(z) dz / bw
+						  = delta/(1+delta) * Rbeta
+					(the missing-mass term is delta * int h1, not delta * int h0,
+					because h1 = h0/(1+delta) -- see bmodel_row23()).
 
-					Use the mass equation to define:
-						delta_U = B / (R * beta')
+					Invert the mass equation for delta_U:
+						B (1+delta) = delta Rbeta
+						=> delta_U = B / (Rbeta - B)
 				*/
 
 				R = intbasis(cutoff_est, zbar_est, K) / bw_est
 				Rbeta = R * beta'
 
-				if (Rbeta <= 0 | Rbeta >= . | B >= .) return
+				if (Rbeta <= 0 | Rbeta >= . | B >= . | Rbeta - B <= 0) return
 
-				delta = B / Rbeta
+				delta = B / (Rbeta - B)
 
 				if (1 + delta <= 0 | delta >= .) return
 
 				q = (gamma - beta :/ (1 + delta))'
 
 				/*
-					delta = B / Rbeta
-					ddelta/dbeta = -B * R / Rbeta^2
-					ddelta/dB    = 1 / Rbeta
+					delta = B / (Rbeta - B),  Rbeta = R * beta'
+					ddelta/dbeta_j = -B * R_j / (Rbeta - B)^2
+					ddelta/dB      =  Rbeta   / (Rbeta - B)^2
 				*/
-				ddelta_dbeta = -B * R / (Rbeta^2)
+				ddelta_dbeta = -B * R / ((Rbeta - B)^2)
 
 				ddelta_dtheta =
 					ddelta_dbeta,
 					J(1, Kb, 0),
-					1/Rbeta
+					Rbeta / ((Rbeta - B)^2)
 
 				/*
 					q_j = gamma_j - beta_j/(1+delta)

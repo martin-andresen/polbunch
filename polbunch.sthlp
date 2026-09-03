@@ -36,8 +36,10 @@ from the bin spacing and {opt bw()} may not be specified.
 
 {syntab:Reporting and transformations}
 {synopt:{opt notransform}}report raw estimating-equation coefficients rather than transformed bunching parameters{p_end}
-{synopt:{opt constant}}use the constant-density approximation when transforming bunching into a response and elasticity{p_end}
-{synopt:{opt Bmodel}}for estimator 2, report excess mass using the model-implied bunching mass rather than the observed excluded-bin mass{p_end}
+{synopt:{opt constant}}use the constant-density approximation when turning bunching into a response and elasticity; default for estimators 1 and 2{p_end}
+{synopt:{opt exact}}invert the counterfactual-density integral exactly when turning bunching into a response and elasticity; default for estimators 0 and 3{p_end}
+{synopt:{opt poolmass}}form the bunching mass as M minus the integral of {cmd:h0} over the whole excluded region; default for estimators 1 and 2{p_end}
+{synopt:{opt splitmass}}form the bunching mass as M minus the integral of {cmd:h0} up to the cutoff and of {cmd:h1} above it; default for estimators 0 and 3{p_end}
 
 {syntab:Estimation controls}
 {synopt:{opt positive}}restrict the structural shift parameter (and therefore the elasticity) to be positive; by default shifts are restricted to be greater than -1{p_end}
@@ -45,9 +47,10 @@ from the bin spacing and {opt bw()} may not be specified.
 {synopt:{opt nozero}}do not fill empty bins with zero counts; by default empty bins inside the observed support are included{p_end}
 {synopt:{opt nodrop}}do not drop endpoint bins that appear to be cut by sample selection{p_end}
 {synopt:{opt norankred}}do not reduce the polynomial degree when the unrestricted regression is rank-deficient; by default {cmd:polbunch} reduces the degree automatically{p_end}
+{synopt:{opt norankcheck}}skip the separate-sides rank check entirely and estimate at the requested polynomial degree; also disables specification tests (the analytical bias is still reported){p_end}
 
 {syntab:Inference}
-{synopt:{opt vce(string)}}variance estimator; {cmd:analytic} (default), {cmd:bootstrap}, {cmd:bayes}, or {cmd:none}{p_end}
+{synopt:{opt vce(string)}}variance estimator; {cmd:analytic} (default), {cmd:robust} (= {cmd:hc1}; also {cmd:hc0}, {cmd:hc2}, {cmd:hc3}), {cmd:bootstrap}, {cmd:bayes}, or {cmd:none}{p_end}
 {synopt:{opt boot:reps(#)}}number of bootstrap repetitions when {cmd:vce(bootstrap)} or {cmd:vce(bayes)}; default is {cmd:bootreps(500)}; must be at least 2{p_end}
 {synopt:{opt nodots}}suppress bootstrap progress dots{p_end}
 
@@ -122,13 +125,16 @@ or when the restricted model is tightly parameterized.
 Unless {opt notransform} is specified, {cmd:polbunch} transforms the raw estimating-equation parameters into economically interpretable quantities. The transformed output may include the estimated counterfactual density under the low-tax regime {cmd:h0}, the density under the high-tax regime {cmd:h1}, the number of bunchers, excess mass, the proportional shift, the response of the marginal buncher, and, if {opt t0()} and {opt t1()} are specified, the elasticity.
 
 {pstd}
-For estimator 3, the response and elasticity are based on the model-implied density transformation. If {opt log} is specified, the response is a displacement in log earnings and the elasticity is the log response divided by the log net-of-tax-rate change. Without {opt log}, the level response is converted to a proportional shift before computing the elasticity.
+For estimator 3 under the default {opt splitmass} and {opt exact}, the response and elasticity are the model-implied structural shift {cmd:delta} itself. If {opt log} is specified, the response is a displacement in log earnings and the elasticity is the log response divided by the log net-of-tax-rate change. Without {opt log}, the level response is converted to a proportional shift before computing the elasticity. Under {opt poolmass}, estimator 3 instead backs the response out of the pooled reduced-form bunching mass, exactly as estimators 0, 1 and 2 do, and reports the structural {cmd:delta} in a separate column for reference.
 
 {pstd}
 For estimator 4, the Saez transformation first computes excess mass using the average of the two trapezoid endpoints. It then attempts to invert the trapezoid response equation. If the equation has no real positive solution, {cmd:polbunch} reports the reference heights, number of bunchers, and excess mass, but omits shift, marginal response, and elasticity and displays a note.
 
 {pstd}
-The {opt constant} option uses a constant-density approximation when converting bunching to a response and elasticity. This approximation can be useful for comparison with older procedures but may be biased when the density changes substantially over the response region.
+The {opt constant} / {opt exact} pair controls how bunching is converted to a response and elasticity. {opt constant} uses a constant-density approximation (the marginal response is the bunching mass divided by the counterfactual height at the cutoff); it can be useful for comparison with older procedures but may be biased when the density changes substantially over the response region. {opt exact} instead solves the counterfactual-density integral equation for the response. If neither is given, {cmd:polbunch} uses {opt constant} for estimators 1 and 2 and {opt exact} for estimators 0 and 3. The two are mutually exclusive.
+
+{pstd}
+The {opt poolmass} / {opt splitmass} pair controls how the bunching mass B is formed from the observed mass M in the excluded region. {opt poolmass} sets B = M minus the integral of the estimated counterfactual density {cmd:h0} over the entire excluded region. {opt splitmass} sets B = M minus the integral of {cmd:h0} from the lower limit to the cutoff, minus the integral of the post-tax density {cmd:h1} from the cutoff to the upper limit; this is the theoretically grounded calculation. If neither is given, {cmd:polbunch} uses {opt poolmass} for estimators 1 and 2 and {opt splitmass} for estimators 0 and 3. The choice has no effect for estimator 1 (where {cmd:h0} equals {cmd:h1}) and is ignored for estimator 4. The two are mutually exclusive.
 
 
 {marker tests}{...}
@@ -141,7 +147,7 @@ For estimators 1–4, {cmd:polbunch} tests the restrictions implied by the selec
 {cmd:test(all)} (default for estimators 2 and 3) runs all applicable tests for the selected estimator and reports those that succeed. For estimators 2 and 3 this means minimum-distance and Hausman; for estimators 1 and 4 it reduces to the Wald test only.
 
 {phang}
-{cmd:test(hausman)} is a Hausman-type test that compares the restricted and unrestricted estimates. It uses the analytic variance of the difference between the two estimates when {cmd:vce(analytic)} is in effect, and the bootstrap covariance of the difference otherwise. Available for estimators 2 and 3.
+{cmd:test(hausman)} is a Hausman-type test that compares the restricted and unrestricted estimates. It uses the analytic variance of the difference between the two estimates when {cmd:vce(analytic)} or {cmd:vce(robust)} is in effect (the residual meat matrix carries through to the test's weight matrix under {cmd:vce(robust)}), and the bootstrap covariance of the difference otherwise. Available for estimators 2 and 3.
 
 {phang}
 {cmd:test(wald)} (default for estimators 1 and 4) is a Wald test of the linear or nonlinear restrictions imposed by the selected estimator against the unrestricted estimator-0 estimates. For estimators 1 and 4 this reduces to a standard linear restriction test. When specified explicitly for estimators 2 or 3, {cmd:polbunch} prints a note recommending minimum-distance or Hausman instead, as the Wald statistic is a conditional shape diagnostic rather than a formal overall specification test.
@@ -167,6 +173,20 @@ The variance estimator is controlled by {opt vce(string)}.
 without having to construct the expanded data. It is fast and can be used with pre-binned data.
 
 {phang}
+{cmd:vce(robust)} (equivalently {cmd:vce(hc1)}; {cmd:vce(hc0)}, {cmd:vce(hc2)} and {cmd:vce(hc3)} select the other
+finite-sample corrections) computes the same delta-method standard errors as {cmd:vce(analytic)} but replaces the
+model-implied multinomial variance of the bin counts with the Eicker-White residual meat matrix: the diagonal entry
+for each polynomial-fit row becomes the squared fit residual {bf:(y_j - yhat_j)^2}, HC-corrected. The trailing
+accounting row (the observed bunching mass) keeps its multinomial variance, since it is an identity with no lack of
+fit. Point estimates and the specification tests' point estimates are unchanged; only the standard errors, the
+covariance matrix, and the test statistics' weight matrices differ. This is robust to bin-level heteroskedasticity,
+to polynomial misspecification treated as noise (round-number heaping, secondary bumps, a neighbouring kink), and to
+the marginal, per-bin part of overdispersion from repeated individuals or year effects. It is {it:not} robust to
+cross-bin correlation (the off-diagonals stay multinomial); for that, cluster on the microdata outside {cmd:polbunch}.
+Typically wider than {cmd:vce(analytic)} and closer to the residual-bootstrap standard errors reported in much of
+the bunching literature.
+
+{phang}
 {cmd:vce(bootstrap)} performs the binned bootstrap. Instead of resampling individual observations directly, the command draws bin counts from Gamma distributions scaled to preserve the total sample size. This mimics the classical bootstrap while remaining feasible when only binned data are available. The number of repetitions is set by {opt bootreps(#)}; the default is 500 and the minimum is 2.
 
 {phang}
@@ -176,7 +196,7 @@ without having to construct the expanded data. It is fast and can be used with p
 {cmd:vce(none)} suppresses all internal variance estimation. Point estimates are computed but no standard errors or covariance matrix are stored. This is useful in Monte Carlo exercises where only point estimates are needed, or when using Stata's {cmd:bootstrap} prefix around {cmd:polbunch}.
 
 {pstd}
-The analytic and bootstrap procedures treat individuals within a bin as identical from the point of view of the estimator and assume the bandwidth and binning scheme are fixed. If inference must account for clustering at a higher level, use a resampling procedure outside {cmd:polbunch}.
+The analytic and bootstrap procedures treat individuals within a bin as identical from the point of view of the estimator and assume the bandwidth and binning scheme are fixed. {cmd:vce(robust)} relaxes the assumption that the counterfactual polynomial is correctly specified and that the bin counts are exactly multinomial/Poisson, but still assumes the counts are independent across bins. If inference must account for clustering at a higher level (for example repeated observations of the same individual across years), use a resampling procedure outside {cmd:polbunch}.
 
 
 {marker options_detail}{...}
@@ -198,10 +218,10 @@ The analytic and bootstrap procedures treat individuals within a bin as identica
 {opt nozero} affects only individual-level input. By default, after collapsing individual observations into bins, empty bins inside the observed support are retained as zero-count bins. {opt nozero} excludes such bins from estimation.
 
 {phang}
-{opt Bmodel} affects transformed results for estimator 2. It requests the model-implied bunching mass rather than the observed excluded-bin mass when constructing transformed bunching quantities.
+{opt norankred} suppresses the automatic polynomial degree reduction that {cmd:polbunch} performs when the unrestricted two-sided polynomial regression is rank-deficient. By default, the degree is reduced one step at a time until identification is restored; a note is displayed. The unrestricted fit is still run once (to seed starting values) and the specification tests, which compare the restricted estimator against that unrestricted fit, are still reported.
 
 {phang}
-{opt norankred} suppresses the automatic polynomial degree reduction that {cmd:polbunch} performs when the unrestricted two-sided polynomial regression is rank-deficient. By default, the degree is reduced one step at a time until identification is restored; a note is displayed.
+{opt norankcheck} goes further: it skips the separate-sides identification check altogether and estimates with exactly the requested {opt polynomial()} degree. This is useful because a restricted estimator (2 or 3) imposes enough structure across the cutoff to be identified at a degree where two free one-sided polynomials are not. Because the specification tests compare the restricted estimator against an identified unrestricted fit, {opt norankcheck} disables them (equivalent to adding {cmd:test(none)}); a note is displayed. The analytical bias is unaffected -- it is read from the fitted counterfactual polynomial, tax rates, window and elasticity, not from the separate one-sided polynomials -- and is still reported. Recommended only with estimators 0, 2 and 3 -- estimator 1 is itself the unrestricted two-sided fit and gains nothing from forcing the order.
 
 {phang}
 {opt test(string)} selects the restriction test. The default is {cmd:all} for estimators 2 and 3 and {cmd:wald} for estimators 1 and 4. Specifying {cmd:test(none)} skips all testing. Note that testing is also suppressed when {cmd:vce(none)} is in effect.
@@ -249,6 +269,11 @@ Compare with the Saez trapezoid estimator, restricting to a small region around 
 Use the binned bootstrap for inference with 200 repetitions:{p_end}
 
 {phang2}{cmd:. polbunch z, cutoff(1) bw(0.01) polynomial(1) vce(bootstrap) bootreps(200)}{p_end}
+
+{pstd}
+Report misspecification-robust (Eicker-White residual) standard errors, comparable to the residual-bootstrap standard errors common in the bunching literature:{p_end}
+
+{phang2}{cmd:. polbunch z, cutoff(1) bw(0.01) polynomial(7) t0(0.2) t1(0.6) vce(robust)}{p_end}
 
 {pstd}
 Suppress internal variance estimation, for example when using Stata's bootstrap prefix:{p_end}
@@ -299,6 +324,8 @@ Collapse to binned data and use polbunch with bin counts {cmd:freq} and bin midp
 {synopt:{cmd:e(zlo)}}bottom of the lowest bin in the estimation window (original scale){p_end}
 {synopt:{cmd:e(zhi)}}top of the highest bin in the estimation window (original scale){p_end}
 {synopt:{cmd:e(log)}}1 if {opt log} was specified, 0 otherwise{p_end}
+{synopt:{cmd:e(constant)}}1 if the constant-density response inversion was used, 0 if the exact inversion was used{p_end}
+{synopt:{cmd:e(nosplit)}}1 if the bunching mass used the {opt poolmass} calculation, 0 if it used {opt splitmass}{p_end}
 {synopt:{cmd:e(chi2_wald)}}Wald test chi-squared statistic, when computed{p_end}
 {synopt:{cmd:e(p_wald)}}Wald test p-value, when computed{p_end}
 {synopt:{cmd:e(df_wald)}}Wald test degrees of freedom, when computed{p_end}

@@ -1,13 +1,32 @@
 capture program drop polbunchsim
 program polbunchsim, eclass
     syntax [, zmin(string) zmax(string) log reps(integer 1) ///
-        obs(integer 5000) cutoff(real 1) el(real 0.4) ///
+        obs(integer 5000) cutoff(real 1) el(string) ///
         t0(real 0.2) t1(real 0.6) bw(real 0.01) ///
+        INCOMEeffect(string) buncherror(string) ///
         bootreps(integer 500) POLynomial(integer 1) ///
         distribution(string) opts(string) ///
         estimator(numlist integer) btype(numlist integer) ///
         clist(string) sample(string)  ///
-        est4limits(numlist) limits(numlist) report(string) DEBUG]
+        est4limits(numlist) limits(numlist) report(string) SCALARsonly DEBUG]
+
+    /*
+        scalarsonly : single-estimator runs only.  Skip -estimates
+        restore- and post NOTHING to e(b); return a fixed set of
+        e(sim_*) scalars (genuine missing when a quantity was not
+        computed) that is byte-identical in structure across every
+        replication -- so -simulate- / -parallel sim- never trip over
+        a replication whose underlying polbunch fit failed.
+    */
+
+    /*
+        el() takes EITHER a nonnegative number or a Stata expression
+        (drawn per observation), passed straight to polbunchgendata --
+        as do incomeeffect() and buncherror().  When el() is an
+        expression there is no single "true" elasticity: the realised
+        mean r(el_mean) from polbunchgendata is used as the target of
+        the elasticity coverage test and returned in e(eltrue).
+    */
 
     /*
         debug: the internal polbunch calls below are wrapped in a bare
@@ -26,6 +45,8 @@ program polbunchsim, eclass
         if "`zmax'" == "" local zmax "."
         if "`btype'" == "" local btype 1
         if "`estimator'" == "" local estimator 3
+        if "`el'" == "" local el 0.4
+        local elnum = real("`el'")
 
         if "`clist'" == "" local clist `"noconstant"'
 
@@ -91,9 +112,17 @@ program polbunchsim, eclass
         local anyfail = 0
 
         capture noisily polbunchgendata z, obs(`obs') cutoff(`cutoff') ///
-            el(`el') t0(`t0') t1(`t1') `log' distribution(`distribution')
+            el(`el') t0(`t0') t1(`t1') `log' distribution(`distribution') ///
+            incomeeffect(`incomeeffect') buncherror(`buncherror')
 
         local genrc = _rc
+        if `genrc' == 0 {
+            local eltrue = r(el_mean)
+            local ietrue = r(incomeeffect)
+        }
+        if "`eltrue'" == "" local eltrue = `elnum'
+        if "`eltrue'" == "" local eltrue = .
+        if "`ietrue'" == "" local ietrue = .
 
         if `genrc' == 0 {
             if "`sample'" != "" {
@@ -200,7 +229,7 @@ program polbunchsim, eclass
                                 capture local se = _se[bunching:elasticity]
                                 if _rc == 0 & !missing(`se') & `se' > 0 {
                                     local novar = 0
-                                    capture test _b[bunching:elasticity] = `el'
+                                    capture test _b[bunching:elasticity] = `eltrue'
                                     if _rc == 0 local p = r(p)
                                     else local p = .
                                 }
@@ -442,7 +471,12 @@ program polbunchsim, eclass
             ereturn scalar numest = `numest'
             ereturn scalar obs    = `obs'
             ereturn scalar cutoff = `cutoff'
-            ereturn scalar el     = `el'
+            if `elnum' < .  ereturn scalar el = `elnum'
+            else            ereturn local  el "`el'"
+            if "`eltrue'" != "" ereturn scalar eltrue = `eltrue'
+            if "`ietrue'" != "" ereturn scalar ietrue = `ietrue'
+            ereturn local incomeeffect "`incomeeffect'"
+            ereturn local buncherror   "`buncherror'"
             ereturn scalar t0     = `t0'
             ereturn scalar t1     = `t1'
             ereturn scalar bw     = `bw'
@@ -455,6 +489,39 @@ program polbunchsim, eclass
             ereturn local cmd "polbunchsim"
         }
         else {
+            if "`scalarsonly'" != "" {
+                /*
+                    Fixed-structure, e(b)-free return for -simulate- /
+                    -parallel sim-.  Uses the raw last-iteration locals
+                    (genuine missing, not the misscode sentinel).  Every
+                    replication returns exactly these scalars, whether or
+                    not the underlying polbunch fit converged.
+                */
+                ereturn clear
+                ereturn scalar failed                   = (`final_rc' != 0)
+                ereturn scalar sim_rc                    = `final_rc'
+                ereturn scalar sim_time                  = `final_time'
+                ereturn scalar sim_p                     = `p'
+                ereturn scalar sim_se                    = `se'
+                ereturn scalar sim_chi2_wald             = `chi2_wald'
+                ereturn scalar sim_p_wald                = `p_wald'
+                ereturn scalar sim_chi2_minimumdistance  = `chi2_minimumdistance'
+                ereturn scalar sim_p_minimumdistance     = `p_minimumdistance'
+                ereturn scalar sim_chi2_hausman          = `chi2_hausman'
+                ereturn scalar sim_p_hausman             = `p_hausman'
+                ereturn scalar sim_delta_md              = `delta_md'
+                ereturn scalar eltrue                    = `eltrue'
+                ereturn scalar ietrue                    = `ietrue'
+                ereturn scalar obs                       = `obs'
+                ereturn scalar cutoff                    = `cutoff'
+                ereturn scalar t0                        = `t0'
+                ereturn scalar t1                        = `t1'
+                ereturn scalar bw                        = `bw'
+                ereturn scalar polynomial                = `polynomial'
+                ereturn scalar estimator                 = `estimator'
+                ereturn local  cmd "polbunchsim"
+                exit
+            }
             if `final_rc' {
                 ereturn clear
 
@@ -467,7 +534,12 @@ program polbunchsim, eclass
                 ereturn scalar misscode = `misscode'
                 ereturn scalar obs     = `obs'
                 ereturn scalar cutoff  = `cutoff'
-                ereturn scalar el      = `el'
+                if `elnum' < .  ereturn scalar el = `elnum'
+                else            ereturn local  el "`el'"
+                if "`eltrue'" != "" ereturn scalar eltrue = `eltrue'
+                if "`ietrue'" != "" ereturn scalar ietrue = `ietrue'
+                ereturn local incomeeffect "`incomeeffect'"
+                ereturn local buncherror   "`buncherror'"
                 ereturn scalar t0      = `t0'
                 ereturn scalar t1      = `t1'
                 ereturn scalar bw      = `bw'
@@ -562,7 +634,12 @@ program polbunchsim, eclass
 
             ereturn scalar obs    = `obs'
             ereturn scalar cutoff = `cutoff'
-            ereturn scalar el     = `el'
+            if `elnum' < .  ereturn scalar el = `elnum'
+            else            ereturn local  el "`el'"
+            if "`eltrue'" != "" ereturn scalar eltrue = `eltrue'
+            if "`ietrue'" != "" ereturn scalar ietrue = `ietrue'
+            ereturn local incomeeffect "`incomeeffect'"
+            ereturn local buncherror   "`buncherror'"
             ereturn scalar t0     = `t0'
             ereturn scalar t1     = `t1'
             ereturn scalar bw     = `bw'

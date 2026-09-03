@@ -6,7 +6,7 @@ capture program drop polbunchplot
 program define polbunchplot
 
     syntax [anything(name=models id="stored estimation name(s)")], ///
-        [ graph_opts(string) noci nostar ///
+        [ graph_opts(string) LEGend_opts(string) noci nostar ///
           limit(numlist min=2 max=2) log TRUncate]
 
     quietly {
@@ -293,7 +293,7 @@ program define polbunchplot
                     (function y=`h1c', ///
                         range(`upper_plot' `xmax') ///
                         lcolor(navy) ///
-                        lpattern(solid)),`graph_opts' ///
+                        lpattern(solid)), ///
                     xline(`cutoff_plot', ///
                         lcolor(maroon) ///
                         lpattern(dash)) ///
@@ -316,7 +316,7 @@ program define polbunchplot
                         cols(4) ///
                         order(1 2 6 4) ///
                         pos(6)) ///
-                    `yscale'
+                    `yscale' `graph_opts'
             }
             else {
 
@@ -340,7 +340,7 @@ program define polbunchplot
                     (function y=`h1plot', ///
                         range(`cutoff_plot' `upper_plot') ///
                         lcolor(navy) ///
-                        lpattern(shortdash)),  `graph_opts' ///
+                        lpattern(shortdash)), ///
                     xline(`cutoff_plot', ///
                         lcolor(maroon) ///
                         lpattern(dash)) ///
@@ -360,7 +360,7 @@ program define polbunchplot
                         cols(3) ///
                         order(1 2 4) ///
                         pos(6)) ///
-                    `yscale' 
+                    `yscale'  `graph_opts' 
             }
 
             restore
@@ -658,7 +658,8 @@ program define polbunchplot
                 color(navy%35) ///
                 base(0))
 
-        local legend_order 1 "Frequency"
+       local legend_order 1
+		local legend_labels `"`legend_labels' label(1 "Frequency")"'
 
         local plotnum  = 1
         local modelnum = 0
@@ -1098,11 +1099,11 @@ if `range_h0dot_hi' > `range_h0dot_lo' {
             local model_label = ///
                 upper(substr("`model'",1,1)) + ///
                 substr("`model'",2,.)
+		
+		local legend_order `legend_order' `legendplot'
 
-            local legend_order ///
-                `legend_order' ///
-                `legendplot' ///
-                "`model_label'"
+		local legend_labels ///
+    `"`legend_labels' label(`legendplot' "`model_label'")"'
         }
 
 
@@ -1149,7 +1150,7 @@ if `range_h0dot_hi' > `range_h0dot_lo' {
         */
 
         twoway ///
-            `plots', `graph_opts' ///
+            `plots',  ///
             xscale(range(`xmin_global' `xmax_global')) ///
             xline(`cutoff_first', ///
                 lcolor(maroon) ///
@@ -1160,11 +1161,13 @@ if `range_h0dot_hi' > `range_h0dot_lo' {
             plotregion(lcolor(black)) ///
             ytitle("Frequency") ///
             xtitle("`zcol_first'") ///
-            legend( ///
-                order(`legend_order') ///
-                cols(`legend_cols') ///
-                pos(6)) ///
-            `yscale'
+			legend( ///
+				order(`legend_order') ///
+				`legend_labels' ///
+				cols(`legend_cols') ///
+				pos(6) ///
+			`legend_opts') ///
+            `yscale' `graph_opts'
 
         /*
             THE ONLY restore in the multiple-model branch.
