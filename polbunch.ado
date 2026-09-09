@@ -1,4 +1,4 @@
-				*! polbunch version date 20260903
+				*! polbunch version date 20260907
 				* Author: Martin Eckhoff Andresen
 				* This program is part of the polbunch package.
 				
@@ -11,12 +11,16 @@
 					POLynomial(integer 7) ///
 					NOIsily ///
 					ESTimator(integer 3) /// Specify estimator - 3 = theoretically consistent efficient estimator, 2 = chetty, 1 = no adjustment, 0=data to the left only, 4=Saez three-region trapezoid approximaton
+					DELTAmax(real 1) /// upper bound on the structural delta in the estimator 2/3 profile search (default 1 = a 100% earnings response)
+					ALLOWnegative /// allow the structural shift delta to range down to -1 in the estimator 2/3 profile; by default the search is restricted to delta >= 0 (a convex kink implies a non-negative response)
 					nodrop ///
 					notransform ///
 					positive ///
 					nonormalize ///
 					BOOTreps(integer 500) ///
 					vce(string) ///
+					SCALE(string) ///
+					NOMASScorr ///
 					log ///
 					constant ///
 					EXACT ///
@@ -29,8 +33,11 @@
 					noRANKcheck ///
 					NOBias ///
 					NOITERate ///
+					SAVEbins(string) ///
 					]
-					
+
+					local cmdline0 `"`0'"'
+
 					 quietly {
 							if "`t0'"!="" {
 							if "`t1'"=="" {
@@ -56,6 +63,12 @@
 							noi di as error "Option estimator can take only values 0 (using data to the left only),  1 (no adjustment), 2 (Chetty et. al. adjustment),  3 (theoretically consistent and efficient estimator) or 4 (Saez trapezoid approximation)."
 							exit 301
 						}
+
+						/* varlist width: 1 var (+bw) = individual data, 2 vars = pre-binned.
+						   Needed here already so vce(cluster ...) can tell whether its
+						   token is a cluster variable (individual) or a co-visitation
+						   stub (pre-binned). */
+						loc nvars : word count `varlist'
 
 						/*
 							Two toggle axes, mirroring polbunchbias:
@@ -84,6 +97,24 @@
 							noi di as error "Specify at most one of poolmass / splitmass."
 							exit 198
 						}
+
+						/*
+							Sign of the structural shift.  polbunch supports only
+							convex kinks (t1 > t0), where the marginal buncher
+							reduces earnings to the cutoff -- so delta >= 0 by
+							construction.  The estimator 2/3 profile is therefore
+							restricted to delta >= 0 by default (equivalent to the
+							old `positive' option, which is now redundant).
+							`allownegative' opens the search back up to delta > -1
+							for the rare finite-sample case where the true delta
+							is ~0 and noise pulls the profile minimum slightly
+							below zero.
+						*/
+						if "`positive'" != "" & "`allownegative'" != "" {
+							noi di as error "Specify at most one of positive / allownegative."
+							exit 198
+						}
+						if "`allownegative'" == "" local positive positive
 
 						if "`constant'" != ""      loc useconstant = 1
 						else if "`exact'" != ""    loc useconstant = 0
@@ -124,48 +155,164 @@
 						preserve
 						drop if !`touse'
 						
-						if "`vce'"=="" loc vce analytic
-						else {
-							if !inlist("`vce'","analytic","bootstrap","bayes","none","robust","hc0","hc1","hc2") ///
-								& "`vce'"!="hc3" {
-								noi di as error "vce() can only contain none, analytic, robust, hc0, hc1, hc2, hc3, bootstrap or bayes."
-								exit 301
+						/*
+							vce() -- Stata-standard form  vce(type [, subopts]).
+
+							  type
+							    conventional  (default; synonyms analytic /
+							        unadjusted / oim) -- multinomial-count delta
+							        method, Var(y_j) ~ multinomial ~ Poisson.
+							    robust / hc0 / hc1 / hc2 / hc3 -- Eicker-White
+							        residual meat diag((y_j - yhat_j)^2) on the
+							        polynomial-fit rows; robust = hc1.  (hc0/hc1
+							        accepted but undocumented -- regress exposes
+							        only robust/hc2/hc3.)
+							    bootstrap [, multinomial | residual | wild
+							                 bayesian  normal | bc | percentile
+							                 wildweights() reps() seed() ]
+							        multinomial (default): Dirichlet resample of the
+							        bin counts (= individual resample).  residual:
+							        Chetty/CFOP residual bootstrap over bins.  wild:
+							        heteroskedasticity-robust wild bootstrap over the
+							        bin residuals (resampling twin of vce(robust)).
+							    none -- no inference.
+
+							Internal legacy locals kept:
+							  `vce'      = analytic | bootstrap | none (control flow)
+							  hctype     = -1 multinomial ; 0..3 HC flavour
+							  boottype   = multinomial | bayesian | residual | wild
+							  bootci     = normal | bc | percentile
+							  wildwt     = rademacher | mammen | webb
+							  scalemode  = 1 | x2 | <#>   (glm-style, conventional only)
+							  masscorr   = 1 unless nomasscorr
+						*/
+						gettoken vtype vsub : vce, parse(",")
+						local vtype = strtrim("`vtype'")
+						/* pull the first whitespace-delimited token; the remainder
+						   is the cluster variable for vce(cluster clustvar) */
+						gettoken vtype _vclhead : vtype, parse(" ")
+						local vtype   = strlower(strtrim("`vtype'"))
+						local clustvar = strtrim("`_vclhead'")
+						gettoken _vc vsub : vsub, parse(",")
+						local vsub = strtrim(`"`vsub'"')
+
+						if "`vtype'"=="" | inlist("`vtype'","analytic","unadjusted","oim") ///
+							loc vtype conventional
+						if "`vtype'"=="bayes" {
+							loc vtype bootstrap
+							loc vsub `vsub' bayesian
+						}
+
+						if !inlist("`vtype'","conventional","robust","hc0","hc1","hc2") ///
+							& !inlist("`vtype'","hc3","bootstrap","none","cluster") {
+							noi di as error "vce() type must be conventional, robust, hc2, hc3, cluster, bootstrap or none."
+							exit 198
+						}
+
+						local nclusters .
+						if "`vtype'"=="cluster" {
+							if `nvars'==1 {
+								/* individual data: the token is the cluster variable;
+								   M and the cluster count are built internally. */
+								if "`clustvar'"=="" {
+									noi di as error "vce(cluster) requires a cluster variable, e.g. vce(cluster id)."
+									exit 198
+								}
+								capture confirm variable `clustvar'
+								if _rc {
+									noi di as error "vce(cluster `clustvar'): variable `clustvar' not found."
+									exit 111
+								}
+								if `"`vsub'"' != "" {
+									noi di as error "vce(cluster `clustvar') takes no suboptions with individual-level data (nclusters() is for pre-binned co-visitation input)."
+									exit 198
+								}
+								quietly count if missing(`clustvar')
+								if r(N) > 0 quietly drop if missing(`clustvar')
+							}
+							else {
+								/* pre-binned data: the token is the co-visitation
+								   stub -- either J variables stub1..stubJ (full
+								   J x J matrix, row-aligned with the histogram) or a
+								   single variable stub (diagonal-only form).  The
+								   number of clusters must be given explicitly. */
+								if "`clustvar'"=="" {
+									noi di as error "vce(cluster) on pre-binned data needs a co-visitation stub, e.g. vce(cluster m, nclusters(#))."
+									exit 198
+								}
+								_pb_parse_clustersub , `vsub'
+								local nclusters `s(nclusters)'
+								if "`nclusters'"=="." {
+									local nclusters : char _dta[polbunch_nclusters]
+									if "`nclusters'"=="" local nclusters .
+								}
+								if "`nclusters'"=="." {
+									noi di as error "vce(cluster `clustvar') on pre-binned data requires nclusters(#), the number of clusters (individuals)."
+									exit 198
+								}
+								if `nclusters' < 2 {
+									noi di as error "nclusters() must be at least 2."
+									exit 198
+								}
 							}
 						}
-						/*
-							Residual/Eicker-White delta-method VCE.
+						else local clustvar ""
 
-							  hctype = -1  classic multinomial-count variance (the
-							               analytic default): Var(y_j) = model-implied
-							               multinomial ~ Poisson.
-							  hctype = 0..3  the polynomial-fit (bin-count) rows of
-							               the stacked system get the residual meat
-							               diag((y_j - yhat_j)^2), with the HC0/HC1/
-							               HC2/HC3 finite-sample correction; the
-							               trailing accounting row (observed bunching
-							               mass) keeps its multinomial variance, since
-							               it is an identity with no lack of fit.
-
-							This is robust to bin-level heteroskedasticity, to
-							polynomial misspecification treated as noise (round-number
-							heaping, secondary bumps), and to the marginal, per-bin
-							part of overdispersion from repeated individuals / year
-							effects.  It is NOT robust to cross-bin correlation
-							(off-diagonals stay multinomial) -- for that, cluster on
-							the microdata outside polbunch.  "robust" is an alias for
-							hc1.
-						*/
 						loc hctype = -1
-						if inlist("`vce'","robust","hc1") loc hctype = 1
-						else if "`vce'"=="hc0" loc hctype = 0
-						else if "`vce'"=="hc2" loc hctype = 2
-						else if "`vce'"=="hc3" loc hctype = 3
-						loc vcelabel "`vce'"
-						if `hctype'>=0 {
-							loc vcelabel "hc`hctype'"
-							loc vce analytic
+						if inlist("`vtype'","robust","hc1") loc hctype = 1
+						else if "`vtype'"=="hc0" loc hctype = 0
+						else if "`vtype'"=="hc2" loc hctype = 2
+						else if "`vtype'"=="hc3" loc hctype = 3
+
+						loc boottype multinomial
+						loc bootci   normal
+						loc wildwt   rademacher
+						if "`vtype'"=="bootstrap" & `"`vsub'"'!="" {
+							/*
+								Parse the vce(bootstrap, <subopts>) list in a
+								sub-program so its own -syntax- does not clobber
+								the caller's varlist / main options.
+							*/
+							_pb_parse_vcesub , `vsub'
+							loc boottype `s(boottype)'
+							loc bootci   `s(bootci)'
+							if `"`s(wildwt)'"'!="" {
+								loc wildwt = strlower("`s(wildwt)'")
+								if !inlist("`wildwt'","rademacher","mammen","webb") {
+									noi di as error "wildweights() must be rademacher, mammen or webb."
+									exit 198
+								}
+							}
+							if `s(reps)'>1 loc bootreps `s(reps)'
+							if `"`s(seed)'"'!="" set seed `s(seed)'
 						}
+
+						if "`vtype'"=="none"           loc vce none
+						else if "`vtype'"=="bootstrap"  loc vce bootstrap
+						else                            loc vce analytic
+
 						local grad = cond("`vce'"=="analytic","","nograd")
+
+						/* scale() -- glm-style overdispersion multiplier; conventional only */
+						if "`scale'"=="" loc scalemode 1
+						else {
+							loc scalemode = strlower(strtrim("`scale'"))
+							if !inlist("`scalemode'","1","x2") & missing(real("`scalemode'")) {
+								noi di as error "scale() must be 1, x2 or a positive number."
+								exit 198
+							}
+							if !missing(real("`scalemode'")) {
+								if real("`scalemode'")<=0 {
+									noi di as error "scale() must be positive."
+									exit 198
+								}
+							}
+							if "`scalemode'"!="1" & "`vtype'"!="conventional" {
+								noi di as error "scale() is supported only with vce(conventional)."
+								exit 198
+							}
+						}
+						loc masscorr = ("`nomasscorr'"=="")
 						
 						if `bootreps'<=1 {
 							noi di as error "Option bootreps can only take an integer >1 (binned bootstrap)."
@@ -175,13 +322,46 @@
 							noi di as error "Polynomial must be a nonnegative integer"
 							exit 301
 						}
+						if `deltamax'<=0 {
+							noi di as error "Option deltamax() must be a positive number."
+							exit 301
+						}
 						
 						
 						// check varlist vs bw opts
-						loc nvars: word count `varlist' 
 						if (`nvars'==1&"`bw'"=="")|(`nvars'==2&"`bw'"!="") {
 							noi di as error "Varlist must either contain 1 variable (earnings z) and option bw be specified (individual level data) or 2 variables (frequency y and earnings bin z) and option bw not be specified (pre-binned data)."
 							exit 301
+						}
+
+						/* savebins() -- write the histogram + raw bin co-visitation
+						   matrix to a dataset that vce(cluster stub) can read back.
+						   Only meaningful when we are computing that matrix, i.e.
+						   vce(cluster clustvar) on individual data. */
+						local savebinsfile ""
+						local savebinsrepl ""
+						if `"`savebins'"' != "" {
+							if `nvars'!=1 | "`clustvar'"=="" {
+								noi di as error "savebins() requires vce(cluster clustvar) with individual-level data."
+								exit 198
+							}
+							gettoken savebinsfile _sbrest : savebins, parse(",")
+							local savebinsfile = strtrim(`"`savebinsfile'"')
+							if `"`_sbrest'"' != "" {
+								gettoken _sbc _sbrest : _sbrest, parse(",")
+								local _sbrest = strtrim(`"`_sbrest'"')
+								if `"`_sbrest'"' != "" {
+									if `"`_sbrest'"' != "replace" {
+										noi di as error "savebins() suboption must be replace."
+										exit 198
+									}
+									local savebinsrepl replace
+								}
+							}
+							if `"`savebinsfile'"' == "" {
+								noi di as error "savebins() requires a file name."
+								exit 198
+							}
 						}
 						if `nvars'==2 { //find bw in pre-binned data
 							loc y: word 1 of `varlist'
@@ -229,6 +409,13 @@
 							*/
 							gen long `binid' = ceil(`u')
 							replace `binid' = 0 if abs(`z' - `cutoff') < max(1e-12, abs(`bw')*1e-10)
+
+							/* stash the individual (cluster, bin) pairs before the
+							   collapse destroys them -- used to build the bin
+							   co-visitation matrix for vce(cluster) */
+							if "`clustvar'"!="" {
+								mata: pbx_cluster_stash("`clustvar'", "`binid'")
+							}
 
 							collapse (count) `y'=`z', by(`binid')
 
@@ -401,7 +588,98 @@
 							noi di as error "No bins above the excluded region."
 							exit 301
 						}
-										
+
+						/*
+							vce(cluster): build M, the bin co-visitation matrix.
+
+							  _brow : each bin's position 1..J in bin order
+							  _srow : each bin's row in the stacked estimating system
+							          -- reference bins keep their own row (in bin
+							          order, matching make_ystack), excluded bins all
+							          fold into the trailing bunching-mass row.
+
+							The raw J x J matrix M_raw (over all bins) comes either
+							from the stashed individual visits (individual data) or
+							from the user-supplied co-visitation stub (pre-binned
+							data); pbx_covis_collapse then folds it onto the stacked
+							system.  Everything downstream is identical for the two.
+						*/
+						if "`clustvar'"!="" {
+							tempvar _isref _srow _brow
+							sort `z'
+							gen long `_brow'  = _n
+							gen byte `_isref' = (`bunch'==0)
+							gen long `_srow'  = sum(`_isref')
+							count if `_isref'
+							local _nref   = r(N)
+							local _jstack = `_nref' + 1
+							replace `_srow' = `_jstack' if !`_isref'
+							local _nbin = _N
+							tempname _srowmat _Mraw _Mstack
+
+							if `nvars'==1 {
+								tempname _bpos
+								mkmat `binid' `_brow', matrix(`_bpos')
+								mata: pbx_covis_build("`_bpos'", `_nbin')
+								matrix `_Mraw' = r_pbx_Mraw
+								local _nclust = r_pbx_nclust
+							}
+							else {
+								/* resolve the co-visitation stub -> J variables
+								   `clustvar'1..`clustvar'`_nbin', row-aligned with
+								   the histogram (a full J x J matrix; the
+								   diagonal-only shortcut is not offered because
+								   diag(M) - y y'/n is not a valid covariance --
+								   use vce(robust) as the histogram-only hedge). */
+								local _mvars ""
+								forvalues _k = 1/`_nbin' {
+									capture confirm variable `clustvar'`_k'
+									if _rc {
+										noi di as error "vce(cluster `clustvar') on pre-binned data needs `_nbin' variables `clustvar'1..`clustvar'`_nbin' holding the J x J bin co-visitation matrix, row-aligned with the histogram. (`clustvar'`_k' not found.)"
+										noi di as error "If you only have per-bin repeat counts, use vce(robust) on the histogram instead."
+										exit 198
+									}
+									local _mvars `_mvars' `clustvar'`_k'
+								}
+								mkmat `_mvars', matrix(`_Mraw')
+								mata: pbx_covis_check("`_Mraw'", "`y'")
+								if r_pbx_covchk == 1 {
+									noi di as error "vce(cluster `clustvar'): the supplied co-visitation matrix is not symmetric."
+									exit 198
+								}
+								if r_pbx_covchk == 2 {
+									noi di as error "vce(cluster `clustvar'): diag(M) has an entry below the corresponding bin count -- M[j,j] = sum_i c_ij^2 >= y_j must hold."
+									exit 198
+								}
+								if r_pbx_covchk == 3 {
+									noi di as error "vce(cluster `clustvar'): the co-visitation matrix is not `_nbin' x `_nbin'."
+									exit 198
+								}
+								local _nclust = `nclusters'
+								if `_nclust' > `N' {
+									noi di as error "nclusters() (`_nclust') exceeds the total count (`N')."
+									exit 198
+								}
+							}
+
+							if "`savebins'"!="" {
+								tempname _sbhist
+								mkmat `y' `z_orig', matrix(`_sbhist')
+								matrix colnames `_sbhist' = freq midpoint
+							}
+
+							mkmat `_srow', matrix(`_srowmat')
+							mata: pbx_covis_collapse("`_Mraw'", "`_srowmat'", `_jstack')
+							matrix `_Mstack' = r_pbx_Mstack
+
+							if `_nclust' < 2 {
+								noi di as error "vce(cluster): fewer than 2 clusters."
+								exit 198
+							}
+						}
+						local _covopt ""
+						if "`clustvar'"!="" local _covopt covis(`_Mstack') nclust(`_nclust')
+
 						//gen dummies
 						tempvar dum dum2
 						gen byte `dum' = `z' > `cutoff_est'
@@ -501,7 +779,20 @@
 											local coleq1 `coleq1' h1
 										}
 										else {
+											/*
+												norankred: the two free one-sided
+												polynomials are rank-deficient at this
+												order, but the user asked to keep it.
+												The restricted profile (est 2/3) can
+												still be identified, but the
+												minimum-distance / Hausman tests
+												compare against this unrestricted fit
+												-- which is now degenerate -- so they
+												are disabled, exactly as under
+												norankcheck.
+											*/
 											local nmiss = 0
+											local rankforced_red 1
 										}
 									}
 									} // end else (rank check performed)
@@ -515,6 +806,14 @@
 									noi di as text "Note: norankcheck -- estimating with the requested polynomial(`polynomial') and no"
 									noi di as text "      separate-sides rank check. Specification tests are disabled (they require"
 									noi di as text "      an identified unrestricted fit); the analytical bias is still reported."
+									local test none
+								}
+
+								if "`rankforced_red'" == "1" {
+									noi di as text "Note: norankred -- the two one-sided polynomials are rank-deficient at polynomial(`polynomial'),"
+									noi di as text "      but the order was kept as requested. Specification tests are disabled (they compare"
+									noi di as text "      against the now-degenerate unrestricted fit); the restricted estimate and analytical"
+									noi di as text "      bias are still reported."
 									local test none
 								}
 
@@ -609,12 +908,21 @@
 					
 							
 						//BOOTSTRAP SETUP
-						if inlist("`vce'","bootstrap","bayes") {
+						loc _wildflag = ("`boottype'"=="wild")
+						loc _wildcode = cond("`wildwt'"=="webb",3,cond("`wildwt'"=="mammen",2,1))
+						if "`vce'"=="bootstrap" {
 							tempname p yorig
-							if "`vce'"=="bayes" gen double `p'=`y'/`N'
-							else {
+							if "`boottype'"=="bayesian" gen double `p'=`y'/`N'
+							else if "`boottype'"=="multinomial" {
 								gen double `yorig'=`y'
 								recast double `y'
+							}
+							else {
+								/* residual / wild bootstrap over bins: OLS
+								   counterfactual (per side) + reference residual
+								   pool; each draw re-runs the full estimator. */
+								recast double `y'
+								mata: pbx_resboot_setup("`y'","`z'","`side'","`bunch'", `polynomial')
 							}
 						}
 								
@@ -626,9 +934,9 @@
 						if inlist("`vce'","none","analytic") loc stop=0
 						else loc stop=`bootreps'
 						forvalues s=0/`stop' {
-							if `s'==1&"`dots'"!="nodots" nois _dots 0, title("Performing bootstrap repetitions...") reps(`bootreps')
+							if `s'==1 & "`nodots'"=="" nois _dots 0, title("Performing bootstrap repetitions...") reps(`bootreps')
 							if `s'>0 { //resample outcome
-								if "`vce'"=="bayes" {
+								if "`boottype'"=="bayesian" {
 									loc i=0
 									loc factor=0
 									loc obs=`N'
@@ -642,12 +950,15 @@
 									else replace `y'=0 if _n>`i'
 									if "`zero'"=="nozero" replace `y'=. if `y'==0
 									}
-								else {
-									replace `y'=rgamma(`yorig',1) 
+								else if "`boottype'"=="multinomial" {
+									replace `y'=rgamma(`yorig',1)
 									su `y'
 									replace `y'=`y'*`N'/r(sum)
 								}
-								
+								else {
+									mata: pbx_resboot_draw("`y'", `_wildflag', `_wildcode')
+								}
+
 							}
 							
 							//estimate model: single stacked profile branch for estimators 0/1/2/3
@@ -658,7 +969,7 @@
 										bw_orig(`bw_orig') ///
 										zl_excl_orig(`zL_excl_orig') ///
 										zh_excl_orig(`zH_excl_orig') ///
-										vce(`vce') hctype(`hctype')
+										vce(`vce') hctype(`hctype') masscorr(`masscorr') `_covopt'
 								}
 								else {
 									bunch_profile `y' `z' `side' `bunch', ///
@@ -666,14 +977,35 @@
 										cutoff_orig(`cutoff_orig') bw_orig(`bw_orig') ///
 										cutoff_est(`cutoff_est') bw_est(`bw_est') ///
 										l(`L') h(`H') ///
-										`log' `normalize' vce(`vce') hctype(`hctype') ///
-										initdelta(`dstart') ///
+										`log' `normalize' vce(`vce') hctype(`hctype') masscorr(`masscorr') `_covopt' ///
+										initdelta(`dstart') deltamax(`deltamax') ///
 										zbar_est(`zbar_est') ///
 										zl_excl_orig(`zL_excl_orig') ///
 										zh_excl_orig(`zH_excl_orig') ///
 										zl_excl_est(`zL_excl_est') ///
 										zh_excl_est(`zH_excl_est') ///
 										`positive'
+								}
+
+								if `s'==0 {
+									local phi_main = .
+									capture confirm scalar e(dispersion)
+									if !_rc local phi_main = e(dispersion)
+
+									/*
+										estimator 2/3 profile: was the structural
+										delta weakly identified (boundary of the
+										deltamax() search or a multi-modal profile
+										SSR)?  Captured from the MAIN fit and reused
+										for every bunch_transform call so the posted
+										b has a constant width across bootstrap reps.
+									*/
+									local weakid_main = 0
+									capture confirm scalar e(delta_weakid)
+									if !_rc local weakid_main = e(delta_weakid)
+									local nbasin_main = .
+									capture confirm scalar e(delta_nbasin)
+									if !_rc local nbasin_main = e(delta_nbasin)
 								}
 
 							//STORE RAW RESTRICTED ESTIMATES if using hausman test.
@@ -716,7 +1048,8 @@
 										`normalize' ///
 										zbar(`zbar_est') ///
 										massobs(`Hstar_obs') ///
-										nosplit(`nosplit')
+										nosplit(`nosplit') ///
+										weakid(`weakid_main')
 								}
 								else {
 									saez_transform, zstarorig(`cutoff_orig') bworig(`bw_orig') t0(`t0') t1(`t1') `log' `grad' `constant'
@@ -761,7 +1094,7 @@
 										cutoff_orig(`cutoff_orig') bw_orig(`bw_orig') ///
 										cutoff_est(`cutoff_est') bw_est(`bw_est') ///
 										l(`L') h(`H') ///
-										`log' `normalize' vce(`vce') hctype(`hctype') ///
+										`log' `normalize' vce(`vce') hctype(`hctype') masscorr(`masscorr') `_covopt' ///
 										initdelta(`dstart') ///
 										zbar_est(`zbar_est') ///
 										zl_excl_orig(`zL_excl_orig') ///
@@ -809,13 +1142,13 @@
 										matrix `b0s' = nullmat(`b0s') \ e(b)
 									}
 								}
-								if `s' > 0 noi _dots `s' 0
+								if `s' > 0 & "`nodots'"=="" noi _dots `s' 0
 								
 							}
 							
 								
 							//bootstrap inference sunmmary & test
-							if inlist("`vce'","bootstrap","bayes") {
+							if "`vce'"=="bootstrap" {
 								/*
 									clear+svmat+corr needs an empty dataset to
 									load the bootstrap draws into, but the
@@ -840,6 +1173,38 @@
 								svmat double `bs'
 								corr _all, cov
 								mat `Vmain'=r(C)
+
+								/*
+									Non-normal bootstrap CIs (bootci = percentile | bc).
+									Stored in e(ci); the displayed table stays normal.
+								*/
+								if "`bootci'"!="normal" {
+									local _nk = colsof(`bmain')
+									tempname _ciM
+									matrix `_ciM' = J(`_nk',2,.)
+									forvalues j = 1/`_nk' {
+										capture confirm variable `bs'`j'
+										if _rc continue
+										local _plo 2.5
+										local _phe 97.5
+										if "`bootci'"=="bc" {
+											quietly count if !missing(`bs'`j')
+											local _ntot = r(N)
+											quietly count if `bs'`j' < `bmain'[1,`j'] & !missing(`bs'`j')
+											local _frac = cond(`_ntot'>0, r(N)/`_ntot', 0.5)
+											if `_frac'<=0 local _frac = 0.5/max(`_ntot',1)
+											if `_frac'>=1 local _frac = 1 - 0.5/max(`_ntot',1)
+											local _z0 = invnormal(`_frac')
+											local _plo = 100*normal(2*`_z0' + invnormal(0.025))
+											local _phe = 100*normal(2*`_z0' + invnormal(0.975))
+										}
+										quietly _pctile `bs'`j', p(`_plo' `_phe')
+										matrix `_ciM'[`j',1] = r(r1)
+										matrix `_ciM'[`j',2] = r(r2)
+									}
+									matrix colnames `_ciM' = ll ul
+								}
+
 								quietly use `_pbsim_boot_data', clear
 
 								if `dotest' {
@@ -948,6 +1313,7 @@
 													ystack(`y_raw') ///
 													mustack(`muU_raw') ///
 													hctype(`hctype') ///
+													`_covopt' ///
 													cutofforig(`cutoff_orig') ///
 													bworig(`bw_orig') ///
 													cutoffest(`cutoff_est') ///
@@ -1006,6 +1372,22 @@
 						local _zhi_val = r(max) + `bw_orig'/2
 
 						restore
+
+						/*
+							scale() -- glm-style overdispersion multiplier
+							(vce(conventional) only; validated at parse time).
+							scale(x2) uses the Pearson phi-hat from the reference
+							bins; scale(#) uses the literal factor.
+						*/
+						local scaleapplied = 1
+						if "`vce'"=="analytic" & `hctype'<0 & "`scalemode'"!="1" {
+							if "`scalemode'"=="x2" {
+								if !missing(`phi_main') & `phi_main'>0 local scaleapplied = `phi_main'
+							}
+							else local scaleapplied = real("`scalemode'")
+							matrix `Vmain' = `scaleapplied' * `Vmain'
+						}
+
 						if "`vce'"!="none" {
 							local nm: colnames `bmain'
 							local neq: coleq `bmain'
@@ -1013,7 +1395,7 @@
 							mat rownames `Vmain'=`nm'
 							mat coleq `Vmain'=`neq'
 							mat roweq `Vmain'=`neq'
-							
+
 							eret post `bmain' `Vmain', esample(`touse') depname(freq) obs(`N')
 						}
 						else eret post `bmain', esample(`touse') obs(`N') depname(freq)
@@ -1051,7 +1433,7 @@
 						ereturn local cmd "polbunch"
 						ereturn local cmdname "polbunch"
 						ereturn local title 	"Polynomial bunching estimates"
-						ereturn local cmdline 	"polbunch `0'"
+						ereturn local cmdline 	`"polbunch `cmdline0'"'
 						ereturn matrix table=`table'
 						ereturn local binname "`z'"
 						ereturn scalar bw=`bw'
@@ -1067,16 +1449,53 @@
 						ereturn local zname = "`z'"
 						ereturn local transform="`transform'"
 
-						if `hctype'>=0 {
-							if "`transform'"=="notransform" estadd local vcetype "robust (residual, `vcelabel')"
-							else estadd local vcetype "delta method (residual, `vcelabel')"
+						/*
+							e(vcetype) must stay short -- Stata prints it above
+							"std. err." in the coefficient table.  The detail
+							(wild/residual/hc flavour/scale) lives in e(vce),
+							e(boottype), e(scale), etc.
+						*/
+						if "`clustvar'"!=""       estadd local vcetype "Robust"
+						else if "`vce'"=="bootstrap"   estadd local vcetype "Bootstrap"
+						else if `hctype'>=0       estadd local vcetype "Robust"
+						else if "`scalemode'"!="1" estadd local vcetype "Scaled"
+						else if "`transform'"=="notransform" estadd local vcetype "Analytic"
+						else                      estadd local vcetype "Delta-method"
+						/* inference-mode metadata */
+						ereturn local vce "`vtype'"
+						if "`clustvar'"!="" {
+							ereturn scalar N_clust = `_nclust'
+							if `nvars'==1 ereturn local clustvar "`clustvar'"
+							else          ereturn local covisstub "`clustvar'"
+						}
+						if "`vce'"=="bootstrap" {
+							ereturn local boottype "`boottype'"
+							ereturn local bootci   "`bootci'"
+							ereturn scalar bootreps = `bootreps'
+							if "`boottype'"=="wild" ereturn local wildweights "`wildwt'"
+							if "`bootci'"!="normal" {
+								capture confirm matrix `_ciM'
+								if !_rc {
+									local _nm : colnames e(b)
+									local _eq : coleq e(b)
+									matrix rownames `_ciM' = `_nm'
+									matrix roweq    `_ciM' = `_eq'
+									ereturn matrix ci_`bootci' = `_ciM'
+								}
+							}
+						}
+						else if `hctype'>=0 {
+							ereturn scalar masscorr = `masscorr'
+							if !missing(`phi_main') ereturn scalar dispersion = `phi_main'
 						}
 						else if "`vce'"=="analytic" {
-							if "`transform'"=="notransform" estadd local vcetype "analytic"
-							else estadd local vcetype "delta method"
+							if !missing(`phi_main') ereturn scalar dispersion = `phi_main'
+							if "`scalemode'"!="1" {
+								ereturn local scale "`scalemode'"
+								ereturn scalar scalefactor = `scaleapplied'
+							}
 						}
-						else if "`vce'"=="bootstrap" estadd local vcetype "binned bootstrap"
-						else if "`vce'"=="bayes" estadd local vcetype "bayesian bootstrap"
+
 						if "`log'"=="log" ereturn scalar log=1
 						else ereturn scalar log=0
 						if "`t0'" != "" ereturn scalar t0 = `t0'
@@ -1096,11 +1515,37 @@
 						if !_rc ereturn scalar hasresp = `hasresp_main'
 						else     ereturn scalar hasresp = .
 
+						/*
+							estimator 2/3 only: delta_weakid = 1 when the
+							structural-delta profile search hit the deltamax()
+							boundary or found competing minima (multi-modal
+							concentrated SSR).  Then hasresp is forced to 0 and
+							shift/marginal_response/elasticity are withheld.
+							delta_nbasin reports how many local minima the grid
+							found (a diagnostic).
+						*/
+						if inlist(`estimator',2,3) {
+							capture confirm number `weakid_main'
+							if !_rc ereturn scalar delta_weakid = `weakid_main'
+							capture confirm number `nbasin_main'
+							if !_rc & !missing(`nbasin_main') ereturn scalar delta_nbasin = `nbasin_main'
+							ereturn scalar delta_nonneg = ("`allownegative'" == "")
+						}
+
 						//Display results
 						noi {
 							di _newline
 							di "`e(title)'"
 							eret di
+							if "`clustvar'"!="" {
+								if `nvars'==1 di as txt "(Std. err. adjusted for `_nclust' clusters in `clustvar')"
+								else          di as txt "(Std. err. adjusted for `_nclust' clusters; co-visitation matrix supplied)"
+							}
+							if "`vce'"=="bootstrap" & "`bootci'"!="normal" {
+								local _cilab = cond("`bootci'"=="bc","bias-corrected","percentile")
+								di as txt "Note: coefficient table shows normal-approximation CIs; `_cilab' bootstrap"
+								di as txt "      CIs are stored in e(ci_`bootci')."
+							}
 							if `dotest' {
 								tempname b
 								matrix `b' = e(b)
@@ -1154,9 +1599,11 @@
 							// polynomial, tax rates, window and elasticity from
 							// e(); we pass the response-inversion and mass axes
 							// explicitly so they match how this estimate was run.
-							// Estimators 0/3 are consistent under exact+splitmass, so
-							// polbunchbias errors there unless constant or poolmass is
-							// on -- the capture swallows that silently.
+							// Estimators 0/3 are consistent under exact+splitmass,
+							// and estimator 4 (Saez) with constant applies a flat
+							// counterfactual in both the mass and inversion steps
+							// -- both are zero-bias by construction, polbunchbias
+							// errors there, and the capture swallows it silently.
 							if "`nobias'" == "" & inlist(`estimator', 0, 1, 2, 3, 4) & ///
 									"`transform'" != "notransform" & "`t0'" != "" & "`t1'" != "" {
 								local _binvopt = cond(`useconstant',"constant","exact")
@@ -1174,7 +1621,20 @@
 									local _bs  = r(bias_shift)
 									local _be  = r(bias_elasticity)
 									local _bK  = r(polynomial)
+									local _bKfull = r(bias_polyfull)
+									local _bl2 = r(bias_l2err)
 									local _bdiv = r(iterate_diverged)
+									local _biterK  = r(bias_iter_polynomial)
+									local _biterl2 = r(bias_iter_l2err)
+									local _biterbe = r(bias_iter_elasticity)
+									local _biterbs = r(bias_iter_shift)
+									local _biterbB = r(bias_iter_B)
+									local _biterbr = r(bias_iter_response)
+									local _buniterK  = r(bias_uniter_polynomial)
+									local _buniterbe = r(bias_uniter_elasticity)
+									local _buniterbs = r(bias_uniter_shift)
+									local _buniterbB = r(bias_uniter_B)
+									local _buniterbr = r(bias_uniter_response)
 									tempname _bm _bbeta
 									matrix `_bm'    = r(b)
 									matrix `_bbeta' = r(bias_beta)
@@ -1199,7 +1659,21 @@
 									local _bnames : colnames `_bm'
 									local _bncol  = colsof(`_bm')
 									local _bnm1 : word 1 of `_bnames'
-									di as txt "Bias of the polynomial bunching estimator (order `_bK'):" ///
+
+									// no reliable bias even after the order fallback:
+									// one honest line instead of a table of dots
+									if missing(`_bh') {
+										di as txt "Bias of the polynomial bunching estimator:" ///
+											_col(`=`_bW'-35') as txt "not identified on this window"
+										di as txt "{hline `_bW'}"
+									}
+									else {
+									local _bordtxt "order `_bK'"
+									if `_buniterK' < . ///
+										local _bordtxt "order `_bK', converged iterate; degree-`_buniterK' plug-in did not converge"
+									else if `_bKfull' < . & `_bK' < `_bKfull' ///
+										local _bordtxt "order `_bK', fallback from `_bKfull'"
+									di as txt "Bias of the polynomial bunching estimator (`_bordtxt'):" ///
 										_col(`=`_bW'-35') as txt "`_bnm1'" ///
 										_col(`=`_bW'-10') as res %10.6g `_bm'[1,1]
 									forvalues _bj = 2/`_bncol' {
@@ -1209,9 +1683,37 @@
 									}
 									di as txt "{hline `_bW'}"
 
+									if `_buniterK' < . {
+										di as text "Note: iterate did not converge at degree `_buniterK' (plug-in elasticity bias"
+										di as text "      " %9.4f `_buniterbe' " there); PROMOTED to the converged, self-consistent"
+										di as text "      fit at degree `_bK' shown above.  The plug-in number is kept, not discarded"
+										di as text "      -- see e(bias_uniter_*).  Specify {cmd:nopromote} to keep it as primary instead."
+									}
+									else if `_bKfull' < . & `_bK' < `_bKfull' {
+										di as text "Note: the degree-`_bKfull' fitting design is too ill-conditioned on this window;"
+										di as text "      the bias above is computed at degree `_bK' (best L2 fit to the degree-`_bKfull'"
+										di as text "      counterfactual, relative change " %6.4f `_bl2' ///
+											cond(`_bl2' < 0.02, " -- the same quantity).", " -- treat as indicative).")
+									}
+
 									if "`_bdiv'" == "1" {
 										di as error "Warning: the analytical-bias iterate loop did not converge; the un-iterated"
 										di as error "         bias is reported above (e(bias_iterate_diverged)=1)."
+									}
+
+									if `_biterK' < . {
+										di as text "Note: iterate did not converge at degree `_bK', but DOES converge at degree"
+										di as text "      `_biterK' (a genuinely self-consistent fixed point; L2 change " %6.4f `_biterl2' "):"
+										di as text "      elasticity bias " %9.4f `_biterbe' " there, vs " %9.4f `_be' ///
+											" un-iterated at degree `_bK' above (nopromote: not promoted)."
+									}
+
+									di as text "Note: this bias is measured against the counterfactual that"
+									di as text "      estimator `estimator' itself assumes; each estimator assumes a"
+									di as text "      different counterfactual, so these figures are NOT directly"
+									di as text "      comparable across estimators.  For a cross-estimator"
+									di as text "      comparison, evaluate every estimator against one common"
+									di as text "      counterfactual density."
 									}
 
 									// Store in e()
@@ -1223,6 +1725,24 @@
 									ereturn scalar bias_response    = `_br'
 									ereturn scalar bias_shift       = `_bs'
 									ereturn scalar bias_elasticity  = `_be'
+									ereturn scalar bias_polynomial  = `_bK'
+									if `_bKfull' < . ereturn scalar bias_polyfull = `_bKfull'
+									if `_bl2' < .    ereturn scalar bias_l2err    = `_bl2'
+									if `_biterK' < . {
+										ereturn scalar bias_iter_polynomial = `_biterK'
+										ereturn scalar bias_iter_l2err      = `_biterl2'
+										ereturn scalar bias_iter_elasticity = `_biterbe'
+										ereturn scalar bias_iter_shift      = `_biterbs'
+										ereturn scalar bias_iter_B          = `_biterbB'
+										ereturn scalar bias_iter_response   = `_biterbr'
+									}
+									if `_buniterK' < . {
+										ereturn scalar bias_uniter_polynomial = `_buniterK'
+										ereturn scalar bias_uniter_elasticity = `_buniterbe'
+										ereturn scalar bias_uniter_shift      = `_buniterbs'
+										ereturn scalar bias_uniter_B          = `_buniterbB'
+										ereturn scalar bias_uniter_response   = `_buniterbr'
+									}
 									ereturn matrix bias_beta        = `_bbeta'
 									ereturn matrix bias             = `_bm'
 								}
@@ -1230,11 +1750,63 @@
 						}
 					
 					if "`vce'"!="none" set coeftabresults `coeftabresults'
+
+					/*
+						savebins() -- write the histogram and the raw bin
+						co-visitation matrix to a dataset in the shape that
+						vce(cluster stub) reads back:
+						    freq  midpoint  m1 m2 ... mJ
+						with the cluster count / cutoff / bw kept as dataset
+						characteristics.  Done last: it clears the data, and
+						polbunch's own preserve restores the caller's data on
+						exit.
+					*/
+					if `"`savebins'"' != "" {
+						local _sbJ = rowsof(`_Mraw')
+						tempname _sbfr
+						frame create `_sbfr'
+						frame `_sbfr' {
+							svmat double `_sbhist', names(col)
+							svmat double `_Mraw', name(cv)
+							order freq midpoint cv*
+							char _dta[polbunch_nclusters] `_nclust'
+							char _dta[polbunch_cutoff]    `cutoff_orig'
+							char _dta[polbunch_bw]        `bw_orig'
+							label data "polbunch histogram + bin co-visitation matrix"
+							save `"`savebinsfile'"', `savebinsrepl'
+						}
+						frame drop `_sbfr'
+						noi di as txt `"(histogram + `_sbJ' x `_sbJ' co-visitation matrix written to `savebinsfile'.dta; `_nclust' clusters)"'
+						noi di as txt `"      read back with:  polbunch freq midpoint, ... vce(cluster cv)"'
 					}
-						
+					}
+
 				end
 
-				
+		cap program drop _pb_parse_clustersub
+		program define _pb_parse_clustersub, sclass
+			syntax , [ NCLusters(integer -1) ]
+			sreturn clear
+			sreturn local nclusters = cond(`nclusters' < 0, ".", "`nclusters'")
+		end
+
+		cap program drop _pb_parse_vcesub
+		program define _pb_parse_vcesub, sclass
+			syntax , [ MULTinomial RESidual WILD BAyesian ///
+				NORMal BC PERCentile WILDWeights(string) REPS(integer -1) SEED(string) ]
+
+			sreturn clear
+			sreturn local boottype = cond("`residual'"!="","residual", ///
+				cond("`wild'"!="","wild", ///
+				cond("`bayesian'"!="","bayesian","multinomial")))
+			sreturn local bootci = cond("`bc'"!="","bc", ///
+				cond("`percentile'"!="","percentile","normal"))
+			sreturn local wildwt "`wildweights'"
+			sreturn local reps   "`reps'"
+			sreturn local seed   "`seed'"
+		end
+
+
 
 		program define bunch_profile, eclass
 			version 16.0
@@ -1253,7 +1825,7 @@
 				zh_excl_orig(real) ///
 				zl_excl_est(real) ///
 				zh_excl_est(real) ///
-				[ nonormalize LOG vce(string) initdelta(real 0.05) positive HCType(real -1) ]
+				[ nonormalize LOG vce(string) initdelta(real 0.05) DELTAmax(real 1) positive HCType(real -1) MASScorr(real 1) COVis(name) NCLust(real 0) ]
 
 			gettoken yvar rest : varlist
 			gettoken zvar rest : rest
@@ -1281,6 +1853,8 @@
 
 			tempname b V Gstack mustack ystack
 
+			capture scalar drop r_weakid_profile r_nbasin_profile
+
 			mata: profile_run( ///
 				"`y_t'", ///
 				"`z_t'", ///
@@ -1301,11 +1875,26 @@
 				`dovar0', ///
 				`initdelta', ///
 				`positive0', ///
-				`hctype' ///
+				`hctype', ///
+				`masscorr', ///
+				`deltamax', ///
+				"`covis'", ///
+				`nclust' ///
 			)
 
 			matrix `b' = r_b_profile
 			matrix `V' = r_V_profile
+			local phihat = .
+			capture confirm scalar r_phi_profile
+			if !_rc local phihat = r_phi_profile
+
+			/* estimator 2/3 profile: weak-identification flag + basin count */
+			local weakid0 = 0
+			capture confirm scalar r_weakid_profile
+			if !_rc local weakid0 = r_weakid_profile
+			local nbasin0 = .
+			capture confirm scalar r_nbasin_profile
+			if !_rc local nbasin0 = r_nbasin_profile
 
 			local h0names
 			forvalues j = 1/`k' {
@@ -1367,6 +1956,11 @@
 			ereturn local zvar "`zvar'"
 
 			ereturn scalar estimator   = `estimator'
+			if `phihat'<. ereturn scalar dispersion = `phihat'
+			if inlist(`estimator',2,3) {
+				ereturn scalar delta_weakid = `weakid0'
+				if `nbasin0'<. ereturn scalar delta_nbasin = `nbasin0'
+			}
 			ereturn scalar K           = `k'
 			ereturn scalar cutoff_orig = `cutoff_orig'
 			ereturn scalar bw_orig     = `bw_orig'
@@ -1408,7 +2002,7 @@
 				ZHEXCLEST(real) ///
 				LOW(integer) ///
 				HIGH(integer) ///
-				[ LOG CONSTANT T0(numlist min=1 max=1) T1(numlist min=1 max=1) nograd nonormalize ZBAR(real 0) MASSOBS(real 0) NOSPLIT(integer 0) ]
+				[ LOG CONSTANT T0(numlist min=1 max=1) T1(numlist min=1 max=1) nograd nonormalize ZBAR(real 0) MASSOBS(real 0) NOSPLIT(integer 0) WEAKid(integer 0) ]
 
 				loc z `varlist'
 				
@@ -1496,7 +2090,8 @@
 				`zlexcl', ///
 				`zhexcl', ///
 				`zlexclest', ///
-				`zhexclest' ///
+				`zhexclest', ///
+				`weakid' ///
 			)
 
 			matrix `bnew' = b_bunchcalc
@@ -1560,6 +2155,13 @@
 				if `hastax0' {
 					local cnames `cnames' elasticity
 				}
+			}
+			else if `weakid' {
+				noi di as text "Note: the response length (delta) for estimator `estimator' is weakly identified for this"
+				noi di as text "      window / polynomial order -- the profile search hit the deltamax() bound or"
+				noi di as text "      found competing minima. The counterfactual, number of bunchers and excess mass"
+				noi di as text "      are reported; shift, marginal response and elasticity are withheld. Check the"
+				noi di as text "      minimum-distance / Hausman test and try a different window or polynomial()."
 			}
 			else {
 				noi di as text "Note: Could not find real root to solve the polynomial. Consider using the constant approximation."
@@ -1687,7 +2289,17 @@ program define saez_transform, eclass
     }
 	
     local islog       = ("`log'" != "")
-    local dograd      = ("`nograd'" == "")
+    /*
+        syntax turns "nograd" into a toggle option whose macro is `grad'
+        (empty, or "nograd"), so `nograd' itself is never set.  Only take
+        the delta-method path when the caller did NOT pass nograd AND an
+        unrestricted e(V) is actually present (mirrors bunch_transform).
+    */
+    local dograd = ("`grad'`nograd'" != "nograd")
+    if (`dograd') {
+        capture confirm matrix e(V)
+        if (_rc) local dograd = 0
+    }
     local useconstant = ("`constant'" != "")
 
     local zstarorig : word 1 of `zstarorig'
@@ -1781,7 +2393,7 @@ cap program drop bunch_saez
 			BW_orig(real) ///
 			ZL_excl_orig(real) ///
 			ZH_excl_orig(real) ///
-			[vce(string) HCType(real -1)]
+			[vce(string) HCType(real -1) MASScorr(real 1) COVis(name) NCLust(real 0)]
 
 		gettoken yvar rest : varlist
 		gettoken zvar rest : rest
@@ -1862,7 +2474,10 @@ cap program drop bunch_saez
 		gen double `bunch_t' = `bunchvar' if `touse'
 		
 
-		mata: saez_run("`y_t'", "`side_t'", "`bunch_t'", `a0', `a1', `dovar0', `hctype')
+		mata: saez_run("`y_t'", "`side_t'", "`bunch_t'", `a0', `a1', `dovar0', `hctype', `masscorr', "`covis'", `nclust')
+		local phihat = .
+		capture confirm scalar r_phi_saez
+		if !_rc local phihat = r_phi_saez
 
 		tempname b V Gstack mustack ystack
 
@@ -1898,6 +2513,7 @@ cap program drop bunch_saez
 
 		ereturn local cmd "bunch_saez"
 		ereturn scalar estimator = 4
+		if `phihat'<. ereturn scalar dispersion = `phihat'
 		ereturn scalar cutoff_orig = `cutoff_orig'
 		ereturn scalar bw_orig = `bw_orig'
 		ereturn scalar zL_excl_orig = `zl_excl_orig'
@@ -1962,13 +2578,18 @@ cap program drop bunch_saez
 			cutoffest(real) ///
 			bwest(real) ///
 			ZBAR(real) ///
-			[ NONORMALIZE LOG MUSTACK(name) HCType(real -1) ]
+			[ NONORMALIZE LOG MUSTACK(name) HCType(real -1) COVis(name) NCLust(real 0) ]
 
 		local islog0 = ("`log'" != "")
 		local muname "."
 		if `hctype'>=0 & "`mustack'"!="" {
 			capture confirm matrix `mustack'
 			if !_rc local muname "`mustack'"
+		}
+		local covname "."
+		if "`covis'"!="" {
+			capture confirm matrix `covis'
+			if !_rc local covname "`covis'"
 		}
 
 		mata: polbunch_modeltest_mata( ///
@@ -1984,7 +2605,9 @@ cap program drop bunch_saez
 			`zbar', ///
 			`islog0', ///
 			"`muname'", ///
-			`hctype' ///
+			`hctype', ///
+			"`covname'", ///
+			`nclust' ///
 		)
 
 		return scalar chi2 = r(pb_model_chi2)
@@ -2286,7 +2909,10 @@ cap program drop bunch_saez
 		real scalar a0,
 		real scalar a1,
 		real scalar dovar,
-		real scalar hctype
+		real scalar hctype,
+		real scalar masscorr,
+		string scalar covisname,
+		real scalar nclust
 	)
 	{
 		real colvector y, side, bunch
@@ -2319,12 +2945,16 @@ cap program drop bunch_saez
 		mu = X * theta'
 
 		if (dovar == 1) {
-			if (hctype >= 0) {
-				Vout = variance_robust(X, ystack, mu, hctype, 1)
+			if (covisname != "") {
+				Vout = variance_cluster(X, ystack, st_matrix(covisname), nclust)
+			}
+			else if (hctype >= 0) {
+				Vout = variance_robust(X, ystack, mu, hctype, 1, masscorr)
 			}
 			else {
 				Vout = variance_multinomial(X, ystack, 0)
 			}
+			st_numscalar("r_phi_saez", pearson_phi(ystack[1::(nL+nR)], mu[1::(nL+nR)], cols(X)))
 		}
 		else {
 			Vout = J(3, 3, .)
@@ -3149,6 +3779,170 @@ cap program drop bunch_saez
 		// -----------------------------------------------------------------------------
 
 
+	/*
+		Pearson overdispersion estimate from the reference-bin fit:
+		    phi-hat = (1/(n-p)) * sum_j (y_j - mu_j)^2 / mu_j
+		Returns 1 when it cannot be formed.  Used for e(dispersion),
+		for scale(x2), and (in variance_robust) to lift the
+		bunching-mass row off the pure-Poisson floor.
+	*/
+	real scalar pearson_phi(
+		real colvector y_ref,
+		real colvector mu_ref,
+		real scalar p
+	)
+	{
+		real scalar n
+		real colvector m
+
+		n = rows(y_ref)
+		if (n <= p | n < 1) return(1)
+		m = mu_ref
+		if (missing(m) | missing(y_ref)) return(1)
+		m = m + (m :<= 0) :* 1e-8
+		return( sum((y_ref - mu_ref):^2 :/ m) / (n - p) )
+	}
+
+
+	// -----------------------------------------------------------------------------
+	// Residual / wild bootstrap over bins  (vce(bootstrap, residual | wild))
+	// -----------------------------------------------------------------------------
+
+	/* mean-0, variance-1 multiplier weights: 1 Rademacher, 2 Mammen, 3 Webb */
+	real colvector pbx_wild_weights(real scalar n, real scalar code)
+	{
+		real colvector u, idx, vals
+		real scalar pm, a, bb
+
+		u = runiform(n, 1)
+		if (code == 2) {
+			pm = (sqrt(5) + 1) / (2 * sqrt(5))
+			a  = -(sqrt(5) - 1) / 2
+			bb =  (sqrt(5) + 1) / 2
+			return( (u :< pm) :* a :+ (u :>= pm) :* bb )
+		}
+		else if (code == 3) {
+			vals = (-sqrt(1.5) \ -1 \ -sqrt(0.5) \ sqrt(0.5) \ 1 \ sqrt(1.5))
+			idx  = ceil(u :* 6)
+			idx  = idx :+ (idx :< 1) :- (idx :> 6)
+			return( vals[idx] )
+		}
+		return( 2 :* (u :>= 0.5) :- 1 )                     /* Rademacher */
+	}
+
+	/* Fit the counterfactual polynomial (separately per side) and cache the
+	   fitted counts, the reference residuals and the resampling pool. */
+	void pbx_resboot_setup(
+		string scalar yv, string scalar zv, string scalar sv, string scalar bv,
+		real scalar K
+	)
+	{
+		external real colvector pbx_Y
+		external real colvector pbx_MU
+		external real colvector pbx_RESID
+		external real colvector pbx_POOL
+		external real colvector pbx_REF
+		external real colvector pbx_EX
+		external real scalar    pbx_PHI
+
+		real colvector Y, Z, S, Bn, zc, il, ir
+		real matrix X, Xl, Xr
+
+		Y  = st_data(., yv)
+		Z  = st_data(., zv)
+		S  = st_data(., sv)
+		Bn = st_data(., bv)
+
+		zc = Z :- mean(Z)
+		if (max(abs(zc)) > 0) zc = zc :/ max(abs(zc))
+		X = pbasis(zc, K)
+
+		il = selectindex((Bn :== 0) :& (S :== -1))
+		ir = selectindex((Bn :== 0) :& (S :==  1))
+
+		pbx_MU = J(rows(Y), 1, .)
+
+		if (rows(il) > cols(X)) {
+			Xl = X[il, .]
+			pbx_MU[il] = Xl * qrsolve(Xl, Y[il])
+		}
+		else {
+			pbx_MU[il] = Y[il]
+		}
+
+		if (rows(ir) > cols(X)) {
+			Xr = X[ir, .]
+			pbx_MU[ir] = Xr * qrsolve(Xr, Y[ir])
+		}
+		else {
+			pbx_MU[ir] = Y[ir]
+		}
+
+		pbx_Y     = Y
+		pbx_REF   = il \ ir
+		pbx_EX    = selectindex(Bn :!= 0)
+		pbx_RESID = J(rows(Y), 1, 0)
+		pbx_RESID[pbx_REF] = Y[pbx_REF] :- pbx_MU[pbx_REF]
+		pbx_POOL  = pbx_RESID[pbx_REF]
+
+		/* Pearson overdispersion of the reference bins -- used to scale the
+		   perturbation on the (much taller) excluded/bunching bins, so the
+		   residual/wild bootstrap of the mass matches variance_robust's
+		   phi-hat * Hstar mass-row treatment. */
+		pbx_PHI = pearson_phi(Y[pbx_REF], pbx_MU[pbx_REF], cols(X))
+		if (pbx_PHI >= . | pbx_PHI < 1) pbx_PHI = 1
+	}
+
+	/* One resampled count vector, written straight back to `yv'. */
+	void pbx_resboot_draw(string scalar yv, real scalar wildflag, real scalar wildcode)
+	{
+		external real colvector pbx_Y
+		external real colvector pbx_MU
+		external real colvector pbx_RESID
+		external real colvector pbx_POOL
+		external real colvector pbx_REF
+		external real colvector pbx_EX
+		external real scalar    pbx_PHI
+
+		real colvector col, ev, w, idx, wex
+		real scalar n, npool, nex
+
+		n     = rows(pbx_Y)
+		npool = rows(pbx_POOL)
+		nex   = rows(pbx_EX)
+
+		col = pbx_Y
+		ev  = J(n, 1, 0)
+
+		/* Reference bins: residual = iid pool draw; wild = own residual x weight. */
+		if (wildflag == 0) {
+			idx = ceil(runiform(npool, 1) :* npool)
+			idx = idx :+ (idx :< 1)
+			ev[pbx_REF] = pbx_POOL[idx]
+		}
+		else {
+			w = pbx_wild_weights(n, wildcode)
+			ev[pbx_REF] = pbx_RESID[pbx_REF] :* w[pbx_REF]
+		}
+
+		/* Excluded / bunching bins: perturb with overdispersed-Poisson noise
+		   scaled to each bin's own height, sqrt(phi-hat * y_j) * weight --
+		   matching variance_robust's phi-hat * Hstar mass row (the reference
+		   residual pool is on the wrong scale for the much taller mass bins). */
+		if (nex > 0) {
+			if (wildflag == 0) wex = rnormal(nex, 1, 0, 1)
+			else               wex = pbx_wild_weights(nex, wildcode)
+			ev[pbx_EX] = sqrt(pbx_PHI :* abs(pbx_Y[pbx_EX])) :* wex
+		}
+
+		col[pbx_REF] = pbx_MU[pbx_REF] :+ ev[pbx_REF]
+		if (nex > 0) col[pbx_EX] = pbx_Y[pbx_EX] :+ ev[pbx_EX]
+		col = col :* (col :> 0)
+
+		st_store(., yv, col)
+	}
+
+
 	real matrix variance_multinomial(
 		real matrix G_stack,
 		real colvector y_stack,
@@ -3232,10 +4026,11 @@ cap program drop bunch_saez
 		real colvector y_stack,
 		real colvector mu_stack,
 		real scalar hctype,
-		real scalar nmassrows
+		real scalar nmassrows,
+		real scalar masscorr
 	)
 	{
-		real scalar N, n, p, j, dfadj, hv
+		real scalar N, n, p, j, dfadj, hv, phi
 		real matrix G, Vm, bread, V, PG
 		real colvector e, dm, dr, hjj
 
@@ -3286,9 +4081,24 @@ cap program drop bunch_saez
 			}
 		}
 
-		/* trailing accounting row(s): keep multinomial variance */
+		/*
+			Trailing accounting row(s) -- the observed bunching mass.
+			Its fitted residual is ~0 by construction, so it cannot get a
+			squared-residual meat.  Default (masscorr==0): keep the pure
+			multinomial variance.  masscorr==1: lift it by the Pearson
+			overdispersion of the reference bins, phi-hat * Hstar(1-Hstar/N)
+			-- borrowing the reference-region dispersion into the excluded
+			window, which is what Chetty's residual bootstrap does
+			implicitly and what closes the estimator-1 gap.
+		*/
+		phi = 1
+		if (masscorr == 1) {
+			phi = pearson_phi(y_stack[1::n], mu_stack[1::n], p)
+			if (phi >= .) phi = 1
+			if (phi < 1)  phi = 1
+		}
 		for (j = n + 1; j <= rows(y_stack); j++) {
-			dr[j] = dm[j]
+			dr[j] = phi * dm[j]
 		}
 
 		if (missing(dr)) {
@@ -3302,6 +4112,166 @@ cap program drop bunch_saez
 
 		V = bread * G' * Vm * G * bread
 		V = (V + V') / 2
+
+		return(V)
+	}
+
+
+	// -----------------------------------------------------------------------------
+	// Cluster-robust variance from binned data  (vce(cluster clustvar))
+	// -----------------------------------------------------------------------------
+
+	/* Stash the individual (cluster id, bin id) pairs before polbunch
+	   collapses the data to a histogram. */
+	void pbx_cluster_stash(string scalar idv, string scalar binv)
+	{
+		external real colvector pbx_CLID
+		external real colvector pbx_CLBIN
+
+		pbx_CLID  = st_data(., idv)
+		pbx_CLBIN = st_data(., binv)
+	}
+
+	/* Build M_raw = sum_i c_i c_i', the raw J x J bin co-visitation matrix
+	   over all J histogram bins (bin order), where c_i is cluster i's
+	   vector of visit counts across the bins.  binposname is a B x 2 Stata
+	   matrix mapping each bin id (col 1) to its position 1..J (col 2). */
+	void pbx_covis_build(string scalar binposname, real scalar nbin)
+	{
+		external real colvector pbx_CLID
+		external real colvector pbx_CLBIN
+
+		real matrix bp, A, M
+		real colvector lut, id, pos, cv, nz
+		real scalar mn, r, i, s, e, a, b, n
+
+		bp = st_matrix(binposname)
+		mn = min(bp[., 1])
+		lut = J(max(bp[., 1]) - mn + 1, 1, .)
+		for (r = 1; r <= rows(bp); r++) {
+			lut[bp[r, 1] - mn + 1] = bp[r, 2]
+		}
+
+		id  = pbx_CLID
+		pos = lut[pbx_CLBIN :- (mn - 1)]
+		pos = editmissing(pos, 0)
+
+		A = (id, pos)
+		_sort(A, 1)
+		id  = A[., 1]
+		pos = A[., 2]
+
+		M = J(nbin, nbin, 0)
+		n = 0
+		i = 1
+		while (i <= rows(id)) {
+			s = i
+			while (i <= rows(id)) {
+				if (id[i] != id[s]) break
+				i++
+			}
+			e = i - 1
+
+			cv = J(nbin, 1, 0)
+			for (r = s; r <= e; r++) {
+				if (pos[r] >= 1 & pos[r] <= nbin) cv[pos[r]] = cv[pos[r]] + 1
+			}
+			nz = selectindex(cv)
+			for (a = 1; a <= rows(nz); a++) {
+				for (b = 1; b <= rows(nz); b++) {
+					M[nz[a], nz[b]] = M[nz[a], nz[b]] + cv[nz[a]] * cv[nz[b]]
+				}
+			}
+			n++
+		}
+
+		st_matrix("r_pbx_Mraw", M)
+		st_numscalar("r_pbx_nclust", n)
+	}
+
+	/* Fold the raw J x J co-visitation matrix onto the stacked estimating
+	   system.  srowname is a J x 1 Stata matrix sending each raw bin to its
+	   stacked row (reference bins keep their row; every excluded bin -> the
+	   trailing mass row).  Result r_pbx_Mstack is Jstack x Jstack. */
+	void pbx_covis_collapse(string scalar Mrawname, string scalar srowname, real scalar Jstack)
+	{
+		real matrix Mraw, M
+		real colvector sr
+		real scalar nb, i, j, a, b
+
+		Mraw = st_matrix(Mrawname)
+		sr   = st_matrix(srowname)
+		if (cols(sr) > 1) sr = sr[., 1]
+		nb   = rows(Mraw)
+
+		M = J(Jstack, Jstack, 0)
+		for (i = 1; i <= nb; i++) {
+			a = sr[i]
+			if (a < 1 | a > Jstack) continue
+			for (j = 1; j <= nb; j++) {
+				b = sr[j]
+				if (b < 1 | b > Jstack) continue
+				M[a, b] = M[a, b] + Mraw[i, j]
+			}
+		}
+		M = (M + M') / 2
+		st_matrix("r_pbx_Mstack", M)
+	}
+
+	/* Validate a user-supplied co-visitation matrix against the histogram.
+	   r_pbx_covchk: 0 ok, 1 not symmetric, 2 diag(M) < y somewhere,
+	   3 wrong dimension. */
+	void pbx_covis_check(string scalar Mname, string scalar yname)
+	{
+		real matrix M
+		real colvector y, d
+		real scalar tol
+
+		M = st_matrix(Mname)
+		y = st_data(., yname)
+
+		st_numscalar("r_pbx_covchk", 0)
+
+		if (rows(M) != cols(M) | rows(M) != rows(y)) {
+			st_numscalar("r_pbx_covchk", 3)
+			return
+		}
+		tol = 1e-6 * (1 + max(abs(vec(M))))
+		if (max(abs(vec(M - M'))) > tol) {
+			st_numscalar("r_pbx_covchk", 1)
+			return
+		}
+		d = diagonal(M) - y
+		if (min(d) < -1e-6 * (1 + max(y))) {
+			st_numscalar("r_pbx_covchk", 2)
+			return
+		}
+	}
+
+	/* Cluster-robust sandwich: meat = n/(n-1) * (M - y y' / n). */
+	real matrix variance_cluster(
+		real matrix G_stack,
+		real colvector y_stack,
+		real matrix M,
+		real scalar nclust
+	)
+	{
+		real matrix G, meat, bread, V
+
+		G = G_stack
+
+		if (rows(G) != rows(y_stack) | rows(M) != rows(y_stack) | cols(M) != rows(y_stack)) {
+			return(J(cols(G), cols(G), .))
+		}
+		if (missing(G) | missing(y_stack) | missing(M) | nclust < 2 | nclust >= .) {
+			return(J(cols(G), cols(G), .))
+		}
+
+		meat  = (nclust / (nclust - 1)) :* (M - (y_stack * y_stack') / nclust)
+		meat  = (meat + meat') / 2
+		bread = pinv(quadcross(G, G))
+		V     = bread * G' * meat * G * bread
+		V     = (V + V') / 2
 
 		return(V)
 	}
@@ -3417,7 +4387,8 @@ cap program drop bunch_saez
 			real scalar zL_excl_orig,
 			real scalar zH_excl_orig,
 			real scalar zL_excl_est,
-			real scalar zH_excl_est
+			real scalar zH_excl_est,
+			real scalar weakid
 		)
 		{
 			struct hcoef_out scalar h1
@@ -3628,6 +4599,31 @@ cap program drop bunch_saez
 				if (dograd) G[odelta,idelta] = 1
 			}
 
+			/*
+				Estimator 2/3 profile delta was weakly identified (boundary of
+				the deltamax() search, or a multi-modal concentrated SSR).
+				Report the counterfactual, the structural delta column, B and
+				excess mass, but drop the response: shift / marginal_response /
+				elasticity are backed out of delta through a steep nonlinear
+				map and are not credible here.  Same truncation as the
+				no-real-root path below.
+			*/
+			if (weakid) {
+				hasresp = 0
+				b = b[1, 1..(oshift-1)]
+				if (dograd) G = G[1..(oshift-1), .]
+
+				st_numscalar("b_bunchcalc_hasresp", hasresp)
+				st_matrix("b_bunchcalc", b)
+				if (dograd) {
+					st_matrix("G_bunchcalc", G)
+				}
+				else {
+					st_matrix("G_bunchcalc", J(0,0,.))
+				}
+				return
+			}
+
 			// Shift, marginal response, elasticity
 			if (hastax) A = ln(1-t0) - ln(1-t1)
 
@@ -3776,62 +4772,223 @@ cap program drop bunch_saez
 		// -----------------------------------------------------------------------------
 		// Top-level unified profile estimator
 		// -----------------------------------------------------------------------------
-		void profQ_opt(
-			real scalar todo,
-			real rowvector p,
+
+		/*
+			Multi-start solve of the estimator 2/3 profile over the scalar
+			delta.  The concentrated SSR profQ(delta) is minimised by a coarse
+			candidate grid, then a golden-section refinement around EVERY
+			sampled interior local minimum -- the same shape as
+			polbunch_mdt_mata's delta search.
+
+			This replaces a single Newton start (optimize()), which lands in
+			different basins depending on initdelta / polynomial order: when
+			the level-shift restriction is misspecified the profile SSR is
+			multi-modal and near-singular in places, so the starting value
+			decides the answer.
+
+			delta is confined to [dlo, dhi].  profQ() already returns 1e300
+			for an infeasible delta, so the bounded search cannot throw.
+
+			Written back by reference:
+			  bestQ   SSR at the returned optimum
+			  nbasin  number of interior local minima found on the grid
+			  gapQ    (2nd-best basin SSR)/(best basin SSR), or . if nbasin<2
+		*/
+		real scalar prof_delta_solve(
 			real colvector y,
 			real colvector z,
 			real colvector side,
 			real colvector bunch,
-			real rowvector pars,
-			real scalar val,
-			real rowvector grad,
-			real matrix hess
+			real scalar Hstar_obs,
+			real scalar cutoff_orig,
+			real scalar bw_orig,
+			real scalar cutoff_est,
+			real scalar bw_est,
+			real scalar K,
+			real scalar estimator,
+			real scalar islog,
+			real scalar zL_excl_orig,
+			real scalar zH_excl_orig,
+			real scalar zL_excl_est,
+			real scalar zH_excl_est,
+			real scalar zbar_est,
+			real scalar positive,
+			real scalar initdelta,
+			real scalar dlo,
+			real scalar dhi,
+			real scalar bestQ,
+			real scalar nbasin,
+			real scalar gapQ
 		)
 		{
-			real scalar Hstar_obs, cutoff_orig, bw_orig, cutoff_est, bw_est, K
-			real scalar estimator, islog
-			real scalar zL_excl_orig, zH_excl_orig, zbar_est, positive
-			real scalar delta
+			real colvector grid, cand, gd, gq, rds, rqs
+			real scalar lo, hi, j, d, Q, ng, gr
+			real scalar a, b, x1, x2, f1, f2, iter
+			real scalar rd, rQ, bd, bQ, b2Q, btol, dgap
 
-			Hstar_obs    = pars[1]
-			cutoff_orig  = pars[2]
-			bw_orig      = pars[3]
-			cutoff_est   = pars[4]
-			bw_est       = pars[5]
-			K            = pars[6]
-			estimator    = pars[7]
-			islog        = pars[8]
-			zL_excl_orig = pars[9]
-			zH_excl_orig = pars[10]
-			zL_excl_est  = pars[11]
-			zH_excl_est  = pars[12]
-			zbar_est     = pars[13]
-			positive     = pars[14]
+			bestQ  = .
+			nbasin = 0
+			gapQ   = .
 
-			delta = p[1]
+			lo = dlo
+			hi = dhi
+			if (hi <= lo) return(.)
 
-			val = profQ(
-				delta,
-				y,
-				z,
-				side,
-				bunch,
-				Hstar_obs,
-				cutoff_orig,
-				bw_orig,
-				cutoff_est,
-				bw_est,
-				K,
-				estimator,
-				islog,
-				zL_excl_orig,
-				zH_excl_orig,
-				zL_excl_est,
-				zH_excl_est,
-				zbar_est,
-				positive
-			)
+			if (positive == 1) {
+				grid = (1e-8 \ 1e-6 \ 1e-4 \ 1e-3 \ 0.005 \ 0.01 \ 0.025 \
+				        0.05 \ 0.075 \ 0.10 \ 0.15 \ 0.20 \ 0.30 \ 0.50 \
+				        0.75 \ 1 \ 1.5 \ 2 \ 3 \ 5)
+			}
+			else {
+				grid = (-0.99 \ -0.95 \ -0.90 \ -0.80 \ -0.70 \ -0.60 \ -0.50 \
+				        -0.40 \ -0.30 \ -0.20 \ -0.15 \ -0.10 \ -0.075 \ -0.05 \
+				        -0.025 \ -0.01 \ 0 \ 0.01 \ 0.025 \ 0.05 \ 0.075 \ 0.10 \
+				        0.15 \ 0.20 \ 0.30 \ 0.50 \ 0.75 \ 1 \ 1.5 \ 2 \ 3 \ 5)
+			}
+
+			if (initdelta > lo & initdelta < hi) {
+				cand = sort(grid \ initdelta, 1)
+			}
+			else {
+				cand = sort(grid, 1)
+			}
+
+			// evaluate the feasible, de-duplicated candidates once
+			gd = J(0, 1, .)
+			gq = J(0, 1, .)
+			for (j = 1; j <= rows(cand); j++) {
+				d = cand[j]
+				if (d <= lo | d >= hi) continue
+				if (rows(gd) >= 1) {
+					if (d == gd[rows(gd)]) continue
+				}
+				Q = profQ(d, y, z, side, bunch, Hstar_obs, cutoff_orig, bw_orig, cutoff_est, bw_est, K, estimator, islog, zL_excl_orig, zH_excl_orig, zL_excl_est, zH_excl_est, zbar_est, positive)
+				gd = gd \ d
+				gq = gq \ Q
+			}
+
+			ng = rows(gd)
+			if (ng == 0) return(.)
+
+			gr  = (sqrt(5) - 1) / 2
+			rds = J(0, 1, .)
+			rqs = J(0, 1, .)
+
+			// golden-section refine around every local minimum of the grid
+			for (j = 1; j <= ng; j++) {
+
+				if (j > 1) {
+					if (gq[j] > gq[j-1]) continue
+				}
+				if (j < ng) {
+					if (gq[j] > gq[j+1]) continue
+				}
+
+				// bracket = neighbouring grid points, widened to the feasible
+				// bounds at the ends so a near-boundary optimum is reachable
+				if (j > 1)  a = gd[j-1]
+				else        a = lo
+				if (j < ng) b = gd[j+1]
+				else        b = hi
+				if (a < lo) a = lo
+				if (b > hi) b = hi
+
+				if (b <= a) {
+					rd = gd[j]
+					rQ = gq[j]
+				}
+				else {
+					x1 = b - gr * (b - a)
+					x2 = a + gr * (b - a)
+					f1 = profQ(x1, y, z, side, bunch, Hstar_obs, cutoff_orig, bw_orig, cutoff_est, bw_est, K, estimator, islog, zL_excl_orig, zH_excl_orig, zL_excl_est, zH_excl_est, zbar_est, positive)
+					f2 = profQ(x2, y, z, side, bunch, Hstar_obs, cutoff_orig, bw_orig, cutoff_est, bw_est, K, estimator, islog, zL_excl_orig, zH_excl_orig, zL_excl_est, zH_excl_est, zbar_est, positive)
+
+					for (iter = 1; iter <= 100; iter++) {
+						if (abs(b - a) < 1e-10 * max((1, abs(x1), abs(x2)))) break
+						if (f1 > f2) {
+							a  = x1
+							x1 = x2
+							f1 = f2
+							x2 = a + gr * (b - a)
+							f2 = profQ(x2, y, z, side, bunch, Hstar_obs, cutoff_orig, bw_orig, cutoff_est, bw_est, K, estimator, islog, zL_excl_orig, zH_excl_orig, zL_excl_est, zH_excl_est, zbar_est, positive)
+						}
+						else {
+							b  = x2
+							x2 = x1
+							f2 = f1
+							x1 = b - gr * (b - a)
+							f1 = profQ(x1, y, z, side, bunch, Hstar_obs, cutoff_orig, bw_orig, cutoff_est, bw_est, K, estimator, islog, zL_excl_orig, zH_excl_orig, zL_excl_est, zH_excl_est, zbar_est, positive)
+						}
+					}
+
+					if (f1 <= f2) {
+						rd = x1
+						rQ = f1
+					}
+					else {
+						rd = x2
+						rQ = f2
+					}
+
+					// never let the refinement beat the sampled point itself
+					if (gq[j] < rQ) {
+						rd = gd[j]
+						rQ = gq[j]
+					}
+				}
+
+				rds = rds \ rd
+				rqs = rqs \ rQ
+			}
+
+			// global optimum among the refined minima
+			bQ = 1e300
+			bd = .
+			for (j = 1; j <= rows(rqs); j++) {
+				if (rqs[j] < bQ) {
+					bQ = rqs[j]
+					bd = rds[j]
+				}
+			}
+
+			// no interior local minimum found: take the best grid point outright
+			if (bd >= .) {
+				for (j = 1; j <= ng; j++) {
+					if (gq[j] < bQ) {
+						bQ = gq[j]
+						bd = gd[j]
+					}
+				}
+			}
+
+			bestQ = bQ
+
+			/*
+				Competing-basin check for the weak-ID guard.  A runner-up
+				counts only if it is
+				  - a genuine INTERIOR minimum (not the search sliding into the
+				    lb / deltamax bound -- a monotone tail truncated by the cap
+				    is not a second solution), and
+				  - at a materially different delta from the winner.
+				nbasin then counts the winner plus every such competitor, and
+				gapQ is (best competitor SSR)/(winner SSR).
+			*/
+			btol = 1e-6
+			dgap = 0.05
+			if (0.25 * abs(bd) > dgap) dgap = 0.25 * abs(bd)
+
+			nbasin = 1
+			b2Q    = 1e300
+			for (j = 1; j <= rows(rds); j++) {
+				if (rds[j] == bd) continue
+				if (rds[j] <= lo + btol | rds[j] >= hi - btol) continue
+				if (abs(rds[j] - bd) <= dgap) continue
+				nbasin = nbasin + 1
+				if (rqs[j] < b2Q) b2Q = rqs[j]
+			}
+			if (nbasin >= 2 & bQ > 0 & b2Q < 1e299) gapQ = b2Q / bQ
+
+			return(bd)
 		}
 
 		void profile_run(
@@ -3854,15 +5011,19 @@ cap program drop bunch_saez
 			real scalar dovar,
 			real scalar initdelta,
 			real scalar positive,
-			real scalar hctype
+			real scalar hctype,
+			real scalar masscorr,
+			real scalar deltamax,
+			string scalar covisname,
+			real scalar nclust
 
 		)
 		{
 			real colvector y, z, side, bunch
-			real scalar Kb, Hstar_obs, delta_hat, lb
-			real rowvector theta_hat, beta_hat, b, pars, phat
+			real scalar Kb, Hstar_obs, delta_hat, lb, nref_
+			real scalar dhi, bestQ, nbasin, gapQ, weakid
+			real rowvector theta_hat, beta_hat, b
 			real matrix Vout
-			transmorphic S
 
 			struct design_out scalar D
 			real colvector ystack, mu
@@ -3907,49 +5068,49 @@ cap program drop bunch_saez
 				b = theta_hat
 			}
 			else if (estimator == 2 | estimator == 3) {
-				pars = (
-					Hstar_obs,
-					cutoff_orig,
-					bw_orig,
-					cutoff_est,
-					bw_est,
-					K,
-					estimator,
-					islog,
-					zL_excl_orig,
-					zH_excl_orig,
-					zL_excl_est,
-					zH_excl_est,
-					zbar_est,
-					positive
-				)
 
-				S = optimize_init()
-				optimize_init_evaluator(S, &profQ_opt())
-				optimize_init_evaluatortype(S, "d0")
-				optimize_init_which(S, "min")
-				optimize_init_conv_maxiter(S, 200)
+				if (positive == 1) lb = 1e-8
+				else               lb = -1 + 1e-8
+				if (initdelta <= lb | initdelta >= .) initdelta = 0.05
 
-				if (positive == 1) {
-					lb = 1e-8
-					if (initdelta <= lb | initdelta >= .) initdelta = 0.05
-				}
-				else {
-					lb = -1 + 1e-8
-					if (initdelta <= lb | initdelta >= .) initdelta = 0.05
-				}
+				/*
+					Economic upper bound on the structural delta: deltamax
+					(default 1 -- a 100% earnings response at the kink).
+				*/
+				dhi = deltamax
+				if (dhi >= . | dhi <= 0)  dhi = 1
+				if (dhi <= lb)            dhi = lb + 1e-6
 
-				optimize_init_params(S, initdelta)
+				bestQ  = .
+				nbasin = .
+				gapQ   = .
+				delta_hat = prof_delta_solve(
+					y, z, side, bunch, Hstar_obs,
+					cutoff_orig, bw_orig, cutoff_est, bw_est,
+					K, estimator, islog,
+					zL_excl_orig, zH_excl_orig, zL_excl_est, zH_excl_est,
+					zbar_est, positive, initdelta, lb, dhi,
+					bestQ, nbasin, gapQ)
 
-				optimize_init_argument(S, 1, y)
-				optimize_init_argument(S, 2, z)
-				optimize_init_argument(S, 3, side)
-				optimize_init_argument(S, 4, bunch)
-				optimize_init_argument(S, 5, pars)
+				if (delta_hat >= .) delta_hat = initdelta
 
-				phat = optimize(S)
-				delta_hat = phat[1]
-				
+				/*
+					Weak identification of delta:
+					  - the search hit a bound of [lb, dhi]  (runaway response
+					    or a boundary optimum), or
+					  - the concentrated SSR has >=2 competing local minima
+					    (near-tied basins, ratio < 1.10).
+					When flagged, the .ado withholds shift / marginal_response
+					/ elasticity (e(hasresp)=0) and reports e(delta_weakid)=1.
+				*/
+				weakid = 0
+				if (delta_hat <= lb + 1e-6)         weakid = 1
+				if (delta_hat >= dhi - 1e-6)        weakid = 1
+				if (nbasin >= 2 & gapQ < 1.10)      weakid = 1
+
+				st_numscalar("r_weakid_profile", weakid)
+				st_numscalar("r_nbasin_profile", nbasin)
+
 				beta_hat = profTheta(
 					delta_hat,
 					y,
@@ -3995,11 +5156,21 @@ cap program drop bunch_saez
 					mu = D.X * beta_hat'
 				}
 
-				if (hctype >= 0) {
-					Vout = variance_robust(Gv, ystack, mu, hctype, 1)
+				if (covisname != "") {
+					Vout = variance_cluster(Gv, ystack, st_matrix(covisname), nclust)
+				}
+				else if (hctype >= 0) {
+					Vout = variance_robust(Gv, ystack, mu, hctype, 1, masscorr)
 				}
 				else {
 					Vout = variance_multinomial(Gv, ystack, 0)
+				}
+
+				/* Pearson overdispersion phi-hat from the reference rows,
+				   returned for e(dispersion) and scale(x2). */
+				nref_ = rows(ystack) - 1
+				if (nref_ >= 1) {
+					st_numscalar("r_phi_profile", pearson_phi(ystack[1::nref_], mu[1::nref_], cols(Gv)))
 				}
 			}
 			else {
@@ -4717,13 +5888,15 @@ cap program drop bunch_saez
 		real scalar zbar_est,
 		real scalar islog,
 		string scalar muUname,
-		real scalar hctype
+		real scalar hctype,
+		string scalar covUname,
+		real scalar nclust
 	)
 	{
 		real scalar Kb, N, df, stat, pval
 		real rowvector bU, bR, beta, g
 		real colvector y
-		real matrix GU, GR, AU, AR, Jg, Ad, Vm, Vd
+		real matrix GU, GR, AU, AR, Jg, Ad, Vm, Vd, Mclu
 		struct hcoef_out scalar hmap
 		real rowvector RB, dRB
 		real colvector muU, eU, dmU, drU, hxU
@@ -4763,6 +5936,18 @@ cap program drop bunch_saez
 
 		Vm = diag(y) - (y * y') / N
 		Vm = (Vm + Vm') / 2
+
+		/*
+			vce(cluster): use the cluster-robust meat n/(n-1) (M - y y'/n)
+			for the Hausman variance too, matching the coefficient table.
+		*/
+		if (covUname != "" & covUname != "." & nclust >= 2) {
+			Mclu = st_matrix(covUname)
+			if (rows(Mclu) == rows(y) & cols(Mclu) == rows(y) & !missing(Mclu)) {
+				Vm = (nclust / (nclust - 1)) :* (Mclu - (y * y') / nclust)
+				Vm = (Vm + Vm') / 2
+			}
+		}
 
 		/*
 			Residual / Eicker-White meat for the Hausman variance, matching

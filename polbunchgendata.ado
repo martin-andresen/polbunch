@@ -1,7 +1,34 @@
 program polbunchgendata, rclass
 	syntax newvarname [, obs(integer 5000) cutoff(real 1) el(string) ///
 		t0(real 0.2) t1(real 0.6) distribution(string) log buncherror(string) ///
-		INCOMEeffect(string) ]
+		INCOMEeffect(string) PANel(numlist min=3 max=4) ///
+		HEAP(numlist min=2 max=3) ]
+
+	/*
+		panel(n T rho [smooth]) : generate a pooled panel of n individuals
+		observed T years each (obs is overridden to n*T).  Two persistence
+		mechanisms, both leaving the marginal distribution of z0 in every
+		year EXACTLY distribution() (so A1-A3, E[y_j]=m_j, and the
+		closed-form population truth all hold unchanged -- only the
+		person-year counts are no longer one multinomial draw):
+
+		  default (smooth=0 or omitted) -- repeat/fresh mixture: each
+		    person-year's earnings is a fresh distribution() draw, except
+		    that with probability rho it is copied verbatim from the same
+		    person's previous year.  corr(z0_it,z0_i,t-k)=rho^k, but the
+		    persistence is a two-state jump process (exact repeat, or a
+		    fully independent redraw) with no drift in between.
+
+		  smooth=1 -- Gaussian-copula AR(1): a stationary AR(1) in a
+		    latent standard normal (corr(a_it,a_i,t-1)=rho) is mapped
+		    through Phi then the triangular inverse-CDF, so a person's
+		    earnings drift smoothly through the distribution year to year
+		    instead of either freezing or teleporting.  Requires
+		    distribution(triangular(a,b,c)).
+
+		rho in [0,1): 0 = iid person-years, -> 1 = person frozen across
+		years.  Creates the extra variables pid and pyear.
+	*/
 
 	/*
 		Generates individual-level earnings under the iso-elastic labour
@@ -32,6 +59,17 @@ program polbunchgendata, rclass
 		buncherror(op expr) : optimisation friction / measurement error for
 			bunchers, applied as  cutoff <op expr> , e.g.
 			buncherror(+rnormal(0,0.05)) or buncherror(*exp(rnormal(0,0.1))).
+
+		heap(share grid [guardmult]) : round-number heaping.  A random
+			`share' of the NON-bunchers report the nearest multiple of
+			`grid' instead of their true earnings, EXCEPT within
+			guardmult*grid of the cutoff (default guardmult 1.5), which is
+			left alone so the excluded window stays clean.  This puts spikes
+			in the counterfactual density -- a violation of A3 (h0 a smooth
+			polynomial) that leaves A1 and the excess-mass estimand
+			E[n_bunchers] intact.  r(n_heaped) reports how many observations
+			were moved.  Smaller guardmult puts spikes closer to the window
+			(more bias in B); larger keeps B clean but only widens SEs.
 	*/
 
 	if "`el'"=="" local el 0.4
@@ -41,9 +79,41 @@ program polbunchgendata, rclass
 	local elc  = real("`el'")
 	local iec  = real("`incomeeffect'")
 
+	// -------- panel scaffold --------
+	local ispanel = ("`panel'" != "")
+	local np  = .
+	local Tp  = .
+	local rhop = 0
+	local smoothp = 0
+	if `ispanel' {
+		tokenize `panel'
+		local np `1'
+		local Tp `2'
+		local rhop `3'
+		if "`4'" != "" local smoothp `4'
+		if `np' < 2 | `Tp' < 2 {
+			di as error "panel(n T rho [smooth]): n and T must both be at least 2."
+			exit 198
+		}
+		if `rhop' < 0 | `rhop' >= 1 {
+			di as error "panel(n T rho [smooth]): rho must be in [0,1)."
+			exit 198
+		}
+		if `smoothp' & "`distribution'"!="" & strpos("`distribution'","triangular")!=1 {
+			di as error "panel(..., smooth): the smooth-drift mechanism needs distribution(triangular(a,b,c))."
+			exit 198
+		}
+		local obs = `np' * `Tp'
+	}
+
 	quietly {
 		clear
 		set obs `obs'
+
+		if `ispanel' {
+			gen long pid   = ceil(_n / `Tp')
+			gen int  pyear = mod(_n - 1, `Tp') + 1
+		}
 
 		// -------- validation --------
 		if !inrange(`t0',0,1) | !inrange(`t1',0,1) | `t1'<`t0' {
@@ -98,6 +168,41 @@ program polbunchgendata, rclass
 		if _rc {
 			noi di as error "Use a valid Stata random-number function (with parameters) in distribution(); triangular(a,b,c) is also allowed."
 			exit 198
+		}
+
+		// -------- panel persistence: repeat/fresh mixture, or smooth AR(1) --------
+		if `ispanel' {
+			if `smoothp' {
+				/*
+					Gaussian-copula AR(1): stationary latent normal
+					a_it = rho*a_i,t-1 + sqrt(1-rho^2)*e_it, e_it~N(0,1),
+					a_i1~N(0,1) -- so a_it ~ N(0,1) marginally every year
+					and corr(a_it,a_i,t-1)=rho. Phi(a_it) is then U(0,1)
+					marginally; pushing it through the triangular inverse-
+					CDF recovers distribution() exactly, with SMOOTH drift
+					(rather than panel()'s default repeat-or-jump mixture).
+					a,b,c are the triangular params parsed above.
+				*/
+				tempvar _lat _u
+				sort pid pyear
+				gen double `_lat' = rnormal() if pyear == 1
+				forvalues t = 2/`Tp' {
+					by pid: replace `_lat' = `rhop'*`_lat'[_n-1] ///
+						+ sqrt(1-`rhop'^2)*rnormal() if pyear == `t'
+				}
+				gen double `_u' = normal(`_lat')
+				replace `varlist' = `a' + sqrt(`_u'*(`b'-`a')*(`c'-`a')) ///
+					if `_u' < (`c'-`a')/(`b'-`a')
+				replace `varlist' = `b' - sqrt((1-`_u')*(`b'-`a')*(`b'-`c')) ///
+					if `_u' >= (`c'-`a')/(`b'-`a')
+			}
+			else if `rhop' > 0 {
+				sort pid pyear
+				forvalues t = 2/`Tp' {
+					by pid: replace `varlist' = `varlist'[_n-1] ///
+						if pyear == `t' & runiform() < `rhop'
+				}
+			}
 		}
 
 		su `varlist', meanonly
@@ -166,13 +271,50 @@ program polbunchgendata, rclass
 			replace `varlist' = `cutoff' `buncherror' if `bunch'
 		}
 
+		// -------- round-number heaping among NON-bunchers -----------------
+		//  heap(share grid): a random `share' of non-bunchers report the
+		//  nearest multiple of `grid'.  Deterministic mean shift (spikes in
+		//  h0), not extra noise -- an A3 violation (h0 not a smooth
+		//  polynomial) that leaves A1 and the excess-mass estimand intact.
+		//  Heaping is suppressed within 1.5*grid of the cutoff so the
+		//  excluded region and the behavioural window stay clean; choose
+		//  `grid' so the heap points fall in the reference region.
+		local heap_n = 0
+		if "`heap'" != "" {
+			gettoken _hshare _hrest : heap
+			gettoken _hgrid  _hguard : _hrest
+			if "`_hguard'" == "" local _hguard 1.5
+			if `_hgrid' <= 0 {
+				noi di as error "heap(share grid [guardmult]): grid must be positive."
+				exit 198
+			}
+			if `_hshare' < 0 | `_hshare' > 1 {
+				noi di as error "heap(share grid [guardmult]): share must be in [0,1]."
+				exit 198
+			}
+			tempvar _hpick
+			gen byte `_hpick' = !`bunch' & runiform() < `_hshare' ///
+				& abs(`varlist' - `cutoff') >= `_hguard'*`_hgrid'
+			replace `varlist' = round(`varlist'/`_hgrid')*`_hgrid' if `_hpick'
+			count if `_hpick'
+			local heap_n = r(N)
+		}
+
 		count if `bunch'
 		return scalar n_bunchers     = r(N)
 		return scalar share_bunching = r(N)/`obs'
+		return scalar n_heaped       = `heap_n'
 		su `ec', meanonly
 		return scalar el_mean        = r(mean)
 		su `etav', meanonly
 		return scalar incomeeffect   = r(mean)
+		return scalar obs            = `obs'
+		if `ispanel' {
+			return scalar n_panel      = `np'
+			return scalar T_panel      = `Tp'
+			return scalar rho_panel    = `rhop'
+			return scalar smooth_panel = `smoothp'
+		}
 	}
 end
 

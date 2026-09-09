@@ -74,6 +74,11 @@ override the counterfactual read from {cmd:e(b)}.
 {synopt :{cmd:tolerance(}{it:#}{cmd:)}}convergence tolerance for {cmd:iterate}; default {cmd:tolerance(1e-10)}{p_end}
 {synopt :{cmd:maxiter(}{it:#}{cmd:)}}maximum iterations for {cmd:iterate}; default {cmd:maxiter(100)}{p_end}
 {synopt :{cmd:underrelax(}{it:#}{cmd:)}}under-relaxation factor for {cmd:iterate}; default {cmd:underrelax(0.5)}{p_end}
+{synopt :{cmd:nofallback}}disable the polynomial-order fallback (see {help polbunchbias##fallback:below}); report the bias at the requested order or nothing{p_end}
+{synopt :{cmd:nopromote}}when {cmd:iterate} fails to converge at the reported order but converges at a lower one, report the un-iterated (plug-in) bias as primary instead of the converged lower-order fit -- the pre-04sep2026 default; see {help polbunchbias##fallback:below}{p_end}
+{synopt :{cmd:promotetol(}{it:#}{cmd:)}}maximum relative L2 change in the counterfactual for promotion to accept a converged lower order; default {cmd:promotetol(0.3)}; see {help polbunchbias##fallback:below}{p_end}
+{synopt :{cmd:allownegative}}with {cmd:iterate}: let the self-consistency search find a negative corrected elasticity; by default it is floored at 0 (compensated elasticities are non-negative by Slutsky, mirroring {helpb polbunch}'s {opt delta}{cmd:>=0} default){p_end}
+{synopt :{cmd:h0check}}with {cmd:iterate}: ALSO reject a candidate self-consistent counterfactual that goes negative anywhere in the fitting region [zlo,zL] u [zH,zhi] (treated as diverged); OFF by default -- see {help polbunchbias##fallback:below}{p_end}
 {synoptline}
 
 
@@ -95,6 +100,18 @@ The command reports the bias in each fitted h0 coefficient (b0, b1, ...,
 bK) and in the downstream estimands: the relative slope, the estimated
 bunching mass, the marginal response, the proportional shift, and the
 elasticity.
+
+{pstd}
+{ul:The bias is measured against the counterfactual that the chosen
+estimator itself assumes} -- for the polynomial estimators, the degree-K
+polynomial fit; for Saez ({cmd:estimator(4)}), the two-point line.  It is an
+{it:internal-consistency} diagnostic: how far the estimator's own
+mechanics move it from its own counterfactual.  Because each estimator
+assumes a different counterfactual, {cmd:r(bias_elasticity)} and the other
+figures are {bf:not directly comparable across estimators}.  A near-zero
+figure for one estimator and a large one for another does not rank them.
+For a comparable ranking, evaluate every estimator against one common
+counterfactual density (e.g. supply the same {cmd:h0poly()} to each).
 
 {title:Modes}
 
@@ -175,7 +192,13 @@ governed by {cmd:poolmass} / {cmd:splitmass}.
 {pmore}
 {cmd:4} -- Saez three-region trapezoid.  Intrinsically a two-point method,
 so its bias against a curved h0 comes from evaluating the exact h0 over the
-reference regions.
+reference regions.  With {cmd:exact} the reported bias is the internal
+inconsistency between the step-function counterfactual used to form the
+excess mass and the linear counterfactual it is then inverted against.
+{cmd:estimator(4)} with {cmd:constant} is refused: a flat counterfactual is
+then used in both stages, so the internal bias is zero by construction --
+which does {it:not} mean Saez/constant is unbiased (it is biased whenever
+the counterfactual slopes over the window).
 
 {phang}
 {cmd:zstar(}{it:#}{cmd:)} is the kink point z*; all endpoints are centred on it.
@@ -242,7 +265,106 @@ when the inputs are a known DGP.
 {cmd:tolerance(}{it:#}{cmd:)}, {cmd:maxiter(}{it:#}{cmd:)},
 {cmd:underrelax(}{it:#}{cmd:)} control {cmd:iterate}: convergence tolerance
 (default 1e-10), iteration cap (default 100), and the under-relaxation
-factor that damps the fixed-point step (default 0.5).
+factor that damps the fixed-point step (default 0.5).  {cmd:iterate}'s own
+arithmetic (differencing successive guesses, re-pinning the counterfactual's
+height, the divergence checks) is done in a diagonally preconditioned basis
+-- the natural per-coefficient scale over the fitting window, the same
+change of basis used for the Gram solves inside the bias formula itself --
+rather than on the raw, cutoff-centred coefficients directly.  Without this
+a wide window or a cutoff far from 0 makes those raw coefficients span many
+orders of magnitude (an unavoidable side effect of {helpb polbunch}'s own
+internal normalisation), which is itself a source of spurious divergence
+distinct from the model-misspecification kind; this is an exact change of
+basis (bit-identical results when the raw coefficients were already
+well-scaled), not an approximation.
+
+{phang}
+{cmd:allownegative} bounds what {cmd:iterate}'s self-consistency search is
+allowed to settle on: by default a step that would push the corrected
+elasticity negative is floored at 0 (a compensated elasticity is
+non-negative by Slutsky -- the same reasoning behind {helpb polbunch}'s
+{opt delta}{cmd:>=0} default for the convex-kink profile).  This is a
+consistency check on the search, not smoothing -- it cannot manufacture a
+converged answer, only refuse to converge on one that could not be right --
+and an MC validation against a known true bias found it never actually
+binds in practice, so it costs nothing when it isn't needed.
+
+{phang}
+{cmd:h0check} additionally rejects a step whose implied counterfactual
+would go negative anywhere in the fitting region (a density cannot be
+negative) -- OFF by default, unlike {cmd:allownegative}.  h0 here is a
+low-degree polynomial APPROXIMATION to a noisily estimated density, and
+such an approximation can legitimately dip slightly negative in a
+low-density region without the true h0 being invalid -- the usual artifact
+of any smooth/polynomial density approximation, not evidence the candidate
+is wrong.  Tried as the default: an MC validation against a known true
+bias found it can erase the ENTIRE benefit of promotion (it rejected every
+converged candidate in a stress test where allowing them significantly
+improved accuracy), rather than filtering out only the bad ones.  Unlike
+{cmd:allownegative}, which bounds one theoretically-pinned scalar, this
+checks an entire estimated function shape against a threshold with no
+allowance for estimation noise -- specify it only if you have reason to
+prefer erring toward rejecting borderline candidates over accepting them.
+
+{marker fallback}{...}
+{phang}
+{cmd:nofallback} disables the polynomial-order fallback.  The fitting-stage
+bias of estimators 1 and 2 requires inverting a degree-{it:K} monomial design
+on the fitting window.  On a wide or off-centre window at a high order that
+design can be too near-collinear for a reliable bias (a coefficient bias that
+exceeds the counterfactual it corrects).  By default, when that happens
+{cmd:polbunchbias} retries with the best degree-({it:K}-1) least-squares
+approximation of the counterfactual over the same window, stepping down until
+the bias is well defined, and reports the order used together with the
+relative L2 change in h0 ({cmd:r(bias_l2err)}) -- small change means the same
+quantity, computed reliably; a large change means the reduction altered the
+counterfactual shape and the bias is only indicative.  {cmd:nofallback}
+forces the requested order: the bias is reported at that order or, if the
+design is degenerate, not at all.  The point estimate ({cmd:polbunch}) is
+never affected -- only the analytical bias.
+
+{phang}
+When {cmd:iterate} fails to converge at the reported order, the un-iterated
+bias shown is a plug-in calculation: it treats the fitted (already biased)
+{cmd:h0}/elasticity as if they were the truth -- it does not fix the
+circularity {cmd:iterate} exists to solve.  {cmd:nofallback} aside,
+{cmd:polbunchbias} then searches for the highest lower order at which
+{cmd:iterate} DOES reach a genuinely self-consistent fixed point.  A
+hand-transcribed or digitized {cmd:h0} is itself noisiest at high order (its
+highest-degree terms are typically the least precisely estimated, sometimes
+individually insignificant), and the bias integral extrapolates {cmd:h0}
+across the excluded window -- exactly where that noise is amplified;
+non-convergence at the full order is often a symptom of the same thing.  So
+{bf:by default the converged lower-order fit is PROMOTED to the primary
+reported bias} ({cmd:r(bias_elasticity)} etc.), trading a small,
+deliberately-minimised (best L2) truncation for materially less
+extrapolation variance and an actually self-consistent estimate.  The
+un-iterated full-order plug-in number is not discarded -- it is kept as
+{cmd:r(bias_uniter_elasticity)} etc.  Specify {cmd:nopromote} to keep the
+pre-04sep2026 default instead (full-order plug-in as primary, the converged
+fit reported alongside as {cmd:r(bias_iter_elasticity)} etc.).  Either way
+the two numbers answer different questions and can differ materially (a
+factor of ~2 is not unusual on noisy, real-world {cmd:h0}s) -- that gap is
+itself informative about how sensitive the bias correction is.
+
+{phang}
+Promotion is only accepted when the converged order is still recognisably
+the SAME counterfactual: {cmd:promotetol(}{it:#}{cmd:)} (default 0.3) caps
+the relative L2 change in {cmd:h0} between the un-iterated and the converged
+order.  A Monte Carlo validation against a known true bias (degree-5
+counterfactual, fit two degrees over-parameterised) found that promotion
+materially improves the RMSE of the corrected elasticity for estimator 1,
+where convergence typically needs only a modest step down (L2 ~ 0.15-0.20)
+-- but for estimator 2, whose self-consistency condition is harder to
+satisfy, an UNGUARDED search sometimes only converges after collapsing
+{cmd:h0} almost entirely (as far as a linear counterfactual, L2 ~ 0.6-0.7),
+which is a WORSE correction than the un-iterated fit, not a better one.
+{cmd:promotetol()} rejects those collapses (falling back to the
+{cmd:nopromote} behaviour for that cell, with a note) while still accepting
+the estimator-1-style modest reductions; with the guard in place estimator
+2's promotion is a significant RMSE improvement too, matching estimator 1.
+Lower {cmd:promotetol()} to be more conservative about promoting; raise it
+(up to 1, unbounded acceptance) to promote even a drastic reduction.
 
 
 {marker examples}{...}
@@ -303,7 +425,10 @@ Iterated (self-consistent) bias correction:
 {synopt :{cmd:r(tau)}}tax ratio, (1 - t0)/(1 - t1){p_end}
 {synopt :{cmd:r(lambda)}}relative slope z* h0'(z*)/h0(z*) used in the final calculation{p_end}
 {synopt :{cmd:r(elasticity)}}elasticity used in the final calculation{p_end}
-{synopt :{cmd:r(polynomial)}}degree K of the counterfactual polynomial{p_end}
+{synopt :{cmd:r(polynomial)}}degree K used for the bias (= {cmd:r(bias_polynomial)}){p_end}
+{synopt :{cmd:r(bias_polynomial)}}polynomial order at which the fitting-stage bias was evaluated -- below {cmd:r(bias_polyfull)} when the order fallback engaged{p_end}
+{synopt :{cmd:r(bias_polyfull)}}requested polynomial order (the counterfactual's own degree){p_end}
+{synopt :{cmd:r(bias_l2err)}}relative L2 change in the counterfactual from the order fallback over the fitting window; 0 when no fallback{p_end}
 {synopt :{cmd:r(x)}}gross response factor, tau^elasticity{p_end}
 {synopt :{cmd:r(rho)}}log response, log(x){p_end}
 {synopt :{cmd:r(Delta)}}level proportional response, x - 1{p_end}
@@ -326,6 +451,11 @@ Iterated (self-consistent) bias correction:
 {synopt :{cmd:r(iterations)}}number of iterations performed{p_end}
 {synopt :{cmd:r(converged)}}1 if {cmd:iterate} converged; 0 if not; missing otherwise{p_end}
 {synopt :{cmd:r(iterate_diverged)}}1 if the {cmd:iterate} self-consistency loop failed to converge and the un-iterated bias was reported instead; 0 otherwise{p_end}
+{synopt :{cmd:r(bias_uniter_polynomial)}}set only when {cmd:iterate} failed to converge at this order and was PROMOTED (the default) to a converged lower order: the un-iterated (plug-in) order that was demoted{p_end}
+{synopt :{cmd:r(bias_uniter_h)} / {cmd:r(bias_uniter_B)} / {cmd:r(bias_uniter_response)} / {cmd:r(bias_uniter_shift)} / {cmd:r(bias_uniter_elasticity)}}the demoted un-iterated (plug-in) bias estimands, kept alongside the promoted {cmd:r(bias_h)} etc.{p_end}
+{synopt :{cmd:r(bias_iter_polynomial)}}with {cmd:nopromote}: when {cmd:iterate} failed to converge at the reported order, the highest lower order at which it DOES reach a genuine self-consistent fixed point; missing if none does (or {cmd:iterate} converged / was not requested / was promoted instead){p_end}
+{synopt :{cmd:r(bias_iter_l2err)}}relative L2 change in the counterfactual at {cmd:r(bias_iter_polynomial)} (or, when promoted, at {cmd:r(bias_polynomial)}){p_end}
+{synopt :{cmd:r(bias_iter_h)} / {cmd:r(bias_iter_B)} / {cmd:r(bias_iter_response)} / {cmd:r(bias_iter_shift)} / {cmd:r(bias_iter_elasticity)}}with {cmd:nopromote}: the converged-lower-order bias estimands, alongside (not replacing) {cmd:r(bias_h)} etc.{p_end}
 
 {pstd}
 For estimators 1 and 2 a missing {cmd:r(bias_h)} means the fitting window was

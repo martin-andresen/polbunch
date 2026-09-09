@@ -8,7 +8,23 @@ program polbunchsim, eclass
         distribution(string) opts(string) ///
         estimator(numlist integer) btype(numlist integer) ///
         clist(string) sample(string)  ///
-        est4limits(numlist) limits(numlist) report(string) SCALARsonly DEBUG]
+        est4limits(numlist) limits(numlist) report(string) SCALARsonly DEBUG ///
+        PANel(numlist min=3 max=4) B0(real -999) E0(real -999) ///
+        HEAP(numlist min=2 max=3)]
+
+    /*
+        panel(n T rho)  -- pooled-panel DGP, passed straight to
+        polbunchgendata (obs is overridden to n*T).  btype 8 (vce(cluster
+        pid)) and btype 10 (bootstrap, cluster(pid) prefix) require it.
+
+        b0(#) / e0(#) -- the population excess-mass count and true
+        elasticity, for the coverage / size tests.  Compute once from a
+        large polbunchgendata draw and pass them in; otherwise b0
+        falls back to the realised bunch count of each replication (a
+        noisy target -- fine for a smoke test, not for coverage numbers)
+        and e0 falls back to the homogeneous el() value.  e0(0) is a
+        valid value (size cell); the sentinel for "not given" is < 0.
+    */
 
     /*
         scalarsonly : single-estimator runs only.  Skip -estimates
@@ -51,6 +67,14 @@ program polbunchsim, eclass
         if "`clist'" == "" local clist `"noconstant"'
 
         local misscode = -1e300
+
+        // panel: obs is n*T
+        local panelopt ""
+        if "`panel'" != "" {
+            tokenize `panel'
+            local obs = `1' * `2'
+            local panelopt panel(`panel')
+        }
 
         // Split report() into coefficient names (from e(b)) and scalar names
         local _report_coefs ""
@@ -111,18 +135,40 @@ program polbunchsim, eclass
         preserve
         local anyfail = 0
 
+        /*
+            polbunchgendata's `syntax newvarname' confirms z does not
+            already exist BEFORE any of its body (including its own
+            -clear-) runs -- so if the caller's dataset happens to have a
+            variable named z (e.g. left behind by a prior polbunchgendata/
+            polbunch call, as under -simulate-, which preserves whatever
+            was in memory at the moment it was invoked as the per-
+            replication baseline), every replication fails with "variable
+            z already defined" before generating anything. Safe
+            unconditionally: we're inside -preserve- and about to -clear-
+            and regenerate everything anyway.
+        */
+        clear
+
+        local heapopt ""
+        if "`heap'" != "" local heapopt heap(`heap')
+
         capture noisily polbunchgendata z, obs(`obs') cutoff(`cutoff') ///
             el(`el') t0(`t0') t1(`t1') `log' distribution(`distribution') ///
-            incomeeffect(`incomeeffect') buncherror(`buncherror')
+            incomeeffect(`incomeeffect') buncherror(`buncherror') `panelopt' `heapopt'
 
         local genrc = _rc
+        local btrue_realized = .
         if `genrc' == 0 {
-            local eltrue = r(el_mean)
+            local eltrue = cond(`e0' >= 0, `e0', r(el_mean))
             local ietrue = r(incomeeffect)
+            local btrue_realized = r(n_bunchers)
         }
-        if "`eltrue'" == "" local eltrue = `elnum'
+        if "`eltrue'" == "" local eltrue = cond(`e0' >= 0, `e0', `elnum')
         if "`eltrue'" == "" local eltrue = .
         if "`ietrue'" == "" local ietrue = .
+
+        // population excess-mass count for the coverage test
+        local btrue_use = cond(`b0' >= 0, `b0', `btrue_realized')
 
         if `genrc' == 0 {
             if "`sample'" != "" {
@@ -169,7 +215,12 @@ program polbunchsim, eclass
                                 `opts' `uselimits'
                         }
                         else if `bt' == 2 {
-                            capture `dbgpfx' bootstrap, reps(`bootreps'): ///
+                            /* individual (person-year) nonparametric bootstrap,
+                               Saez-2010 style: resample rows, re-bin, re-fit */
+                            capture `dbgpfx' bootstrap ///
+                                _bs_el = _b[bunching:elasticity] ///
+                                _bs_nb = _b[bunching:number_bunchers], ///
+                                reps(`bootreps') nodots: ///
                                 polbunch z `iff', cutoff(`cutoff') ///
                                 pol(`polynomial') bw(`bw') t0(`t0') t1(`t1') ///
                                 `log' estimator(`e') vce(none) `c' ///
@@ -199,11 +250,44 @@ program polbunchsim, eclass
                                 `log' estimator(`e') bootreps(`bootreps') vce(bayes) ///
                                 nozero `c' `opts' `uselimits'
                         }
+                        else if `bt' == 7 {
+                            /* analytic Eicker-White sandwich */
+                            capture `dbgpfx' polbunch z `iff', cutoff(`cutoff') ///
+                                pol(`polynomial') bw(`bw') t0(`t0') t1(`t1') ///
+                                `log' estimator(`e') vce(robust) `c' ///
+                                `opts' `uselimits'
+                        }
+                        else if `bt' == 8 {
+                            /* analytic cluster-robust (needs panel -> pid) */
+                            capture `dbgpfx' polbunch z `iff', cutoff(`cutoff') ///
+                                pol(`polynomial') bw(`bw') t0(`t0') t1(`t1') ///
+                                `log' estimator(`e') vce(cluster pid) `c' ///
+                                `opts' `uselimits'
+                        }
+                        else if `bt' == 9 {
+                            /* Chetty/CFOP residual bootstrap over bins */
+                            capture `dbgpfx' polbunch z `iff', cutoff(`cutoff') ///
+                                pol(`polynomial') bw(`bw') t0(`t0') t1(`t1') ///
+                                `log' estimator(`e') bootreps(`bootreps') ///
+                                vce(bootstrap, residual) `c' `opts' `uselimits'
+                        }
+                        else if `bt' == 10 {
+                            /* person-clustered nonparametric bootstrap (benchmark
+                               for vce(cluster) under pooled-panel dependence) */
+                            capture `dbgpfx' bootstrap ///
+                                _bs_el = _b[bunching:elasticity] ///
+                                _bs_nb = _b[bunching:number_bunchers], ///
+                                reps(`bootreps') cluster(pid) nodots: ///
+                                polbunch z `iff', cutoff(`cutoff') ///
+                                pol(`polynomial') bw(`bw') t0(`t0') t1(`t1') ///
+                                `log' estimator(`e') vce(none) `c' ///
+                                `opts' `uselimits'
+                        }
                         else {
                             local rc = 198
                         }
 
-                        if `bt' <= 6 local rc = _rc
+                        if `bt' <= 10 local rc = _rc
 
                         timer off 1
                         timer list
@@ -213,6 +297,9 @@ program polbunchsim, eclass
                         local elast    = .
                         local se       = .
                         local p        = .
+                        local b_bunch  = .
+                        local se_bunch = .
+                        local p_bunch  = .
                         local delta_md = .
                         local novar = 1
                         foreach _tt in wald minimumdistance hausman {
@@ -220,18 +307,38 @@ program polbunchsim, eclass
                             local p_`_tt'    = .
                         }
 
+                        /* coefficient names: the bootstrap-prefix btypes
+                           (2, 10) collect the two targets as _bs_el / _bs_nb;
+                           everything else keeps polbunch's own equation names */
+                        if inlist(`bt', 2, 10) {
+                            local nm_el "_bs_el"
+                            local nm_nb "_bs_nb"
+                        }
+                        else {
+                            local nm_el "bunching:elasticity"
+                            local nm_nb "bunching:number_bunchers"
+                        }
+
                         if `rc' == 0 {
-                            capture local elast = _b[bunching:elasticity]
+                            capture local elast = _b[`nm_el']
                             if _rc local elast = .
+                            capture local b_bunch = _b[`nm_nb']
+                            if _rc local b_bunch = .
 
                             capture confirm matrix e(V)
                             if _rc == 0 {
-                                capture local se = _se[bunching:elasticity]
+                                capture local se = _se[`nm_el']
                                 if _rc == 0 & !missing(`se') & `se' > 0 {
                                     local novar = 0
-                                    capture test _b[bunching:elasticity] = `eltrue'
+                                    capture test _b[`nm_el'] = `eltrue'
                                     if _rc == 0 local p = r(p)
                                     else local p = .
+                                }
+                                capture local se_bunch = _se[`nm_nb']
+                                if _rc == 0 & !missing(`se_bunch') & `se_bunch' > 0 & `btrue_use' < . {
+                                    capture test _b[`nm_nb'] = `btrue_use'
+                                    if _rc == 0 local p_bunch = r(p)
+                                    else local p_bunch = .
                                 }
                             }
 
@@ -503,6 +610,13 @@ program polbunchsim, eclass
                 ereturn scalar sim_time                  = `final_time'
                 ereturn scalar sim_p                     = `p'
                 ereturn scalar sim_se                    = `se'
+                ereturn scalar sim_el                    = `elast'
+                ereturn scalar sim_b                     = `b_bunch'
+                ereturn scalar sim_se_b                  = `se_bunch'
+                ereturn scalar sim_p_b                   = `p_bunch'
+                ereturn scalar sim_btrue                 = `btrue_use'
+                ereturn scalar sim_cover_el             = cond(missing(`p'), ., `p' >= 0.05)
+                ereturn scalar sim_cover_b              = cond(missing(`p_bunch'), ., `p_bunch' >= 0.05)
                 ereturn scalar sim_chi2_wald             = `chi2_wald'
                 ereturn scalar sim_p_wald                = `p_wald'
                 ereturn scalar sim_chi2_minimumdistance  = `chi2_minimumdistance'
@@ -624,6 +738,11 @@ program polbunchsim, eclass
             ereturn scalar sim_time            = `time_post'
             ereturn scalar sim_se              = `se_post'
             ereturn scalar sim_p               = `p_post'
+            ereturn scalar sim_el              = `elast'
+            ereturn scalar sim_b               = `b_bunch'
+            ereturn scalar sim_se_b            = `se_bunch'
+            ereturn scalar sim_p_b             = `p_bunch'
+            ereturn scalar sim_btrue           = `btrue_use'
             ereturn scalar sim_chi2_wald       = `chi2_wald_post'
             ereturn scalar sim_p_wald          = `p_wald_post'
             ereturn scalar sim_chi2_minimumdistance = `chi2_minimumdistance_post'
