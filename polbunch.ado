@@ -984,6 +984,7 @@
 										zh_excl_orig(`zH_excl_orig') ///
 										zl_excl_est(`zL_excl_est') ///
 										zh_excl_est(`zH_excl_est') ///
+										nosplit(`nosplit') ///
 										`positive'
 								}
 
@@ -1825,7 +1826,7 @@
 				zh_excl_orig(real) ///
 				zl_excl_est(real) ///
 				zh_excl_est(real) ///
-				[ nonormalize LOG vce(string) initdelta(real 0.05) DELTAmax(real 1) positive HCType(real -1) MASScorr(real 1) COVis(name) NCLust(real 0) ]
+				[ nonormalize LOG vce(string) initdelta(real 0.05) DELTAmax(real 1) positive HCType(real -1) MASScorr(real 1) COVis(name) NCLust(real 0) nosplit(integer 1) ]
 
 			gettoken yvar rest : varlist
 			gettoken zvar rest : rest
@@ -1879,7 +1880,8 @@
 				`masscorr', ///
 				`deltamax', ///
 				"`covis'", ///
-				`nclust' ///
+				`nclust', ///
+				`nosplit' ///
 			)
 
 			matrix `b' = r_b_profile
@@ -3380,7 +3382,8 @@ cap program drop bunch_saez
 			real scalar zH_excl_orig,
 			real scalar zL_excl_est,
 			real scalar zH_excl_est,
-			real scalar ntheta
+			real scalar ntheta,
+			real scalar nosplit
 		)
 		{
 			real scalar  Kb
@@ -3400,25 +3403,52 @@ cap program drop bunch_saez
 				R[1, 1..Kb] = intbasis(zL_excl_est, zH_excl_est, K) / bw_est
 			}
 			else if (estimator == 2) {
+				/*
+					Excluded-region counterfactual entering the Chetty
+					mass-balance row.
+					  splitmass: h0 below z*, h1 = h0/(1+delta) above z*, so
+					    (with the bmodel_row term) the restriction is
+					    M_E - int_{zL}^{z*} h0 - int_{z*}^{zH} h1
+					        = delta/(1+delta) int_{z*}^{zbar} h0.
+					  poolmass:  the whole excluded region is counted at h0
+					    (no 1/(1+delta) deflation), so the restriction is
+					    Chetty's own
+					    M_E - int_{zL}^{zH} h0 = delta/(1+delta) int_{z*}^{zbar} h0
+					    -- missing mass over the FULL [z*, zbar], and
+					    consistent with bunch_transform's poolmass B.
+				*/
 				Rlo = intbasis(zL_excl_est, cutoff_est, K) / bw_est
-				Rhi = intbasis(cutoff_est, zH_excl_est, K) / ((1 + delta) * bw_est)
+				if (nosplit) Rhi = intbasis(cutoff_est, zH_excl_est, K) / bw_est
+				else         Rhi = intbasis(cutoff_est, zH_excl_est, K) / ((1 + delta) * bw_est)
 				R[1, 1..Kb] = Rlo + Rhi
 			}
 			else if (estimator == 3) {
+				/*
+					splitmass: h0 below z*, relocated h1 above z* inside the
+					excluded region.  poolmass: whole excluded region at h0,
+					so (with the bmodel_row response-interval term) the
+					restriction is M_E - int_{zL}^{zH} h0 = int_{z*}^{z*+r} h0,
+					matching bunch_transform's poolmass B + eresp() inversion.
+				*/
 				Rlo = intbasis(zL_excl_est, cutoff_est, K) / bw_est
-				h1map = h1coef_map(
-					J(1, K+1, 0),
-					delta,
-					estimator,
-					K,
-					cutoff_orig,
-					bw_orig,
-					cutoff_est,
-					bw_est,
-					islog,
-					1
-				)
-				Rhi = (intbasis(cutoff_est, zH_excl_est, K) * h1map.dgamma_dbeta) / bw_est
+				if (nosplit) {
+					Rhi = intbasis(cutoff_est, zH_excl_est, K) / bw_est
+				}
+				else {
+					h1map = h1coef_map(
+						J(1, K+1, 0),
+						delta,
+						estimator,
+						K,
+						cutoff_orig,
+						bw_orig,
+						cutoff_est,
+						bw_est,
+						islog,
+						1
+					)
+					Rhi = (intbasis(cutoff_est, zH_excl_est, K) * h1map.dgamma_dbeta) / bw_est
+				}
 				R[1, 1..Kb] = Rlo + Rhi
 			}
 			else {
@@ -3441,7 +3471,8 @@ cap program drop bunch_saez
 		real scalar zH_excl_orig,
 		real scalar zL_excl_est,
 		real scalar zH_excl_est,
-		real scalar ntheta
+		real scalar ntheta,
+		real scalar nosplit
 	)
 	{
 		real scalar Kb
@@ -3457,6 +3488,17 @@ cap program drop bunch_saez
 
 		if (1 + delta <= 0) {
 			_error(3498, "delta must be greater than -1")
+		}
+
+		/*
+			Under poolmass the excluded-region counterfactual in the mass
+			row (cf_mass_row) is the plain int_{zL}^{zH} h0 -- no delta -- so
+			its delta-derivative is zero for both estimators.  Only the
+			splitmass cf row carries delta (through the 1/(1+delta) deflation
+			for est 2 and the relocation Jacobian for est 3).
+		*/
+		if (nosplit) {
+			return(out)
 		}
 
 		Ihi = intbasis(cutoff_est,zH_excl_est, K)
@@ -3569,7 +3611,8 @@ cap program drop bunch_saez
 			real scalar zL_excl_est,
 			real scalar zH_excl_est,
 			real scalar zbar_est,
-			real scalar dograd
+			real scalar dograd,
+			real scalar nosplit
 		)
 		{
 			struct design_out scalar out
@@ -3591,7 +3634,7 @@ cap program drop bunch_saez
 				nR = rows(XR)
 				ntheta = 2*Kb + 1
 
-				Xcf = cf_mass_row(delta, cutoff_orig, bw_orig, cutoff_est, bw_est, K, estimator, islog, zL_excl_orig, zH_excl_orig, zL_excl_est, zH_excl_est, ntheta)
+				Xcf = cf_mass_row(delta, cutoff_orig, bw_orig, cutoff_est, bw_est, K, estimator, islog, zL_excl_orig, zH_excl_orig, zL_excl_est, zH_excl_est, ntheta, nosplit)
 				Xmass = Xcf
 				Xmass[1, ntheta] = 1
 
@@ -3608,7 +3651,7 @@ cap program drop bunch_saez
 				n0 = rows(X0)
 				ntheta = Kb + 1
 
-				Xcf = cf_mass_row(delta, cutoff_orig, bw_orig, cutoff_est, bw_est, K, estimator, islog, zL_excl_orig, zH_excl_orig, zL_excl_est, zH_excl_est, ntheta)
+				Xcf = cf_mass_row(delta, cutoff_orig, bw_orig, cutoff_est, bw_est, K, estimator, islog, zL_excl_orig, zH_excl_orig, zL_excl_est, zH_excl_est, ntheta, nosplit)
 				Xmass = Xcf
 				Xmass[1, ntheta] = 1
 
@@ -3626,7 +3669,7 @@ cap program drop bunch_saez
 				h1 = h1design23(delta, zR, cutoff_orig, bw_orig, cutoff_est, bw_est, K, estimator, islog, dograd)
 
 				ntheta = Kb
-				Xcf    = cf_mass_row(delta, cutoff_orig, bw_orig, cutoff_est, bw_est, K, estimator, islog, zL_excl_orig, zH_excl_orig, zL_excl_est, zH_excl_est, ntheta)
+				Xcf    = cf_mass_row(delta, cutoff_orig, bw_orig, cutoff_est, bw_est, K, estimator, islog, zL_excl_orig, zH_excl_orig, zL_excl_est, zH_excl_est, ntheta, nosplit)
 				Xbmod  = bmodel_row(delta, cutoff_orig, bw_orig, cutoff_est, bw_est, K, estimator, islog, zbar_est, ntheta)
 				Xmass  = Xcf + Xbmod
 
@@ -3647,7 +3690,8 @@ cap program drop bunch_saez
 						zH_excl_orig,
 						zL_excl_est,
 						zH_excl_est,
-						ntheta
+						ntheta,
+						nosplit
 					)
 
 					dXbmod = d_bmodel_row_ddelta(
@@ -3696,7 +3740,8 @@ cap program drop bunch_saez
 			real scalar zH_excl_orig,
 			real scalar zL_excl_est,
 			real scalar zH_excl_est,
-			real scalar zbar_est
+			real scalar zbar_est,
+			real scalar nosplit
 		)
 		{
 			real colvector ystack, theta
@@ -3704,7 +3749,7 @@ cap program drop bunch_saez
 
 			ystack = make_ystack(y, side, bunch, estimator, Hstar_obs)
 
-			D = make_design(delta, z, side, bunch, cutoff_orig, bw_orig, cutoff_est, bw_est, K, estimator, islog, zL_excl_orig, zH_excl_orig, zL_excl_est, zH_excl_est, zbar_est, 0)
+			D = make_design(delta, z, side, bunch, cutoff_orig, bw_orig, cutoff_est, bw_est, K, estimator, islog, zL_excl_orig, zH_excl_orig, zL_excl_est, zH_excl_est, zbar_est, 0, nosplit)
 
 			theta = qrsolve(D.X, ystack)
 			return(theta')
@@ -3728,7 +3773,8 @@ cap program drop bunch_saez
 			real scalar zL_excl_est,
 			real scalar zH_excl_est,
 			real scalar zbar_est,
-			real scalar positive
+			real scalar positive,
+			real scalar nosplit
 		)
 		{
 			real colvector ystack, theta, resid
@@ -3764,7 +3810,8 @@ cap program drop bunch_saez
 				zL_excl_est,
 				zH_excl_est,
 				zbar_est,
-				0
+				0,
+				nosplit
 			)
 
 			theta = qrsolve(D.X, ystack)
@@ -4813,6 +4860,7 @@ cap program drop bunch_saez
 			real scalar zH_excl_est,
 			real scalar zbar_est,
 			real scalar positive,
+			real scalar nosplit,
 			real scalar initdelta,
 			real scalar dlo,
 			real scalar dhi,
@@ -4862,7 +4910,7 @@ cap program drop bunch_saez
 				if (rows(gd) >= 1) {
 					if (d == gd[rows(gd)]) continue
 				}
-				Q = profQ(d, y, z, side, bunch, Hstar_obs, cutoff_orig, bw_orig, cutoff_est, bw_est, K, estimator, islog, zL_excl_orig, zH_excl_orig, zL_excl_est, zH_excl_est, zbar_est, positive)
+				Q = profQ(d, y, z, side, bunch, Hstar_obs, cutoff_orig, bw_orig, cutoff_est, bw_est, K, estimator, islog, zL_excl_orig, zH_excl_orig, zL_excl_est, zH_excl_est, zbar_est, positive, nosplit)
 				gd = gd \ d
 				gq = gq \ Q
 			}
@@ -4900,8 +4948,8 @@ cap program drop bunch_saez
 				else {
 					x1 = b - gr * (b - a)
 					x2 = a + gr * (b - a)
-					f1 = profQ(x1, y, z, side, bunch, Hstar_obs, cutoff_orig, bw_orig, cutoff_est, bw_est, K, estimator, islog, zL_excl_orig, zH_excl_orig, zL_excl_est, zH_excl_est, zbar_est, positive)
-					f2 = profQ(x2, y, z, side, bunch, Hstar_obs, cutoff_orig, bw_orig, cutoff_est, bw_est, K, estimator, islog, zL_excl_orig, zH_excl_orig, zL_excl_est, zH_excl_est, zbar_est, positive)
+					f1 = profQ(x1, y, z, side, bunch, Hstar_obs, cutoff_orig, bw_orig, cutoff_est, bw_est, K, estimator, islog, zL_excl_orig, zH_excl_orig, zL_excl_est, zH_excl_est, zbar_est, positive, nosplit)
+					f2 = profQ(x2, y, z, side, bunch, Hstar_obs, cutoff_orig, bw_orig, cutoff_est, bw_est, K, estimator, islog, zL_excl_orig, zH_excl_orig, zL_excl_est, zH_excl_est, zbar_est, positive, nosplit)
 
 					for (iter = 1; iter <= 100; iter++) {
 						if (abs(b - a) < 1e-10 * max((1, abs(x1), abs(x2)))) break
@@ -4910,14 +4958,14 @@ cap program drop bunch_saez
 							x1 = x2
 							f1 = f2
 							x2 = a + gr * (b - a)
-							f2 = profQ(x2, y, z, side, bunch, Hstar_obs, cutoff_orig, bw_orig, cutoff_est, bw_est, K, estimator, islog, zL_excl_orig, zH_excl_orig, zL_excl_est, zH_excl_est, zbar_est, positive)
+							f2 = profQ(x2, y, z, side, bunch, Hstar_obs, cutoff_orig, bw_orig, cutoff_est, bw_est, K, estimator, islog, zL_excl_orig, zH_excl_orig, zL_excl_est, zH_excl_est, zbar_est, positive, nosplit)
 						}
 						else {
 							b  = x2
 							x2 = x1
 							f2 = f1
 							x1 = b - gr * (b - a)
-							f1 = profQ(x1, y, z, side, bunch, Hstar_obs, cutoff_orig, bw_orig, cutoff_est, bw_est, K, estimator, islog, zL_excl_orig, zH_excl_orig, zL_excl_est, zH_excl_est, zbar_est, positive)
+							f1 = profQ(x1, y, z, side, bunch, Hstar_obs, cutoff_orig, bw_orig, cutoff_est, bw_est, K, estimator, islog, zL_excl_orig, zH_excl_orig, zL_excl_est, zH_excl_est, zbar_est, positive, nosplit)
 						}
 					}
 
@@ -5015,7 +5063,8 @@ cap program drop bunch_saez
 			real scalar masscorr,
 			real scalar deltamax,
 			string scalar covisname,
-			real scalar nclust
+			real scalar nclust,
+			real scalar nosplit
 
 		)
 		{
@@ -5063,7 +5112,8 @@ cap program drop bunch_saez
 					zH_excl_orig,
 					zL_excl_est,
 					zH_excl_est,
-					zbar_est
+					zbar_est,
+					nosplit
 				)
 				b = theta_hat
 			}
@@ -5089,7 +5139,7 @@ cap program drop bunch_saez
 					cutoff_orig, bw_orig, cutoff_est, bw_est,
 					K, estimator, islog,
 					zL_excl_orig, zH_excl_orig, zL_excl_est, zH_excl_est,
-					zbar_est, positive, initdelta, lb, dhi,
+					zbar_est, positive, nosplit, initdelta, lb, dhi,
 					bestQ, nbasin, gapQ)
 
 				if (delta_hat >= .) delta_hat = initdelta
@@ -5129,7 +5179,8 @@ cap program drop bunch_saez
 					zH_excl_orig,
 					zL_excl_est,
 					zH_excl_est,
-					zbar_est
+					zbar_est,
+					nosplit
 				)
 
 				theta_hat = beta_hat, delta_hat
@@ -5142,7 +5193,7 @@ cap program drop bunch_saez
 			if (dovar == 1) {
 				D = make_design(delta_hat, z, side, bunch,
 					cutoff_orig, bw_orig, cutoff_est, bw_est, K, estimator, islog,
-					zL_excl_orig, zH_excl_orig, zL_excl_est, zH_excl_est, zbar_est, 1)
+					zL_excl_orig, zH_excl_orig, zL_excl_est, zH_excl_est, zbar_est, 1, nosplit)
 
 				ystack = make_ystack(y, side, bunch, estimator, Hstar_obs)
 

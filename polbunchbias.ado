@@ -1697,7 +1697,7 @@ real rowvector pbx_bias_core(
 // multi-start search treats these exactly like a bad grid point, never a
 // crash.
 // -------------------------------------------------------------------
-real scalar pbx_bias_e2_objQ(real scalar delc,
+real scalar pbx_bias_e2_objQ(real scalar delc, real scalar nosplit,
     real matrix Glo, real matrix Ghi, real rowvector Rlo, real rowvector Rhi,
     real rowvector Rbar, real scalar trueMass, real rowvector betat,
     real rowvector h1coef, real scalar H, real scalar hi,
@@ -1717,7 +1717,12 @@ real scalar pbx_bias_e2_objQ(real scalar delc,
     GtGb = Glo + q^2 :* Ghi
     Gtub = q :* pbx_polmoment(ures, H, hi, K)
 
-    Jmb = Rlo + q :* Rhi + (delc*q) :* Rbar
+    // Excluded-region counterfactual in the Chetty mass row.
+    //   splitmass: h0 below z*, h1 = h0/(1+delc) above z*  -> Rlo + q*Rhi
+    //   poolmass : whole region at h0 (no deflation)        -> Rlo + Rhi
+    // Both then add the delc/(1+delc) int_{z*}^{zbar} h0 missing-mass term.
+    if (nosplit) Jmb = Rlo + Rhi + (delc*q) :* Rbar
+    else         Jmb = Rlo + q :* Rhi + (delc*q) :* Rbar
     uM  = trueMass - (Jmb * betat')
 
     GtGb = GtGb + Jmb' * Jmb
@@ -1757,7 +1762,7 @@ real scalar pbx_bias_e2_objQ(real scalar delc,
 // restores the original equation; only pbx_bias_e2_solve() below is new,
 // calling this from many starting points instead of one.
 // -------------------------------------------------------------------
-void pbx_bias_e2_fixedpoint(real scalar delc0,
+void pbx_bias_e2_fixedpoint(real scalar delc0, real scalar nosplit,
     real matrix Glo, real matrix Ghi, real matrix Mhi, real scalar qff,
     real rowvector Rlo, real rowvector Rhi, real rowvector Rbar,
     real scalar Sbar, real scalar Sright, real scalar trueMass,
@@ -1791,9 +1796,18 @@ void pbx_bias_e2_fixedpoint(real scalar delc0,
         Gtu[np] = dqdD * pbx_polint(pbx_polmul(betat, ures), H, hi)
 
         Jm = J(1, np, 0)
-        Jm[|1,1 \ 1,K1|] = Rlo + q :* Rhi + (delc*q) :* Rbar
-        Jm[1,np]         = dqdD*Sright + (q^2)*Sbar
-        uM = trueMass - ((Rlo + q :* Rhi + (delc*q) :* Rbar) * betat')
+        if (nosplit) {
+            // poolmass: excluded-region cf is Rlo + Rhi (undeflated), so
+            // the only delc-dependent mass-row piece is (delc*q)*Rbar.
+            Jm[|1,1 \ 1,K1|] = Rlo + Rhi + (delc*q) :* Rbar
+            Jm[1,np]         = (q^2)*Sbar
+            uM = trueMass - ((Rlo + Rhi + (delc*q) :* Rbar) * betat')
+        }
+        else {
+            Jm[|1,1 \ 1,K1|] = Rlo + q :* Rhi + (delc*q) :* Rbar
+            Jm[1,np]         = dqdD*Sright + (q^2)*Sbar
+            uM = trueMass - ((Rlo + q :* Rhi + (delc*q) :* Rbar) * betat')
+        }
 
         GtG = GtG + Jm' * Jm
         Gtu = Gtu + Jm' * uM
@@ -1848,7 +1862,7 @@ void pbx_bias_e2_fixedpoint(real scalar delc0,
 // always among the starting values, so whenever the fixed point is
 // unique, this reduces to exactly the old single-start answer.
 // -------------------------------------------------------------------
-void pbx_bias_e2_solve(
+void pbx_bias_e2_solve(real scalar nosplit,
     real matrix Glo, real matrix Ghi, real matrix Mhi, real scalar qff,
     real rowvector Rlo, real rowvector Rhi, real rowvector Rbar,
     real scalar Sbar, real scalar Sright, real scalar trueMass,
@@ -1867,7 +1881,7 @@ void pbx_bias_e2_solve(
     Qs    = J(0, 1, .)
 
     for (i = 1; i <= ns; i++) {
-        pbx_bias_e2_fixedpoint(starts[i], Glo, Ghi, Mhi, qff, Rlo, Rhi, Rbar,
+        pbx_bias_e2_fixedpoint(starts[i], nosplit, Glo, Ghi, Mhi, qff, Rlo, Rhi, Rbar,
             Sbar, Sright, trueMass, betat, h1coef, H, hi, dsc2, K, K1, np,
             delc, biaspar, converged)
         if (!converged | missing(delc)) continue
@@ -1881,7 +1895,7 @@ void pbx_bias_e2_solve(
         }
         if (dupe) continue
 
-        Q = pbx_bias_e2_objQ(delc, Glo, Ghi, Rlo, Rhi, Rbar, trueMass, betat,
+        Q = pbx_bias_e2_objQ(delc, nosplit, Glo, Ghi, Rlo, Rhi, Rbar, trueMass, betat,
                 h1coef, H, hi, dsc, bestbeta_k1)
         roots = roots \ delc
         Qs    = Qs \ Q
@@ -1915,7 +1929,7 @@ void pbx_bias_e2_solve(
         if (bestQ > 0 & !missing(b2Q)) gapQ = b2Q/bestQ
     }
 
-    pbx_bias_e2_objQ(bestdelc, Glo, Ghi, Rlo, Rhi, Rbar, trueMass, betat,
+    pbx_bias_e2_objQ(bestdelc, nosplit, Glo, Ghi, Rlo, Rhi, Rbar, trueMass, betat,
         h1coef, H, hi, dsc, bestbeta)
 }
 
@@ -2201,7 +2215,7 @@ real rowvector pbx_bias_core_ws(
         // diagnostics, as in prof_delta_solve) but not yet surfaced to
         // r()/e() -- a deliberate first-pass scope limit, not an
         // oversight.
-        pbx_bias_e2_solve(Glo, Ghi, Mhi, qff, Rlo, Rhi, Rbar, Sbar, Sright,
+        pbx_bias_e2_solve(nosplit, Glo, Ghi, Mhi, qff, Rlo, Rhi, Rbar, Sbar, Sright,
             trueMass, betat, h1coef, H, hi, dsc, dsc2, K, K1, np, Delta,
             delc, bbias, bestQ2, nbasin2, gapQ2)
         if (missing(delc)) {

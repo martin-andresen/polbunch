@@ -5,25 +5,42 @@ program polbunchgendata, rclass
 		HEAP(numlist min=2 max=3) ]
 
 	/*
-		panel(n T rho [smooth]) : generate a pooled panel of n individuals
-		observed T years each (obs is overridden to n*T).  Two persistence
-		mechanisms, both leaving the marginal distribution of z0 in every
-		year EXACTLY distribution() (so A1-A3, E[y_j]=m_j, and the
+		panel(n T rho [mode]) : generate a pooled panel of n individuals
+		observed T years each (obs is overridden to n*T).  All three
+		persistence mechanisms leave the marginal distribution of z0 in
+		every year EXACTLY distribution() (so A1-A3, E[y_j]=m_j, and the
 		closed-form population truth all hold unchanged -- only the
 		person-year counts are no longer one multinomial draw):
 
-		  default (smooth=0 or omitted) -- repeat/fresh mixture: each
+		  mode 0 (default, or omitted) -- repeat/fresh mixture: each
 		    person-year's earnings is a fresh distribution() draw, except
 		    that with probability rho it is copied verbatim from the same
 		    person's previous year.  corr(z0_it,z0_i,t-k)=rho^k, but the
 		    persistence is a two-state jump process (exact repeat, or a
-		    fully independent redraw) with no drift in between.
+		    fully independent redraw) with no drift in between.  Because the
+		    repeats are EXACT, the dependence lands on the diagonal of the
+		    bin-count covariance -- vce(conventional) scale(x2) and
+		    vce(robust) both recover it.
 
-		  smooth=1 -- Gaussian-copula AR(1): a stationary AR(1) in a
-		    latent standard normal (corr(a_it,a_i,t-1)=rho) is mapped
+		  mode 1 (== "smooth") -- Gaussian-copula AR(1): a stationary AR(1)
+		    in a latent standard normal (corr(a_it,a_i,t-1)=rho) is mapped
 		    through Phi then the triangular inverse-CDF, so a person's
 		    earnings drift smoothly through the distribution year to year
 		    instead of either freezing or teleporting.  Requires
+		    distribution(triangular(a,b,c)).
+
+		  mode 2 (== "components") -- exchangeable Gaussian copula:
+		    a_it = sqrt(rho)*xi_i + sqrt(1-rho)*nu_it with xi_i, nu_it iid
+		    N(0,1), so every year-pair has the SAME latent correlation rho
+		    (a permanent person location xi_i plus a fresh transitory shock
+		    each year), mapped through Phi then the triangular inverse-CDF.
+		    Unlike mode 0 the person is never in the exact same bin twice,
+		    and unlike mode 1 there is no within-person time ordering.  At
+		    high rho each person is pinned to a band a few bins wide for all
+		    T years: the dependence is spread across the OFF-diagonal of the
+		    bin-count covariance, so diagonal-only fixes (scale(x2),
+		    vce(robust)) under-state it and only vce(cluster) -- which uses
+		    the full co-visitation matrix M -- is calibrated.  Requires
 		    distribution(triangular(a,b,c)).
 
 		rho in [0,1): 0 = iid person-years, -> 1 = person frozen across
@@ -92,15 +109,19 @@ program polbunchgendata, rclass
 		local rhop `3'
 		if "`4'" != "" local smoothp `4'
 		if `np' < 2 | `Tp' < 2 {
-			di as error "panel(n T rho [smooth]): n and T must both be at least 2."
+			di as error "panel(n T rho [mode]): n and T must both be at least 2."
 			exit 198
 		}
 		if `rhop' < 0 | `rhop' >= 1 {
-			di as error "panel(n T rho [smooth]): rho must be in [0,1)."
+			di as error "panel(n T rho [mode]): rho must be in [0,1)."
+			exit 198
+		}
+		if !inlist(`smoothp', 0, 1, 2) {
+			di as error "panel(n T rho [mode]): mode must be 0 (repeat/fresh mixture), 1 (smooth AR(1) copula) or 2 (exchangeable components copula)."
 			exit 198
 		}
 		if `smoothp' & "`distribution'"!="" & strpos("`distribution'","triangular")!=1 {
-			di as error "panel(..., smooth): the smooth-drift mechanism needs distribution(triangular(a,b,c))."
+			di as error "panel(..., mode `smoothp'): the copula mechanisms (mode 1/2) need distribution(triangular(a,b,c))."
 			exit 198
 		}
 		local obs = `np' * `Tp'
@@ -170,25 +191,44 @@ program polbunchgendata, rclass
 			exit 198
 		}
 
-		// -------- panel persistence: repeat/fresh mixture, or smooth AR(1) --------
+		// ---- panel persistence: mixture (0), smooth AR(1) copula (1), exch. copula (2) ----
 		if `ispanel' {
 			if `smoothp' {
 				/*
-					Gaussian-copula AR(1): stationary latent normal
-					a_it = rho*a_i,t-1 + sqrt(1-rho^2)*e_it, e_it~N(0,1),
-					a_i1~N(0,1) -- so a_it ~ N(0,1) marginally every year
-					and corr(a_it,a_i,t-1)=rho. Phi(a_it) is then U(0,1)
-					marginally; pushing it through the triangular inverse-
-					CDF recovers distribution() exactly, with SMOOTH drift
-					(rather than panel()'s default repeat-or-jump mixture).
-					a,b,c are the triangular params parsed above.
+					Gaussian-copula persistence in a latent standard normal
+					a_it (~ N(0,1) marginally every year, so Phi(a_it) is
+					U(0,1) and the triangular inverse-CDF below recovers
+					distribution() EXACTLY). a,b,c are the triangular params
+					parsed above.
+
+					mode 1 -- stationary AR(1):
+					  a_it = rho*a_i,t-1 + sqrt(1-rho^2)*e_it,  a_i1 ~ N(0,1)
+					  corr(a_it,a_i,t-1) = rho  (smooth year-to-year drift).
+
+					mode 2 -- exchangeable one-factor:
+					  a_it = sqrt(rho)*xi_i + sqrt(1-rho)*nu_it
+					  corr(a_it,a_i,s) = rho for EVERY t != s  (a permanent
+					  person location xi_i + a fresh transitory shock each
+					  year; no time ordering, never the exact same value
+					  twice). At high rho this pins each person to a narrow
+					  band for all T years -> strong positive OFF-diagonal
+					  bin-count covariance that scale(x2)/vce(robust) miss.
 				*/
 				tempvar _lat _u
 				sort pid pyear
-				gen double `_lat' = rnormal() if pyear == 1
-				forvalues t = 2/`Tp' {
-					by pid: replace `_lat' = `rhop'*`_lat'[_n-1] ///
-						+ sqrt(1-`rhop'^2)*rnormal() if pyear == `t'
+				if `smoothp' == 1 {
+					gen double `_lat' = rnormal() if pyear == 1
+					forvalues t = 2/`Tp' {
+						by pid: replace `_lat' = `rhop'*`_lat'[_n-1] ///
+							+ sqrt(1-`rhop'^2)*rnormal() if pyear == `t'
+					}
+				}
+				else {
+					tempvar _xi
+					by pid: gen double `_xi' = rnormal() if _n == 1
+					by pid: replace `_xi' = `_xi'[1]
+					gen double `_lat' = sqrt(`rhop')*`_xi' ///
+						+ sqrt(1-`rhop')*rnormal()
 				}
 				gen double `_u' = normal(`_lat')
 				replace `varlist' = `a' + sqrt(`_u'*(`b'-`a')*(`c'-`a')) ///

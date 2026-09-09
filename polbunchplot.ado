@@ -1,4 +1,4 @@
-* polbunchplot version date 20260617
+* polbunchplot version date 20260907
 * Author: Martin Eckhoff Andresen
 * This program is part of the polbunch package.
 
@@ -6,7 +6,7 @@ capture program drop polbunchplot
 program define polbunchplot
 
     syntax [anything(name=models id="stored estimation name(s)")], ///
-        [ graph_opts(string) LEGend_opts(string) noci nostar ///
+        [ graph_opts(string) LEGend_opts(string) NAMes(string) noci nostar ///
           limit(numlist min=2 max=2) log TRUncate]
 
     quietly {
@@ -16,6 +16,37 @@ program define polbunchplot
         if missing(`islog') local islog = 0
 
         local nmodels : word count `models'
+
+        /*
+        ----------------------------------------------------------------
+        Optional per-model legend labels, supplied as a pipe-separated
+        list:  names("Chetty et al.|Naive|My estimator|Saez")
+        One entry per model, in the same order as the model list.
+        Entries may contain spaces and punctuation.
+        ----------------------------------------------------------------
+        */
+
+        if `"`names'"' != "" {
+
+            local nnames    = 0
+            local _namesrest `"`names'"'
+
+            while `"`_namesrest'"' != "" {
+
+                gettoken _nm _namesrest : _namesrest, parse("|")
+
+                if `"`_nm'"' == "|" continue
+
+                local ++nnames
+                local name_`nnames' = strtrim(`"`_nm'"')
+            }
+
+            if `nnames' != `nmodels' {
+                noisily display as error ///
+                    "names() must supply exactly `nmodels' label(s), separated by |"
+                exit 198
+            }
+        }
 
 
         /*
@@ -221,6 +252,25 @@ program define polbunchplot
                         lpattern(dash))
             }
 
+            /*
+                Legend suboption defaults for the single-model plots.
+                Drop each default the user overrides via legend_opts().
+            */
+            local lg_cols4 cols(4)
+            local lg_ord4  order(1 2 6 4)
+            local lg_cols3 cols(3)
+            local lg_ord3  order(1 2 4)
+            local lg_pos1  pos(6)
+            if strpos(`"`legend_opts'"', "cols(")  {
+                local lg_cols4
+                local lg_cols3
+            }
+            if strpos(`"`legend_opts'"', "order(") {
+                local lg_ord4
+                local lg_ord3
+            }
+            if strpos(`"`legend_opts'"', "pos(")   local lg_pos1
+
             local mrline
             local linemax = max(`upper_plot', `xmax')
 
@@ -313,9 +363,10 @@ program define polbunchplot
                         label(2 "Estimated h0") ///
                         label(6 "Estimated h1") ///
                         label(4 "Implied counterfactual") ///
-                        cols(4) ///
-                        order(1 2 6 4) ///
-                        pos(6)) ///
+                        `lg_cols4' ///
+                        `lg_ord4' ///
+                        `lg_pos1' ///
+                        `legend_opts') ///
                     `yscale' `graph_opts'
             }
             else {
@@ -357,10 +408,11 @@ program define polbunchplot
                         label(1 "Frequency") ///
                         label(2 "Estimated h0") ///
                         label(4 "Estimated h1") ///
-                        cols(3) ///
-                        order(1 2 4) ///
-                        pos(6)) ///
-                    `yscale'  `graph_opts' 
+                        `lg_cols3' ///
+                        `lg_ord3' ///
+                        `lg_pos1' ///
+                        `legend_opts') ///
+                    `yscale'  `graph_opts'
             }
 
             restore
@@ -674,6 +726,7 @@ program define polbunchplot
         foreach model of local models {
 
             local ++modelnum
+            local legendplot = .
 
             capture estimates restore `model'
             if _rc {
@@ -1099,7 +1152,11 @@ if `range_h0dot_hi' > `range_h0dot_lo' {
             local model_label = ///
                 upper(substr("`model'",1,1)) + ///
                 substr("`model'",2,.)
-		
+
+            if `"`name_`modelnum''"' != "" {
+                local model_label `"`name_`modelnum''"'
+            }
+
 		local legend_order `legend_order' `legendplot'
 
 		local legend_labels ///
@@ -1136,6 +1193,19 @@ if `range_h0dot_hi' > `range_h0dot_lo' {
 
         local legend_cols = min(`nmodels' + 1, 5)
 
+        /*
+            Defaults for legend suboptions that are singletons (legend()
+            rejects duplicates). Drop each default if the user supplies
+            it through legend_opts().
+        */
+        local lg_order order(`legend_order')
+        local lg_cols  cols(`legend_cols')
+        local lg_pos   pos(6)
+
+        if strpos(`"`legend_opts'"', "order(") local lg_order
+        if strpos(`"`legend_opts'"', "cols(")  local lg_cols
+        if strpos(`"`legend_opts'"', "pos(")   local lg_pos
+
 
         /*
         ================================================================
@@ -1162,10 +1232,10 @@ if `range_h0dot_hi' > `range_h0dot_lo' {
             ytitle("Frequency") ///
             xtitle("`zcol_first'") ///
 			legend( ///
-				order(`legend_order') ///
+				`lg_order' ///
 				`legend_labels' ///
-				cols(`legend_cols') ///
-				pos(6) ///
+				`lg_cols' ///
+				`lg_pos' ///
 			`legend_opts') ///
             `yscale' `graph_opts'
 

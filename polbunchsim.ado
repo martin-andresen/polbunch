@@ -283,11 +283,21 @@ program polbunchsim, eclass
                                 `log' estimator(`e') vce(none) `c' ///
                                 `opts' `uselimits'
                         }
+                        else if `bt' == 11 {
+                            /* quasi-multinomial: conventional V scaled by the
+                               Pearson dispersion phi-hat (Dirichlet-multinomial
+                               / Kish design-effect fallback when M is
+                               unavailable -- histogram-only) */
+                            capture `dbgpfx' polbunch z `iff', cutoff(`cutoff') ///
+                                pol(`polynomial') bw(`bw') t0(`t0') t1(`t1') ///
+                                `log' estimator(`e') vce(conventional) scale(x2) `c' ///
+                                `opts' `uselimits'
+                        }
                         else {
                             local rc = 198
                         }
 
-                        if `bt' <= 10 local rc = _rc
+                        if `bt' <= 11 local rc = _rc
 
                         timer off 1
                         timer list

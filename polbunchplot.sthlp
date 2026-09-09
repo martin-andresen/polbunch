@@ -14,7 +14,7 @@
 {title:Syntax}
 
 {p 10 15 2}
-{cmd:polbunchplot} [namelist] [{cmd:,} graph_opts(string) limit(numlist) log truncate]
+{cmd:polbunchplot} [namelist] [{cmd:,} {opt names(string)} {opt graph_opts(string)} {opt leg:end_opts(string)} {opt limit(numlist)} {opt log} {opt tru:ncate}]
 
 
 {pstd}
@@ -24,6 +24,9 @@
 {synoptset 25 tabbed}{...}
 {synopthdr}
 {synoptline}
+{synopt:{opt names(string)}} Custom legend labels for the plotted models, one per model in the same order as {it:namelist}, separated by a vertical bar {cmd:|}. Labels may contain spaces and punctuation. Applies to the multiple-model legend only; the number of labels must match the number of models. Example: {cmd:names("Chetty et al. (2011)|Naive polynomial|This paper")}.{p_end}
+{synopt:{opt graph_opts(string)}} Options passed through to the final {helpb twoway} call (e.g. {cmd:name()}, {cmd:title()}, {cmd:xtitle()}, {cmd:scheme()}).{p_end}
+{synopt:{opt leg:end_opts(string)}} Suboptions passed through to {helpb legend_option:legend()} (e.g. {cmd:cols()}, {cmd:pos()}, {cmd:region()}, {cmd:label()}). To rename model keys, prefer {opt names()}: legend keys are numbered by plot, not by model, so {cmd:label(#)} is hard to target.{p_end}
 {synopt:{opt limit(numlist)}} Only plot values of earnings between the two numbers in limit().{p_end}
 {synopt:{opt tru:ncate}} Truncate values in the bunching region to be no larger than the maximum outside of the bunching region; useful if bunching is so substantial the figure cannot be used to evaluate fit.{p_end}
 {synopt:{opt log}} present log frequency on the y axis.{p_end}
