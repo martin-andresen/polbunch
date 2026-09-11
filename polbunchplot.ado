@@ -1,4 +1,4 @@
-* polbunchplot version date 20260907
+* polbunchplot version date 20260910
 * Author: Martin Eckhoff Andresen
 * This program is part of the polbunch package.
 
@@ -7,7 +7,18 @@ program define polbunchplot
 
     syntax [anything(name=models id="stored estimation name(s)")], ///
         [ graph_opts(string) LEGend_opts(string) NAMes(string) noci nostar ///
-          limit(numlist min=2 max=2) log TRUncate]
+          limit(numlist min=2 max=2) log TRUncate ///
+          ROOTogram STYLE(string) STANDing ]
+
+    if "`rootogram'`style'`standing'" != "" {
+        local nm : word count `models'
+        if `nm' > 1 {
+            di as error "rootogram supports a single model"
+            exit 198
+        }
+        _polbunchplot_rootogram `models', style(`style') `standing' graphopts(`graph_opts')
+        exit
+    }
 
     quietly {
 
@@ -1244,4 +1255,184 @@ if `range_h0dot_hi' > `range_h0dot_lo' {
         */
         restore
     }
+end
+
+
+*=====================================================================
+*  polbunchplot ... , rootogram
+*
+*  Rootogram (Tukey; Kleiber & Zeileis 2016) of the fitted density
+*  against the observed histogram, on a sqrt scale.
+*    fitted = h0 below the cutoff, h1 above it, and the counterfactual
+*    h0 inside the excluded window -- so bunching shows as the excluded
+*    bars breaking away from the reference-region fit.
+*  style():
+*    hanging   (default) bars sqrt(obs) hang from the sqrt(fitted)
+*              curve; a bar bottom on y=0 is a perfect fit.
+*    standing  bars sqrt(obs) stand on the axis, sqrt(fitted) overlaid.
+*    suspended bars = sqrt(fitted) - sqrt(obs) from y=0: the residual
+*              alone, so small misfit in the reference region is
+*              visible (positive = over-predict, negative = under).
+*  Self-contained; does not touch the main polbunchplot logic.
+*=====================================================================
+capture program drop _polbunchplot_rootogram
+program define _polbunchplot_rootogram
+    version 16.0
+    syntax [anything(name=model)] , [ STYLE(string) STANDing GRAPHopts(string) ]
+
+    if "`standing'" != "" & "`style'" == "" local style standing
+    if "`style'" == "" local style hanging
+    local style = strlower("`style'")
+    if !inlist("`style'", "hanging", "standing", "suspended") {
+        di as error "style() must be hanging, standing or suspended"
+        exit 198
+    }
+
+    if "`model'" != "" {
+        capture estimates restore `model'
+        if _rc {
+            di as error "stored estimation result `model' not found"
+            exit _rc
+        }
+    }
+    if "`e(cmdname)'" != "polbunch" {
+        di as error "estimates in memory not created by polbunch"
+        exit 301
+    }
+    capture confirm matrix e(table)
+    if _rc {
+        di as error "e(table) not found -- rerun polbunch"
+        exit 301
+    }
+
+    preserve
+    quietly {
+        tempname T b0 b1
+        matrix `T' = e(table)
+        local zc = colnumb(`T', "`e(binname)'")
+        local fc = colnumb(`T', "freq")
+        if missing(`zc') | missing(`fc') {
+            noisily di as error "could not locate the bin / freq columns in e(table)"
+            restore
+            exit 498
+        }
+        local nr = rowsof(`T')
+
+        clear
+        set obs `nr'
+        tempvar zest zorig freq exp excl sqe sqo top bot fit0 fit1
+        gen double `zest' = .
+        gen double `freq' = .
+        forvalues i = 1/`nr' {
+            replace `zest' = `T'[`i',`zc'] in `i'
+            replace `freq' = `T'[`i',`fc'] in `i'
+        }
+        if "`e(normalize)'" == "nonormalize" {
+            gen double `zorig' = `zest'
+        }
+        else {
+            gen double `zorig' = e(cutoff_orig) + (`zest' - e(cutoff_est))*e(xscale)
+        }
+
+        local cut = e(cutoff_orig)
+        local lo  = e(lower_limit)
+        local hi  = e(upper_limit)
+        local bw  = e(bw_orig)
+
+        * fitted density per bin (in the estimation coordinate `zest')
+        matrix `b0' = e(b)
+        matrix `b0' = `b0'[1,"h0:"]
+        matrix `b1' = e(b)
+        matrix `b1' = `b1'[1,"h1:"]
+
+        if e(estimator) == 4 {
+            gen double `fit0' = _b[h0:_cons]
+            gen double `fit1' = _b[h1:_cons]
+        }
+        else {
+            local K  = e(polynomial)
+            local Kb = `K' + 1
+            local c0 = `b0'[1,`Kb']
+            local c1 = `b1'[1,`Kb']
+            gen double `fit0' = `c0'
+            gen double `fit1' = `c1'
+            forvalues i = 1/`K' {
+                local c0 = `b0'[1,`i']
+                local c1 = `b1'[1,`i']
+                replace `fit0' = `fit0' + (`c0')*`zest'^`i'
+                replace `fit1' = `fit1' + (`c1')*`zest'^`i'
+            }
+        }
+
+        gen byte   `excl' = inrange(`zorig', `lo', `hi')
+        gen double `exp'  = cond(`zorig' <= `cut', `fit0', `fit1')
+        replace    `exp'  = `fit0' if `excl'
+
+        gen double `sqe' = sqrt(max(`exp', 0))
+        gen double `sqo' = sqrt(max(`freq', 0))
+        if "`style'" == "hanging" {
+            gen double `top' = `sqe'
+            gen double `bot' = `sqe' - `sqo'
+            local yt `"{&radic}frequency  (bars hang from {&radic}fitted)"'
+            local showcurve 1
+        }
+        else if "`style'" == "standing" {
+            gen double `top' = `sqo'
+            gen double `bot' = 0
+            local yt `"{&radic}frequency  ({&radic}fitted overlaid)"'
+            local showcurve 1
+        }
+        else {
+            /* suspended: the residual sqrt(fitted) - sqrt(observed) from 0.
+               positive = model over-predicts, negative = under-predicts;
+               the excess mass shows as the excluded bars spiking down. */
+            gen double `top' = `sqe' - `sqo'
+            gen double `bot' = 0
+            local yt `"{&radic}fitted {&minus} {&radic}frequency"'
+            local showcurve 0
+        }
+        if `showcurve' {
+            local curveplot (line `sqe' `zorig', sort lcolor(maroon) lwidth(medthick))
+            local leg legend(order(3 "fitted counterfactual" 1 "reference bins" 2 "excluded bins") pos(6) cols(3) size(vsmall))
+        }
+        else {
+            local curveplot
+            local leg legend(order(1 "reference bins" 2 "excluded bins") pos(6) cols(2) size(vsmall))
+        }
+
+        * subtitle: reference-region dispersion, split at the cutoff if stored
+        local sub ""
+        capture confirm scalar e(dispersion)
+        if !_rc {
+            local _pd = string(e(dispersion), "%4.2f")
+            local sub "phi-hat = `_pd'"
+            capture confirm scalar e(dispersion_below)
+            if !_rc {
+                local _pdb = string(e(dispersion_below), "%4.2f")
+                local _pda = string(e(dispersion_above), "%4.2f")
+                local sub "`sub'   (below z*: `_pdb'   above: `_pda')"
+            }
+        }
+
+        local bwbar = `bw'*0.85
+    }
+
+    twoway ///
+        (rbar `bot' `top' `zorig' if !`excl', ///
+            barwidth(`bwbar') fcolor(navy%35) lcolor(navy%70) lwidth(vthin)) ///
+        (rbar `bot' `top' `zorig' if `excl', ///
+            barwidth(`bwbar') fcolor(cranberry%40) lcolor(cranberry%80) lwidth(vthin)) ///
+        `curveplot' ///
+        , ///
+        yline(0, lcolor(black) lwidth(thin)) ///
+        xline(`cut', lcolor(maroon) lpattern(dash)) ///
+        xline(`lo' `hi', lcolor(gs9) lpattern(dot)) ///
+        ytitle(`"`yt'"') ///
+        xtitle("`e(binname)'") ///
+        subtitle("`sub'", size(small)) ///
+        `leg' ///
+        graphregion(color(white)) plotregion(lcolor(black)) ///
+        `graphopts'
+
+    restore
 end

@@ -1,3 +1,4 @@
-v 0.1
+v 1.0
 d Martin Eckhoff Andresen, University of Oslo
 p polbunch efficient polynomial bunching estimation
+p polbunchbias first-order bias calculator for polynomial bunching estimators

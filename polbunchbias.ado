@@ -1929,7 +1929,11 @@ void pbx_bias_e2_solve(real scalar nosplit,
         if (bestQ > 0 & !missing(b2Q)) gapQ = b2Q/bestQ
     }
 
-    pbx_bias_e2_objQ(bestdelc, nosplit, Glo, Ghi, Rlo, Rhi, Rbar, trueMass, betat,
+    // capture the return value: an unassigned Mata function-call statement
+    // auto-echoes its result to the results window, which otherwise leaked
+    // this SSR value (twice, whenever pbx_bias_core_ws retries with the
+    // same inputs after a missing first attempt) as a stray bare number.
+    bestQ = pbx_bias_e2_objQ(bestdelc, nosplit, Glo, Ghi, Rlo, Rhi, Rbar, trueMass, betat,
         h1coef, H, hi, dsc, bestbeta)
 }
 

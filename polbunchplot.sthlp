@@ -16,9 +16,15 @@
 {p 10 15 2}
 {cmd:polbunchplot} [namelist] [{cmd:,} {opt names(string)} {opt graph_opts(string)} {opt leg:end_opts(string)} {opt limit(numlist)} {opt log} {opt tru:ncate}]
 
+{p 10 15 2}
+{cmd:polbunchplot} [name] {cmd:, root:ogram} [{opt style(hanging|standing|suspended)} {opt graph_opts(string)}]
+
 
 {pstd}
 {cmd:polbunchplot} plots bunching plots after polbunch estimation for the running variable, based on the polbunch estimate stored in [namelist], if specified, or in memory.
+
+{pstd}
+With {cmd:rootogram} it instead draws a {it:rootogram} (Tukey; Kleiber and Zeileis 2016) -- the observed histogram against the fitted density on a square-root scale, for one model. The fitted density is {it:h0} below the cutoff, {it:h1} above it, and the counterfactual {it:h0} inside the excluded window, so bunching shows as the excluded bars breaking away from the reference-region fit and the reference bins show how well the polynomial tracks the density where nobody bunches. The subtitle carries {cmd:e(dispersion)} and, when available, its split at the cutoff ({cmd:e(dispersion_below/above)}).
 
 
 {synoptset 25 tabbed}{...}
@@ -30,6 +36,8 @@
 {synopt:{opt limit(numlist)}} Only plot values of earnings between the two numbers in limit().{p_end}
 {synopt:{opt tru:ncate}} Truncate values in the bunching region to be no larger than the maximum outside of the bunching region; useful if bunching is so substantial the figure cannot be used to evaluate fit.{p_end}
 {synopt:{opt log}} present log frequency on the y axis.{p_end}
+{synopt:{opt root:ogram}} draw a rootogram (single model) instead of the density plot; see above.{p_end}
+{synopt:{opt style(string)}} rootogram style: {cmd:hanging} (default -- bars of {bf:{&radic}observed} hang from the {bf:{&radic}fitted} curve, bar bottom on 0 = perfect fit), {cmd:standing} (bars stand on the axis, fitted curve overlaid), or {cmd:suspended} (bars = {bf:{&radic}fitted {&minus} {&radic}observed} from 0 -- the residual alone, so small reference-region misfit is visible).{p_end}
 {synoptline}
 
 {marker Author}{...}

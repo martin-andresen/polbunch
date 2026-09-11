@@ -129,7 +129,7 @@ program polbunchsim, eclass
         local vary_e  = (`nume' > 1)
         local vary_c  = (`numc' > 1)
 
-        tempname sim_b sim_extra sim_oldb sim_oldV sim_newb sim_newV
+        tempname sim_b sim_V sim_extra sim_oldb sim_oldV sim_newb sim_newV
         tempname esthold
 
         preserve
@@ -476,6 +476,52 @@ program polbunchsim, eclass
                                         }
                                         matrix colnames `_cof_b' = `newnames'
                                         matrix `this_b' = `_cof_b'
+
+                                        /*
+                                            Parallel variance block for a
+                                            block-diagonal e(V): this model's
+                                            own polbunch covariance on the
+                                            diagonal, zeros between models.
+                                            Off-model covariance is genuinely
+                                            nonzero (same dataset, and btype
+                                            only changes the vce, not the point
+                                            estimates) -- zeroing it is a
+                                            deliberate simplification so that
+                                            _se[] is available per model.
+                                            Skipped for the whole run if any
+                                            contributing model lacks e(V)
+                                            (e.g. btype 0 / vce(none)), since a
+                                            partial block-diagonal V would be
+                                            non-conformable with e(b).
+                                        */
+                                        capture confirm matrix e(V)
+                                        if !_rc {
+                                            tempname _cof_V
+                                            if "`report'" == "" {
+                                                matrix `_cof_V' = e(V)
+                                            }
+                                            else {
+                                                mata: _pbsim_filter_V("e(V)", "`_cof_V'", "`_report_coefs'")
+                                            }
+                                            capture confirm matrix `_cof_V'
+                                            if !_rc & rowsof(`_cof_V') == colsof(`_cof_b') {
+                                                matrix rownames `_cof_V' = `newnames'
+                                                matrix colnames `_cof_V' = `newnames'
+                                                capture confirm matrix `sim_V'
+                                                if _rc {
+                                                    matrix `sim_V' = `_cof_V'
+                                                }
+                                                else {
+                                                    local _nV1 = rowsof(`sim_V')
+                                                    local _nV2 = rowsof(`_cof_V')
+                                                    matrix `sim_V' = ///
+                                                        ( `sim_V', J(`_nV1', `_nV2', 0) \ ///
+                                                          J(`_nV2', `_nV1', 0), `_cof_V' )
+                                                }
+                                            }
+                                            else local _simV_skip = 1
+                                        }
+                                        else local _simV_skip = 1
                                     }
                                 }
 
@@ -576,8 +622,30 @@ program polbunchsim, eclass
                 e(b) now contains only coefficients that came from the
                 constituent polbunch calls. No timing, p-values, or other
                 simulation diagnostics are appended to it.
+
+                e(V) is posted as a block-diagonal matrix -- each model's
+                own polbunch covariance on the diagonal, zeros between
+                models -- but only when e(b) is purely coefficient columns
+                (no report() scalar columns) and every contributing model
+                supplied a conformable e(V). Otherwise e(b) is posted
+                alone, as before, and per-model elasticity SEs remain
+                available in the e(<model>_se) scalars.
             */
-            ereturn post `sim_b'
+            local _post_V = 0
+            capture confirm matrix `sim_V'
+            if !_rc & "`_simV_skip'" == "" & "`_report_scals'" == "" {
+                if rowsof(`sim_V') == colsof(`sim_b') local _post_V = 1
+            }
+            if `_post_V' {
+                * -ereturn post- rejects missing values in V (a failed
+                * per-model SE); zero them, matching the off-model blocks.
+                mata: st_matrix("`sim_V'", editmissing(st_matrix("`sim_V'"), 0))
+                local _bn : colfullnames `sim_b'
+                matrix rownames `sim_V' = `_bn'
+                matrix colnames `sim_V' = `_bn'
+                ereturn post `sim_b' `sim_V'
+            }
+            else ereturn post `sim_b'
 
             foreach s of local scalar_names {
                 ereturn scalar `s' = ``s''
