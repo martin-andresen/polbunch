@@ -1,5 +1,76 @@
 *! polbunchbias -- analytical bias of polynomial bunching estimators
-*! version 2.5.0  07sep2026
+*! version 2.8.0  17sep2026
+*!
+*! 2.8.0: r(iterate_diverged) renamed r(bias_iterate_diverged), matching the
+*!        name polbunch's own inline bias block already used for the same
+*!        flag (e(bias_iterate_diverged), which just reads this r()).
+*!        r(corrected_elasticity)/r(iterations)/r(converged) were considered
+*!        for a similar bias_* rename but are NOT duplicates of
+*!        r(bias_elasticity) -- verified corrected_elasticity =
+*!        input_elasticity - bias_elasticity numerically (0.4 - (-0.0886) =
+*!        0.4886) -- so they were left alone to avoid colliding two
+*!        genuinely different quantities under one name.
+*!
+*! 2.7.0: syntax harmonization (option-naming pass across the package).
+*!        window(zl zh) is now the primary name for the fitting-window inner
+*!        bounds (still real z-units, not bins -- .sthlp says so explicitly);
+*!        support(zlo zhi) is now the primary name for the outer data-support
+*!        bounds. zl()/zh()/zlo()/zhi() are kept as undocumented backward-
+*!        compatible synonyms (test suites still use them). Chosen to stop
+*!        zlo()/zhi() here -- which are INPUTS -- from reading identically to
+*!        polbunch's e(zlo)/e(zhi), which are OUTPUTS (the observed data
+*!        range). Also: e()-mode now reads e(binname) instead of the now-
+*!        removed e(zname) (polbunch stopped returning that duplicate).
+*!
+*! 2.6.0: fixed a genuine unit-dependence bug in estimator 2 (Chetty): the
+*!        SAME physical model -- cutoff, window, relslope() all expressed
+*!        consistently in raw SEK vs. rescaled to units of 1000 SEK --
+*!        produced different, at times sign-flipped, bias_h/bias_e/bias_shift
+*!        depending purely on which units z happened to be in.  Root cause
+*!        was NOT just a preconditioning artifact: h0poly()/relslope()/Saez/
+*!        explicit-mode bcoef was always assembled in raw z-units with
+*!        xscale hardcoded to 1 (unlike e()-mode, which already works in
+*!        polbunch's own well-scaled normalised coordinate), so a cutoff far
+*!        from 0 or a wide window in raw units forced every downstream Gram/
+*!        moment integral to span many orders of magnitude purely from the
+*!        user's choice of units.  For estimator 2 this is more than a
+*!        conditioning inconvenience: the (K+2)-square system sums a Gram
+*!        (shape-fit) block that grows with the raw window scale against a
+*!        bw-normalised mass-constraint rank-1 update that does not, so at
+*!        large raw scale the mass constraint's contribution is lost to
+*!        floating-point rounding independent of any diagonal preconditioner
+*!        -- no diagonal rescaling of an already-assembled matrix can fix an
+*!        additive imbalance between two blocks with different growth rates.
+*!        Fixed in two parts: (a) raw-coefficient modes now renormalise
+*!        bcoef (via the existing pbx_polscale) onto the fitting window's
+*!        own characteristic scale before doing any bias arithmetic, exactly
+*!        mirroring how e()-mode already avoids this by construction -- a
+*!        transparent internal relabelling, the user-facing raw-z-units
+*!        interface of relslope()/h0poly() is unchanged; (b) the estimator-2
+*!        delta preconditioner ddel (1/sqrt(qff)) gained an extra sqrt(sc)
+*!        factor so the beta-beta, beta-delta and delta-delta blocks of the
+*!        BASE (K+2)-square system share one scale even when (a) still
+*!        leaves a residual window-scale mismatch (e.g. a wide window in an
+*!        already-normalised e()-mode coordinate).  Verified: (a) alone
+*!        checked out algebraically exact-invariant for the base Gram block
+*!        but left the raw-SEK case still wrong -- diagnosed down to the
+*!        Jm'Jm mass-row addition via direct Mata-level inspection of the
+*!        preconditioned matrix entries across scales; the COMBINED fix
+*!        reproduces the same bias_h/bias_e/bias_shift/relative_slope to
+*!        ~5 significant digits across raw SEK / thousands-of-SEK / an
+*!        extreme x100000 rescaling, with and without `iterate`, both by
+*!        direct re-parameterisation and (b) alone confirmed as an exact
+*!        proportional (global-constant) change of basis on the base block
+*!        via a standalone Mata diagnostic.  Full regression suite
+*!        (est1/est304/polylayer/cmd/cond/est2) re-run against the fix:
+*!        bit-identical to the pre-fix baseline on every cell (two
+*!        pre-existing test_pbx_cmd.do / test_pbx_est2.do failures, unrelated
+*!        to this change, confirmed present and identical before any of this
+*!        session's edits via a reverted-copy diff).  Also fixed, same
+*!        session: an unassigned Mata function-call statement inside
+*!        pbx_bias_e2_solve() (pbx_bias_e2_objQ()'s return value) was
+*!        auto-echoing a stray SSR value to the results window on every
+*!        estimator-2 call.
 *!
 *! 2.5.0: estimator(4) + constant is now refused.  Saez with a
 *!        constant-density inversion applies a FLAT counterfactual in both
@@ -233,6 +304,7 @@ program define polbunchbias, rclass
     syntax [, ESTimator(numlist max=1) ZSTAR(numlist max=1) ///
         T0(numlist max=1) T1(numlist max=1) ///
         RELSLOPE(numlist max=1) H0poly(numlist) ELasticity(numlist max=1) ///
+        WINDOW(numlist min=2 max=2) SUPPORT(numlist min=2 max=2) ///
         ZLO(numlist max=1) ZHI(numlist max=1) ///
         ZL(numlist max=1) ZH(numlist max=1) ///
         LOG ///
@@ -240,6 +312,30 @@ program define polbunchbias, rclass
         MAXITER(integer 1000) UNDERRELAX(real 0.5) ///
         CONstant EXACT SPLITmass POOLmass NOFALLback NOPROMOTE ///
         PROMOTEtol(real 0.3) ALLOWNEGATIVE H0check ]
+
+    // window()/support(): primary names (2.7.0+). zl()/zh()/zlo()/zhi() are
+    // kept as undocumented backward-compatible synonyms -- window() is the
+    // (zl,zh) fitting-window inner bound pair in raw z-units (NOT bins,
+    // unlike polbunch's window()/limits()); support() is the (zlo,zhi)
+    // outer data-support bound pair.
+    if "`window'" != "" {
+        if "`zl'" != "" | "`zh'" != "" {
+            di as error "polbunchbias: specify at most one of window() / zl()+zh()"
+            exit 198
+        }
+        tokenize `window'
+        local zl `1'
+        local zh `2'
+    }
+    if "`support'" != "" {
+        if "`zlo'" != "" | "`zhi'" != "" {
+            di as error "polbunchbias: specify at most one of support() / zlo()+zhi()"
+            exit 198
+        }
+        tokenize `support'
+        local zlo `1'
+        local zhi `2'
+    }
 
     // vestigial: the model-implied-B option was removed (mirrors polbunch's
     // dropped Bmodel).  Estimator 2 always uses the reduced-form bunching
@@ -272,13 +368,34 @@ program define polbunchbias, rclass
     // xscale: "what units is bcoef expressed in, relative to raw z?"  Only
     // the auto-extracted e(b) polynomial coefficients are in polbunch's own
     // normalised units (xscale = e(xscale)); h0poly()/relslope()/the Saez
-    // two-point construction are always user-supplied or built directly in
-    // raw z (or log-earnings) units, same as explicit mode -- xscale=1 for
-    // all of those, overridden only in the one branch below that reads
-    // e(xscale).  pbx_bias_core/pbx_bias_solve work entirely in this
-    // xscale's units; xscale=1 recovers exactly the old raw-coordinate
-    // behaviour, which is the main regression check for this rewrite.
+    // two-point construction are always user-SUPPLIED in raw z (or
+    // log-earnings) units, same as explicit mode.  The COEFFICIENTS the
+    // user types are always interpreted this way; `_rawcoef' below only
+    // controls an internal (transparent) renormalisation of xscale for
+    // NUMERICAL conditioning, not a change to that interface.
     local _xscale = 1
+    // set to 1 by every branch below that builds bcoef directly in raw
+    // z-units (h0poly/relslope/Saez, e()-mode override or explicit mode);
+    // left 0 only for the e(b)-extraction branch, which already computes
+    // its own well-scaled `_xscale' = e(xscale).  When 1, bcoef is
+    // renormalised (after the mode dispatch below) to a characteristic
+    // scale of the fitting window itself -- a cutoff far from 0 or a wide
+    // window in raw units (e.g. z* = 311,000 SEK, window +/-75,000) would
+    // otherwise force every downstream Gram/moment integral to span many
+    // orders of magnitude purely from the user's choice of units, which is
+    // not just a preconditioning inconvenience: estimator 2's (K+2)-square
+    // system sums a Gram (shape-fit) block that grows with this raw window
+    // scale against a bw-normalised mass-constraint block that does not,
+    // so at large raw scale the mass constraint's contribution can be lost
+    // to floating-point rounding entirely, independent of any diagonal
+    // preconditioner (confirmed: identical physical model, e.g. a cutoff
+    // and window expressed in raw SEK vs. the same window rescaled to
+    // units of 1000 SEK, gave analytically different -- even sign-flipped
+    // -- bias_h/bias_e under the old xscale=1 convention).  Renormalising
+    // xscale here keeps the fitting window at O(1) regardless of the raw
+    // units the user's z happens to be in, exactly mirroring how e()-mode
+    // already avoids this by construction via polbunch's own xscale choice.
+    local _rawcoef = 0
 
     if `ncore' == 0 {
         // ================= e() MODE =================
@@ -301,7 +418,7 @@ program define polbunchbias, rclass
         local islog_val = e(log)
         local zlo       = e(zlo)
         local zhi       = e(zhi)
-        local _zname    = e(zname)
+        local _zname    = e(binname)
 
         capture confirm scalar e(nosplit)
         if !_rc local _e_nosplit = e(nosplit)
@@ -332,6 +449,7 @@ program define polbunchbias, rclass
         if "`bw'" == "" local bw = `_bw'
 
         // ---- build the counterfactual polynomial bcoef ----
+        local _rawcoef = 1
         if "`h0poly'" != "" {
             local _nb : word count `h0poly'
             matrix `bcoef' = J(1, `_nb', 0)
@@ -383,6 +501,7 @@ program define polbunchbias, rclass
             // recentre them on the cutoff (in the running variable -- log
             // earnings when e(log)==1, since polbunch's `log' means the
             // variable is already logged).
+            local _rawcoef = 0
             local _K      = e(polynomial)
             local _cest   = e(cutoff_est)
             local _xscale = e(xscale)
@@ -401,6 +520,7 @@ program define polbunchbias, rclass
     else if `ncore' == 9 & ("`relslope'" != "" | "`h0poly'" != "") {
         // ================= EXPLICIT MODE =================
         local islog_val = ("`log'" != "")
+        local _rawcoef = 1
         if "`bw'" == "" local bw = 1
         if "`h0poly'" != "" {
             local _nb : word count `h0poly'
@@ -428,6 +548,20 @@ program define polbunchbias, rclass
     if !inlist(`estimator', 0, 1, 2, 3, 4) {
         di as error "polbunchbias: estimator must be 0, 1, 2, 3 or 4"
         exit 198
+    }
+
+    // renormalise a raw-z-unit bcoef (h0poly/relslope/Saez) onto the fitting
+    // window's own characteristic scale -- see the `_rawcoef' note above.
+    // pbx_polscale(b,A)[k+1] = b[k+1]*A^k is exactly the coefficient map for
+    // h(A*w') = sum b[k+1]*(A*w')^k, i.e. bcoef expressed in w'=w/A units;
+    // zlo/zhi/zl/zh/zstar are already resolved at this point in EITHER mode.
+    // A pure relabelling of bcoef's own units -- what it means to the user
+    // (raw z-units in, raw z-units back out) is unchanged; only the internal
+    // arithmetic's numerical conditioning is affected.
+    if `_rawcoef' {
+        local _xscale = max(abs(`zlo'-`zstar'), abs(`zhi'-`zstar'), ///
+            abs(`zl'-`zstar'), abs(`zh'-`zstar'), 1)
+        mata: st_matrix("`bcoef'", pbx_polscale(st_matrix("`bcoef'"), `_xscale'))
     }
 
     local _K1 = colsof(`bcoef')
@@ -489,8 +623,10 @@ program define polbunchbias, rclass
     // zstarw is the cutoff's ECONOMIC magnitude in those units (used for
     // the Delta-to-level-shift anchor and the relative-slope prefactor);
     // its ABSOLUTE POSITION is implicitly 0 since _lo_w.._hi_w are already
-    // offsets from it.  _xscale=1 (h0poly/relslope/Saez/explicit mode)
-    // makes all of this identical to the old raw-coordinate locals.
+    // offsets from it.  _xscale=1 recovers exactly the old raw-coordinate
+    // locals; raw-coefficient modes (h0poly/relslope/Saez/explicit) now use
+    // the window's own characteristic scale instead (see `_rawcoef' above),
+    // so _lo_w.._hi_w land at O(1) regardless of the user's z units.
     local _zstarw = `zstar'/`_xscale'
     local _lo_w   = (`zlo'-`zstar')/`_xscale'
     local _hi_w   = (`zhi'-`zstar')/`_xscale'
@@ -733,18 +869,18 @@ program define polbunchbias, rclass
         return scalar corrected_elasticity = `_iterecur'
         return scalar iterations = `_iteriter'
         return scalar converged = `_iterconv'
-        return scalar iterate_diverged = 0
+        return scalar bias_iterate_diverged = 0
     }
     else {
         return scalar corrected_elasticity = _pbxs_ecur
         return scalar iterations = _pbxs_iter
         return scalar converged = _pbxs_conv
-        return scalar iterate_diverged = _pbxs_diverged
+        return scalar bias_iterate_diverged = _pbxs_diverged
     }
 
     if `_doiter' & _pbxs_diverged == 1 & !`_promoted' {
         di as error "Warning: the iterate self-consistency loop did not converge for this cell;"
-        di as error "         reporting the un-iterated (non-self-consistent) bias. r(iterate_diverged)=1."
+        di as error "         reporting the un-iterated (non-self-consistent) bias. r(bias_iterate_diverged)=1."
     }
 
     if `_promoted' {
@@ -1970,7 +2106,7 @@ real rowvector pbx_bias_core_ws(
     real scalar hminus, hplus, Hstar, Bsaez, sleft, sright
     real scalar sright0, hright0, m_saez, a_saez
     real scalar Asaez, qsaez, disc, xhat, dlogzhat
-    real scalar K1, np, delc, q, dqdD, dstep, nlsit, qff, ddel
+    real scalar K1, np, delc, q, dqdD, dstep, nlsit, qff, ddel, sclw
     real scalar uM, Sbar, Sright, lo_right, trueRightMass, trueMass, hlo, llo
     real scalar bestQ2, nbasin2, gapQ2
     real rowvector biasbeta
@@ -2186,15 +2322,36 @@ real rowvector pbx_bias_core_ws(
         // the beta block is h0-scale-invariant, so a tall h0 (counts ~1e5,
         // or an h0poly() given in count units) leaves GtG[np,np] ~ height^2
         // dominating the O(1) beta block and trips pbx_illcond even when
-        // the system is perfectly solvable.  Scaling the delta index by
-        // 1/sqrt(qff) sends GtG[np,np] -> O(dqdD^2) and the off-diagonal
-        // -> O(1).  Still an exact change of basis (the D's around
-        // invsym(D GtG D) cancel), so it moves only floating-point paths
-        // and which cases clear the conditioning guard -- never a
-        // well-posed result.
+        // the system is perfectly solvable.
+        //
+        // 1/sqrt(qff) alone cancels the HEIGHT dependence (GtG[np,np] ->
+        // O(dqdD^2), height-free) but leaves a residual scale dependence on
+        // sc = the window's own characteristic LENGTH: qff ~ height^2*sc, so
+        // 1/sqrt(qff) ~ 1/(height*sqrt(sc)), and the beta-delta cross terms
+        // (built from Mhi ~ height*sc^(k+1)) end up O(sqrt(sc)) once
+        // preconditioned by dsc (~sc^-k) and this factor -- NOT O(1) as the
+        // original comment here claimed -- while the beta block itself
+        // (dsc alone) is uniformly O(sc).  An extra sqrt(sc) factor brings
+        // every block (beta-beta, beta-delta, delta-delta) to the SAME O(sc)
+        // scale, which is then just a global constant multiplying the whole
+        // preconditioned matrix (irrelevant to both invsym() and
+        // pbx_illcond()'s eigenvalue RATIO) -- i.e. genuinely removes the
+        // dependence rather than merely relabelling it.  Equivalently,
+        // ddel = sqrt(sc/qff) = 1/(effective RMS height of h0 over the right
+        // window), height-based like the original design intended, but no
+        // longer contaminated by the window's absolute length scale.
+        // Confirmed by a same-DGP re-parameterisation check (raw SEK vs. the
+        // same window/relslope rescaled to units of 1000 SEK): before this
+        // fix bias_h/bias_e/bias_shift changed (even in SIGN) between the
+        // two unit systems despite representing an identical model; after
+        // it they agree to numerical precision.  Still an exact change of
+        // basis (the D's around invsym(D GtG D) cancel), so this only moves
+        // floating-point paths and which cases clear the conditioning guard
+        // -- never a well-posed result -- exactly as before.
         dsc  = pbx_monoscale(lo, hi, L, H, K)
+        sclw = max((abs(lo), abs(hi), abs(L), abs(H), 1))
         ddel = 1
-        if (qff > 1e-300) ddel = 1/sqrt(qff)
+        if (qff > 1e-300) ddel = sqrt(sclw)/sqrt(qff)
         dsc2 = (dsc \ ddel)
         if (pbx_illcond((dsc * dsc') :* (Glo + Ghi))) {
             return((estimator, bmodel, islog, zstar_out, t0, t1, tau, lambda_rep,

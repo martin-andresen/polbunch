@@ -1,4 +1,4 @@
-*! polbunch_contrast version date 20260911
+*! polbunch_contrast version date 20260917
 * Author: Martin Eckhoff Andresen
 * This program is part of the polbunch package.
 *
@@ -47,8 +47,8 @@ program define polbunch_contrast, rclass
 	}
 	if "`boottype'" == "" local boottype multinomial
 	local boottype = strlower("`boottype'")
-	if !inlist("`boottype'","multinomial","dirichlet") {
-		di as error "boottype() must be multinomial (= dirichlet).  residual / wild resample around"
+	if !inlist("`boottype'","multinomial") {
+		di as error "boottype() must be multinomial.  residual / wild resample around"
 		di as error "a per-model fitted mean and are not supported here; use the contrast option"
 		di as error "inside polbunch for those."
 		exit 198

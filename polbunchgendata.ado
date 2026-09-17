@@ -1,8 +1,8 @@
 program polbunchgendata, rclass
-	syntax newvarname [, obs(integer 5000) cutoff(real 1) el(string) ///
+	syntax newvarname [, obs(integer 5000) cutoff(real 1) ELasticity(string) ///
 		t0(real 0.2) t1(real 0.6) distribution(string) log buncherror(string) ///
 		INCOMEeffect(string) PANel(numlist min=3 max=4) ///
-		HEAP(numlist min=2 max=3) ]
+		HEAP(numlist min=2 max=3) INATTention(real 0) WELfriction(real 0) ]
 
 	/*
 		panel(n T rho [mode]) : generate a pooled panel of n individuals
@@ -53,11 +53,11 @@ program polbunchgendata, rclass
 		above).  distribution() gives the COUNTERFACTUAL earnings density
 		(what people would earn facing t0 everywhere).
 
-		el(spec)          : the compensated elasticity.  spec is EITHER a
+		elasticity(spec)  : the compensated elasticity.  spec is EITHER a
 			nonnegative number (homogeneous elasticity) OR any Stata
 			expression, evaluated per observation, that draws an individual
-			elasticity e_i -- e.g. el(0.4), el(0.4 + rnormal(0,0.1)),
-			el(rbeta(2,3)*1.5).  Draws are floored at 1e-8.  The realised
+			elasticity e_i -- e.g. elasticity(0.4), elasticity(0.4 + rnormal(0,0.1)),
+			elasticity(rbeta(2,3)*1.5).  Draws are floored at 1e-8.  The realised
 			mean is returned in r(el_mean).  Default 0.4.
 
 		incomeeffect(spec) : income effects.  spec is EITHER a number in
@@ -65,7 +65,7 @@ program polbunchgendata, rclass
 			an individual eta_i in [0,1) (values outside are clipped, with a
 			note).  eta is the consumption-curvature parameter of
 				u(c,z) = c^(1-eta)/(1-eta) - (n/(1+1/e))(z/n)^(1+1/e).
-			el() is the compensated elasticity; the h(z) curvature exponent
+			elasticity() is the compensated elasticity; the h(z) curvature exponent
 			is 1/e_i = 1/ec_i - eta_i.  eta=0 reproduces the
 			no-income-effect iso-elastic model exactly.  The bunching window
 			is unchanged (width set by the compensated elasticity, as in
@@ -87,13 +87,57 @@ program polbunchgendata, rclass
 			E[n_bunchers] intact.  r(n_heaped) reports how many observations
 			were moved.  Smaller guardmult puts spikes closer to the window
 			(more bias in B); larger keeps B clean but only widens SEs.
+
+		inattention(share) / welfriction(theta) : two OPTIMIZATION-FRICTION
+			models for would-be bunchers (z0 in the Saez window), both
+			nested as special cases of the search-cost model in Chetty,
+			Friedman, Olsen & Pistaferri (2011 QJE), "Adjustment Costs,
+			Firm Responses, and Micro vs. Macro Labor Supply Elasticities."
+			Both are A1 violations: the observed excess mass under-states
+			the frictionless behavioural response, so a model that assumes
+			frictionless optimization (A1) is misspecified even though A2
+			(counterfactual == reference density) and A3 (h0 smooth
+			polynomial) still hold. Mutually exclusive; levels only (not
+			supported with log or incomeeffect(), which need the
+			quasilinear-utility comparison below). z0 here is each
+			individual's OWN counterfactual draw (their earnings absent
+			the kink) -- Chetty et al.'s "initial offer."
+
+			inattention(share) : Chetty et al.'s Special Case 3 (Section
+				II.E) -- a discrete two-type mixture. A fraction `share' of
+				the population faces infinite search costs and never
+				responds to the kink at all (z stays at z0, exactly as
+				drawn); the remaining (1-`share') face none and bunch
+				exactly as in the frictionless model. This is the
+				mechanism Chetty et al. use to reconcile small "micro"
+				bunching elasticities with larger "macro"/structural ones.
+				r(n_frictionfail) reports how many would-be bunchers this
+				reverted to non-bunchers.
+
+			welfriction(theta) : Chetty et al.'s Special Case 2 (Section
+				II.D, eq. 7-8) -- a continuous search-cost/inaction-region
+				model, restated as a MONEY-METRIC WELFARE-GAIN threshold
+				(theta, a share of income at the cutoff) rather than their
+				fixed utils cost kappa, so theta=0.01-0.02 reads as "only
+				bunch if it's worth at least 1-2% of income at the kink."
+				Under the maintained quasilinear-in-consumption iso-elastic
+				disutility v(z)=k/(1+eps)*z^(1+eps), eps=1/e_i, k pinned
+				down by z0 solving the flat-t0 FOC, utility differences ARE
+				money-metric, so the comparison is exact (no approximation
+				needed, unlike Chetty et al.'s quadratic approximation).
+				A would-be buncher relocates to the cutoff only if
+				u(cutoff) - u(z0) [both evaluated under the TRUE two-rate
+				schedule they actually face] exceeds theta*cutoff; workers
+				near the edges of the Saez window (where the frictionless
+				gain from relocating is smallest) are the first to fail.
+				r(n_frictionfail) as above.
 	*/
 
-	if "`el'"=="" local el 0.4
+	if "`elasticity'"=="" local elasticity 0.4
 	if "`incomeeffect'"=="" local incomeeffect 0
 
 	// constant?  real("...") is nonmissing for a plain number, missing for an expression
-	local elc  = real("`el'")
+	local elc  = real("`elasticity'")
 	local iec  = real("`incomeeffect'")
 
 	// -------- panel scaffold --------
@@ -142,7 +186,7 @@ program polbunchgendata, rclass
 			exit 198
 		}
 		if `elc'<. & `elc'<0 {
-			noi di as error "el() must be nonnegative."
+			noi di as error "elasticity() must be nonnegative."
 			exit 198
 		}
 		if `iec'<. & (`iec'<0 | `iec'>=1) {
@@ -151,6 +195,26 @@ program polbunchgendata, rclass
 		}
 		if "`log'"=="log" & (`iec'>=. | `iec'!=0) {
 			noi di as error "incomeeffect() is not supported with log earnings."
+			exit 198
+		}
+		if `inattention'<0 | `inattention'>1 {
+			noi di as error "inattention() must be in [0,1]."
+			exit 198
+		}
+		if `welfriction'<0 | `welfriction'>=1 {
+			noi di as error "welfriction() must be in [0,1)."
+			exit 198
+		}
+		if `inattention'>0 & `welfriction'>0 {
+			noi di as error "inattention() and welfriction() are two distinct friction models -- specify only one at a time."
+			exit 198
+		}
+		if (`inattention'>0 | `welfriction'>0) & "`log'"=="log" {
+			noi di as error "inattention()/welfriction() are not supported with log (need the levels tax-schedule utility comparison)."
+			exit 198
+		}
+		if (`inattention'>0 | `welfriction'>0) & `iec'>0 {
+			noi di as error "inattention()/welfriction() are not supported together with incomeeffect() (need the quasilinear, no-income-effect utility comparison)."
 			exit 198
 		}
 
@@ -253,9 +317,9 @@ program polbunchgendata, rclass
 
 		// -------- individual compensated elasticity --------
 		tempvar ec
-		cap gen double `ec' = `el'
+		cap gen double `ec' = `elasticity'
 		if _rc {
-			noi di as error "el() must be a nonnegative number or a valid Stata expression, e.g. 0.4 or 0.4 + rnormal(0,0.1)."
+			noi di as error "elasticity() must be a nonnegative number or a valid Stata expression, e.g. 0.4 or 0.4 + rnormal(0,0.1)."
 			exit 198
 		}
 		count if `ec'<0 | missing(`ec')
@@ -281,6 +345,11 @@ program polbunchgendata, rclass
 
 		// -------- apply the behavioural response --------
 		tempvar bunch
+		// snapshot z0 (each individual's counterfactual draw, pre-response)
+		// -- inattention()/welfriction() below need this even after the
+		// bunching relocation overwrites `varlist' for bunchers.
+		tempvar z0
+		gen double `z0' = `varlist'
 
 		if "`log'"=="log" {
 			tempvar rho
@@ -296,9 +365,47 @@ program polbunchgendata, rclass
 				`cutoff' * ((1-`t0')/(1-`t1'))^`ec')
 			replace `varlist' = `cutoff' if `bunch'
 
+			// ---- optimization frictions (Chetty et al. 2011) ----
+			// only would-be bunchers (bunch==1) are at risk of reverting
+			// to z0; genuine non-bunchers are untouched either way.
+			tempvar frictionfail
+			gen byte `frictionfail' = 0
+			if `inattention' > 0 {
+				// Special Case 3 (Section II.E): discrete two-type
+				// mixture -- a fraction `inattention' of the population
+				// faces infinite search costs and never responds.
+				replace `frictionfail' = (`bunch' & runiform() < `inattention')
+			}
+			else if `welfriction' > 0 {
+				// Special Case 2 (Section II.D, eq. 7-8), restated as a
+				// money-metric welfare-gain threshold under quasilinear
+				// iso-elastic utility v(z)=k/(1+eps)*z^(1+eps):
+				//   - eps_i = 1/e_i
+				//   - k_i pinned down by z0_i solving the flat-t0 FOC:
+				//       (1-t0) = k_i*z0_i^eps_i  =>  k_i = (1-t0)*z0_i^(-eps_i)
+				//   - u(cutoff) uses c(cutoff)=(1-t0)*cutoff (the t0 branch)
+				//   - u(z0) uses c(z0)=(1-t0)*cutoff+(1-t1)*(z0-cutoff),
+				//     the consumption the individual ACTUALLY gets if they
+				//     just keep reporting z0 under the true two-rate
+				//     schedule (z0 is in the window, so z0 > cutoff)
+				// Relocate to the cutoff only if u(cutoff)-u(z0) clears
+				// `welfriction' * cutoff (a share of income at the kink).
+				tempvar eps k u_star u_z0 gain
+				gen double `eps' = 1/`ec'
+				gen double `k'      = (1-`t0') * `z0'^(-`eps') if `bunch'
+				gen double `u_star' = (1-`t0')*`cutoff' ///
+					- `k'/(1+`eps') * `cutoff'^(1+`eps') if `bunch'
+				gen double `u_z0'   = ((1-`t0')*`cutoff' + (1-`t1')*(`z0'-`cutoff')) ///
+					- `k'/(1+`eps') * `z0'^(1+`eps') if `bunch'
+				gen double `gain'   = `u_star' - `u_z0' if `bunch'
+				replace `frictionfail' = (`bunch' & `gain' < `welfriction' * `cutoff')
+			}
+			replace `varlist' = `z0' if `frictionfail'
+			replace `bunch'   = 0    if `frictionfail'
+
 			if `etamax'==0 {
 				replace `varlist' = `varlist' * ((1-`t1')/(1-`t0'))^`ec' ///
-					if `varlist' > `cutoff' & !`bunch'
+					if `varlist' > `cutoff' & !`bunch' & !`frictionfail'
 			}
 			else {
 				mata: pbgd_income("`varlist'", "`ec'", "`etav'", "`bunch'", ///
@@ -344,6 +451,16 @@ program polbunchgendata, rclass
 		return scalar n_bunchers     = r(N)
 		return scalar share_bunching = r(N)/`obs'
 		return scalar n_heaped       = `heap_n'
+		local n_frictionfail = 0
+		if "`log'" != "log" {
+			// `frictionfail' only exists on the levels branch (frictions
+			// are not supported with log -- validated above); it is
+			// always defined there (initialised to 0) regardless of
+			// whether inattention()/welfriction() were actually used.
+			count if `frictionfail'
+			local n_frictionfail = r(N)
+		}
+		return scalar n_frictionfail = `n_frictionfail'
 		su `ec', meanonly
 		return scalar el_mean        = r(mean)
 		su `etav', meanonly

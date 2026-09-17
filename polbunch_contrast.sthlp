@@ -27,7 +27,7 @@
 {synopt:{opt target(coef)}}element of {cmd:e(b)} to contrast; default {cmd:bunching:elasticity}{p_end}
 {synopt:{opt reps(#)}}bootstrap replications; default {cmd:reps(999)}{p_end}
 {synopt:{opt seed(#)}}random-number seed{p_end}
-{synopt:{opt boottype(scheme)}}resampling scheme: {cmd:multinomial} (default; {cmd:dirichlet} is a synonym){p_end}
+{synopt:{opt boottype(scheme)}}resampling scheme: {cmd:multinomial} (default, and currently the only one){p_end}
 {synopt:{opt level(#)}}confidence level for the reported interval; default {cmd:level(95)}{p_end}
 {synopt:{opt nodots}}suppress the replication dots{p_end}
 {synoptline}
@@ -62,7 +62,7 @@ This is the general-purpose companion to the {cmd:contrast} option inside {helpb
 {opt seed(#)} seeds the random-number generator.  With the same seed the resamples match those of {cmd:polbunch}'s own {cmd:vce(bootstrap)} / {cmd:contrast}.
 
 {phang}
-{opt boottype(scheme)} selects the resampling scheme.  Only {cmd:multinomial} (equivalently {cmd:dirichlet}) is supported -- a Dirichlet reweight of the bin counts, which is the standard binned bootstrap in the bunching literature and equals resampling individuals.  {cmd:residual} and {cmd:wild} resample around a per-model fitted mean and are available only through the {cmd:contrast} option inside {cmd:polbunch}.
+{opt boottype(scheme)} selects the resampling scheme.  Only {cmd:multinomial} is supported -- a Dirichlet reweight of the bin counts (the standard binned bootstrap in the bunching literature, and equal to resampling individuals), matching the {cmd:multinomial} name used by {helpb polbunch}'s own {cmd:vce(bootstrap, multinomial)}.  {cmd:residual} and {cmd:wild} resample around a per-model fitted mean and are available only through the {cmd:contrast} option inside {cmd:polbunch}.
 
 {phang}
 {opt level(#)} sets the confidence level of the reported percentile interval for the difference.

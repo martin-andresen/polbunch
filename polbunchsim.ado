@@ -1,7 +1,7 @@
 capture program drop polbunchsim
 program polbunchsim, eclass
     syntax [, zmin(string) zmax(string) log reps(integer 1) ///
-        obs(integer 5000) cutoff(real 1) el(string) ///
+        obs(integer 5000) cutoff(real 1) ELasticity(string) ///
         t0(real 0.2) t1(real 0.6) bw(real 0.01) ///
         INCOMEeffect(string) buncherror(string) ///
         bootreps(integer 500) POLynomial(integer 1) ///
@@ -10,7 +10,8 @@ program polbunchsim, eclass
         clist(string) sample(string)  ///
         est4limits(numlist) limits(numlist) report(string) SCALARsonly DEBUG ///
         PANel(numlist min=3 max=4) B0(real -999) E0(real -999) ///
-        HEAP(numlist min=2 max=3)]
+        HEAP(numlist min=2 max=3) INATTention(real 0) WELfriction(real 0) ///
+        PERMStep(real 0) PERMMaxcutoffs(integer 60)]
 
     /*
         panel(n T rho)  -- pooled-panel DGP, passed straight to
@@ -22,8 +23,13 @@ program polbunchsim, eclass
         large polbunchgendata draw and pass them in; otherwise b0
         falls back to the realised bunch count of each replication (a
         noisy target -- fine for a smoke test, not for coverage numbers)
-        and e0 falls back to the homogeneous el() value.  e0(0) is a
+        and e0 falls back to the homogeneous elasticity() value.  e0(0) is a
         valid value (size cell); the sentinel for "not given" is < 0.
+
+        permstep(#) / permmaxcutoffs(#) -- passed straight to
+        polbunch_permute's step()/maxcutoffs() for btype 12 (see below).
+        permstep(0) (the default) resolves to polbunch_permute's own
+        default, the fitted model's bw.
     */
 
     /*
@@ -36,9 +42,9 @@ program polbunchsim, eclass
     */
 
     /*
-        el() takes EITHER a nonnegative number or a Stata expression
+        elasticity() takes EITHER a nonnegative number or a Stata expression
         (drawn per observation), passed straight to polbunchgendata --
-        as do incomeeffect() and buncherror().  When el() is an
+        as do incomeeffect() and buncherror().  When elasticity() is an
         expression there is no single "true" elasticity: the realised
         mean r(el_mean) from polbunchgendata is used as the target of
         the elasticity coverage test and returned in e(eltrue).
@@ -61,8 +67,8 @@ program polbunchsim, eclass
         if "`zmax'" == "" local zmax "."
         if "`btype'" == "" local btype 1
         if "`estimator'" == "" local estimator 3
-        if "`el'" == "" local el 0.4
-        local elnum = real("`el'")
+        if "`elasticity'" == "" local elasticity 0.4
+        local elnum = real("`elasticity'")
 
         if "`clist'" == "" local clist `"noconstant"'
 
@@ -153,8 +159,9 @@ program polbunchsim, eclass
         if "`heap'" != "" local heapopt heap(`heap')
 
         capture noisily polbunchgendata z, obs(`obs') cutoff(`cutoff') ///
-            el(`el') t0(`t0') t1(`t1') `log' distribution(`distribution') ///
-            incomeeffect(`incomeeffect') buncherror(`buncherror') `panelopt' `heapopt'
+            elasticity(`elasticity') t0(`t0') t1(`t1') `log' distribution(`distribution') ///
+            incomeeffect(`incomeeffect') buncherror(`buncherror') `panelopt' `heapopt' ///
+            inattention(`inattention') welfriction(`welfriction')
 
         local genrc = _rc
         local btrue_realized = .
@@ -201,6 +208,16 @@ program polbunchsim, eclass
                         }
 
                         local rc = 0
+                        local sim_gof_p        = .
+                        local sim_gof_deviance = .
+                        local sim_gof_p_below  = .
+                        local sim_polyused     = .
+                        local permrc           = .
+                        local permp            = .
+                        local permobserved     = .
+                        local permobservedse   = .
+                        local permnplacebo     = .
+                        local permntried       = .
 
                         if `bt' == 0 {
                             capture `dbgpfx' polbunch z `iff', cutoff(`cutoff') ///
@@ -213,6 +230,67 @@ program polbunchsim, eclass
                                 pol(`polynomial') bw(`bw') t0(`t0') t1(`t1') ///
                                 `log' estimator(`e') vce(analytic) `c' ///
                                 `opts' `uselimits'
+                            /*
+                                polbunch silently LOWERS the polynomial order
+                                (by 1, possibly repeatedly) when the two
+                                one-sided polynomials are rank-deficient at
+                                the requested order (its own "Note: Polynomial
+                                order lowered..." -- see polbunch.ado). e(),
+                                not the requested `polynomial' local, is the
+                                only place the ACTUAL fitted degree survives,
+                                so it's captured here every rep -- otherwise a
+                                sweep over polynomial() (e.g. sim_assumption_
+                                tests.do's Panel B) can silently re-fit a
+                                lower K than requested with no way to tell.
+                            */
+                            if _rc == 0 {
+                                capture confirm scalar e(polynomial)
+                                if !_rc local sim_polyused = e(polynomial)
+                            }
+                            /*
+                                Reference-region GoF/deviance is captured for
+                                EVERY estimator, not just 0. For estimator 0
+                                (unrestricted: h0, h1 fit separately, no
+                                nested restriction to run a Wald/Hausman/MD
+                                test against) this is the ONLY assumption
+                                test available, and A3 alone at that (see
+                                test.tex's "below only" paragraph). For
+                                estimators 1/2/3, this is POOLED deviance on
+                                the RESTRICTED fit -- the same overall null as
+                                the omnibus Wald/MD test (that estimator's
+                                cross-kink restriction, given A2/A3), just
+                                viewed through the many-bin reference-region
+                                fit rather than the few-parameter structural
+                                contrast; the two are complementary (weak vs.
+                                strong against smooth vs. localized
+                                departures respectively -- confirmed by
+                                direct simulation, sim_assumption_tests.do's
+                                panels B/C). Captured here, immediately after
+                                the fit, so no later diagnostic call
+                                (Hausman, bootstrap, ...) can overwrite e()
+                                first.
+                            */
+                            if _rc == 0 {
+                                capture estat gof
+                                if _rc == 0 {
+                                    local sim_gof_p        = e(deviance_p)
+                                    local sim_gof_deviance = e(deviance)
+                                    /*
+                                        below-cutoff-only deviance p-value: a
+                                        PURE A3 test (h0's own fit against
+                                        clean reference data, untouched by any
+                                        behavioral response) -- unlike the
+                                        pooled deviance_p above, which mixes
+                                        in h1's fit (A3 + A1/A2). Exposed
+                                        separately since a DGP that only
+                                        violates A3 (e.g. sim_assumption_
+                                        tests.do's panel B) should show more
+                                        power here than in the pooled version.
+                                    */
+                                    capture confirm scalar e(deviance_below_p)
+                                    if !_rc local sim_gof_p_below = e(deviance_below_p)
+                                }
+                            }
                         }
                         else if `bt' == 2 {
                             /* individual (person-year) nonparametric bootstrap,
@@ -293,11 +371,62 @@ program polbunchsim, eclass
                                 `log' estimator(`e') vce(conventional) scale(x2) `c' ///
                                 `opts' `uselimits'
                         }
+                        else if `bt' == 12 {
+                            /* polbunch_permute: placebo-cutoff permutation
+                               inference (r(p) against H0: no bunching
+                               anywhere), layered on top of an ordinary
+                               vce(analytic) fit so sim_b/sim_se_b/sim_el
+                               stay comparable to btype 1 in the same cell.
+                               polbunch_permute performs its own separate,
+                               always-allownegative internal refit at the
+                               true cutoff -- intentionally decoupled from
+                               this headline point estimate -- so its
+                               output is captured into sim_perm_* below,
+                               not folded into sim_b/sim_se_b. */
+                            capture `dbgpfx' polbunch z `iff', cutoff(`cutoff') ///
+                                pol(`polynomial') bw(`bw') t0(`t0') t1(`t1') ///
+                                `log' estimator(`e') vce(analytic) `c' ///
+                                `opts' `uselimits'
+                            /* the base fit's own rc drives elast/b_bunch
+                               extraction below (via `rc', set from this
+                               local right after the branch) -- kept
+                               separate from polbunch_permute's own rc
+                               (permrc) so a permute failure never discards
+                               an otherwise-successful headline point
+                               estimate. */
+                            local basefit_rc = _rc
+                            if `basefit_rc' == 0 {
+                                /* polbunch_permute refits internally (the
+                                   verification/observed refit, then every
+                                   placebo); protect this headline fit's
+                                   e() from whatever it leaves active if it
+                                   exits mid-way, so elast/b_bunch below
+                                   always come from THIS fit regardless of
+                                   how the permute call itself fares. */
+                                tempname _basehold
+                                quietly estimates store `_basehold'
+                                capture `dbgpfx' polbunch_permute, ///
+                                    target(bunching:excess_mass) ///
+                                    step(`permstep') maxcutoffs(`permmaxcutoffs') nodots
+                                if _rc == 0 {
+                                    local permrc          = 0
+                                    local permp            = r(p)
+                                    local permobserved     = r(observed)
+                                    local permobservedse   = r(observed_se)
+                                    local permnplacebo     = r(n_placebo)
+                                    local permntried       = r(n_placebo_tried)
+                                }
+                                else local permrc = _rc
+                                quietly estimates restore `_basehold'
+                                estimates drop `_basehold'
+                            }
+                        }
                         else {
                             local rc = 198
                         }
 
-                        if `bt' <= 11 local rc = _rc
+                        if `bt' == 12 local rc = `basefit_rc'
+                        else if `bt' <= 11 local rc = _rc
 
                         timer off 1
                         timer list
@@ -657,7 +786,7 @@ program polbunchsim, eclass
             ereturn scalar obs    = `obs'
             ereturn scalar cutoff = `cutoff'
             if `elnum' < .  ereturn scalar el = `elnum'
-            else            ereturn local  el "`el'"
+            else            ereturn local  el "`elasticity'"
             if "`eltrue'" != "" ereturn scalar eltrue = `eltrue'
             if "`ietrue'" != "" ereturn scalar ietrue = `ietrue'
             ereturn local incomeeffect "`incomeeffect'"
@@ -702,6 +831,16 @@ program polbunchsim, eclass
                 ereturn scalar sim_chi2_hausman          = `chi2_hausman'
                 ereturn scalar sim_p_hausman             = `p_hausman'
                 ereturn scalar sim_delta_md              = `delta_md'
+                ereturn scalar sim_p_gof                 = `sim_gof_p'
+                ereturn scalar sim_gof_deviance          = `sim_gof_deviance'
+                ereturn scalar sim_p_gof_below           = `sim_gof_p_below'
+                ereturn scalar sim_polyused              = `sim_polyused'
+                ereturn scalar sim_perm_rc               = `permrc'
+                ereturn scalar sim_perm_p                = `permp'
+                ereturn scalar sim_perm_observed         = `permobserved'
+                ereturn scalar sim_perm_observed_se      = `permobservedse'
+                ereturn scalar sim_perm_n_placebo        = `permnplacebo'
+                ereturn scalar sim_perm_n_tried          = `permntried'
                 ereturn scalar eltrue                    = `eltrue'
                 ereturn scalar ietrue                    = `ietrue'
                 ereturn scalar obs                       = `obs'
@@ -727,7 +866,7 @@ program polbunchsim, eclass
                 ereturn scalar obs     = `obs'
                 ereturn scalar cutoff  = `cutoff'
                 if `elnum' < .  ereturn scalar el = `elnum'
-                else            ereturn local  el "`el'"
+                else            ereturn local  el "`elasticity'"
                 if "`eltrue'" != "" ereturn scalar eltrue = `eltrue'
                 if "`ietrue'" != "" ereturn scalar ietrue = `ietrue'
                 ereturn local incomeeffect "`incomeeffect'"
@@ -832,7 +971,7 @@ program polbunchsim, eclass
             ereturn scalar obs    = `obs'
             ereturn scalar cutoff = `cutoff'
             if `elnum' < .  ereturn scalar el = `elnum'
-            else            ereturn local  el "`el'"
+            else            ereturn local  el "`elasticity'"
             if "`eltrue'" != "" ereturn scalar eltrue = `eltrue'
             if "`ietrue'" != "" ereturn scalar ietrue = `ietrue'
             ereturn local incomeeffect "`incomeeffect'"

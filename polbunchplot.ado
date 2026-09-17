@@ -1,4 +1,4 @@
-* polbunchplot version date 20260910
+* polbunchplot version date 20260917
 * Author: Martin Eckhoff Andresen
 * This program is part of the polbunch package.
 
@@ -7,7 +7,7 @@ program define polbunchplot
 
     syntax [anything(name=models id="stored estimation name(s)")], ///
         [ graph_opts(string) LEGend_opts(string) NAMes(string) noci nostar ///
-          limit(numlist min=2 max=2) log TRUncate ///
+          XRange(numlist min=2 max=2) log TRUncate ///
           ROOTogram STYLE(string) STANDing ]
 
     if "`rootogram'`style'`standing'" != "" {
@@ -181,9 +181,9 @@ program define polbunchplot
                     `"(`cutoff_est_plot' + (x - `cutoff_org_plot')/`xscale_plot')"'
             }
 
-            if "`limit'" != "" {
+            if "`xrange'" != "" {
 
-                gettoken min_orig max_orig : limit
+                gettoken min_orig max_orig : xrange
 
                 drop if ///
                     `z_orig' < `min_orig' | ///
@@ -629,13 +629,13 @@ program define polbunchplot
 
         /*
         ================================================================
-        limit()
+        xrange()
         ================================================================
         */
 
-        if "`limit'" != "" {
+        if "`xrange'" != "" {
 
-            gettoken min_orig max_orig : limit
+            gettoken min_orig max_orig : xrange
 
             drop if ///
                 `z_orig' < `min_orig' | ///
@@ -806,9 +806,9 @@ program define polbunchplot
 
 
             /*
-                Apply limit() to this model's range.
+                Apply xrange() to this model's range.
             */
-            if "`limit'" != "" {
+            if "`xrange'" != "" {
 
                 local xmin_m = ///
                     max(`xmin_m', `min_orig')

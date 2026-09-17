@@ -1,11 +1,11 @@
-				*! polbunch version date 20260910
+				*! polbunch version date 20260917
 				* Author: Martin Eckhoff Andresen
 				* This program is part of the polbunch package.
 				
 				cap prog drop polbunch
 				program polbunch, eclass sortpreserve
 					syntax varlist(min=1 max=2) [if] [in],  CUToff(real) [bw(numlist min=1 max=1 >0)  ///
-					LIMits(numlist max=2 min=2 integer) ///
+					WINDOW(numlist max=2 min=2 integer) LIMits(numlist max=2 min=2 integer) ///
 					t0(numlist min=1 max=1 <1) ///
 					t1(numlist min=1 max=1 <1) ///
 					POLynomial(integer 7) ///
@@ -17,7 +17,7 @@
 					notransform ///
 					positive ///
 					nonormalize ///
-					BOOTreps(integer 500) ///
+					REPS(integer -1) BOOTreps(integer -1) ///
 					vce(string) ///
 					SCALE(string) ///
 					NOMASScorr ///
@@ -38,6 +38,29 @@
 					]
 
 					local cmdline0 `"`0'"'
+
+					// window() is the primary name (2.7.0+) for the excluded-region
+					// bin-offset pair; limits() is kept as an undocumented
+					// backward-compatible synonym.
+					if "`window'" != "" {
+						if "`limits'" != "" {
+							di as error "polbunch: specify at most one of window() / limits()"
+							exit 198
+						}
+						local limits `window'
+					}
+
+					// reps() is the primary name (2.8.0+) for the bootstrap
+					// replication count; bootreps() is kept as an undocumented
+					// backward-compatible synonym.
+					if `reps' != -1 {
+						if `bootreps' != -1 {
+							di as error "polbunch: specify at most one of reps() / bootreps()"
+							exit 198
+						}
+						local bootreps = `reps'
+					}
+					if `bootreps' == -1 local bootreps 500
 
 					 quietly {
 							if "`t0'"!="" {
@@ -127,6 +150,48 @@
 						if `estimator' == 1        loc nosplit = 1
 
 						loc constant = cond(`useconstant',"constant","")
+
+						/*
+							test(NAME [, boot [reps(#)] [wild|residual] [wildweights(...)]])
+
+							The "boot" suboption asks for a null-imposed
+							bootstrap of the test statistic itself (see
+							pbx_mdt_bootstat/pbx_wald_bootstat) alongside the
+							usual asymptotic chi2 p-value -- independent of
+							whatever vce() is used for the reported SEs, so
+							e.g. vce(analytic) + test(minimumdistance, boot)
+							is the common case: fast analytic SEs, but a
+							bootstrapped CDF for the specification test.
+							Giving reps()/wild/residual/wildweights() implies
+							boot even without the literal word. Validated to
+							need wild specifically (residual over-rejects);
+							wild is the default if the type is left unstated.
+						*/
+						gettoken _testname _testsub : test, parse(",")
+						local test = strtrim("`_testname'")
+						gettoken _tc _testsub : _testsub, parse(",")
+						local _testsub = strtrim(`"`_testsub'"')
+
+						local _mdb_wanted = 0
+						local mdbtype     ""
+						local mdbreps     0
+						local mdbwildwt   ""
+						if `"`_testsub'"' != "" {
+							_pb_parse_testsub , `_testsub'
+							local _mdb_wanted = s(boot)
+							local mdbtype     "`s(mdbtype)'"
+							if `s(reps)' > 1 local mdbreps = s(reps)
+							if `"`s(wildwt)'"' != "" {
+								local mdbwildwt = strlower("`s(wildwt)'")
+								if !inlist("`mdbwildwt'","rademacher","mammen","webb") {
+									noi di as error "test(..., wildweights()) must be rademacher, mammen or webb."
+									exit 198
+								}
+							}
+						}
+						if `_mdb_wanted' & "`mdbtype'"=="" local mdbtype "parametric"
+						if `_mdb_wanted' & "`mdbwildwt'"=="" local mdbwildwt "rademacher"
+						if `_mdb_wanted' & `mdbreps'<=1 local mdbreps = 199
 
 						if "`test'"=="" {
 							if `estimator'==4 loc test wald
@@ -354,7 +419,7 @@
 						loc masscorr = ("`nomasscorr'"=="")
 						
 						if `bootreps'<=1 {
-							noi di as error "Option bootreps can only take an integer >1 (binned bootstrap)."
+							noi di as error "Option reps() can only take an integer >1 (binned bootstrap)."
 							exit 301
 						}
 						if `polynomial'<0 {
@@ -444,7 +509,7 @@
 								Convention:
 								  z == cutoff belongs to binid 0,
 								  with center cutoff - bw/2.
-								This makes the default limits(1 0) exclude the bunching bin.
+								This makes the default window(1 0) exclude the bunching bin.
 							*/
 							gen long `binid' = ceil(`u')
 							replace `binid' = 0 if abs(`z' - `cutoff') < max(1e-12, abs(`bw')*1e-10)
@@ -549,7 +614,7 @@
 						*/
 						quietly summarize `zleft' if `inbunch', meanonly
 						if r(N) == 0 {
-							noi di as error "No bins in the excluded region. Check limits(), cutoff(), and bw()."
+							noi di as error "No bins in the excluded region. Check window(), cutoff(), and bw()."
 							exit 301
 						}
 						local zL_excl_orig = r(min)
@@ -1138,6 +1203,9 @@
 									local nbasin_main = .
 									capture confirm scalar e(delta_nbasin)
 									if !_rc local nbasin_main = e(delta_nbasin)
+									local zerosub_main = 0
+									capture confirm scalar e(delta_zerosub)
+									if !_rc local zerosub_main = e(delta_zerosub)
 
 									/* the robust/hc2/hc3 sandwich is not guaranteed
 									   PSD (see variance_robust); when it needed
@@ -1360,7 +1428,7 @@
 											extrapolated unrestricted counterfactual,
 											e_U is left missing and the Hausman test is
 											not reported (lower polynomial(), narrow
-											limits(), or read the minimum-distance
+											window(), or read the minimum-distance
 											test, which needs no inversion).
 										*/
 										capture bunch_transform `z', ///
@@ -1628,11 +1696,188 @@
 									}
 								}
 
-								// Post b0/V0 once for all wald/md tests
+								/*
+									test(..., boot): an INDEPENDENT null-imposed
+									bootstrap of the test statistic, decoupled
+									from vce() -- built once here (shared by the
+									minimumdistance and wald branches below, if
+									both run), regardless of whether vce() is
+									analytic, bootstrap, robust, etc.  The real
+									W_hat above already used `V0' (whatever it
+									validly is under the chosen vce()); this
+									reuses that SAME V0 as the fixed weighting
+									matrix for every bootstrap draw, so the two
+									are directly comparable -- only the
+									resampled theta varies.
+
+									Mechanically: (1) refit the chosen estimator
+									once, analytic, purely to populate the
+									residual/wild pool around ITS fitted mean
+									(pbx_resboot_setup_model) -- this makes the
+									resample null-consistent regardless of
+									whatever vce() the user actually wants
+									reported; (2) draw mdbreps resamples of y,
+									refitting only the free estimator(0)
+									companion model on each to build `_mdb_b0s'.
+									vce(none) throughout -- point estimates only,
+									no per-replicate variance needed.
+								*/
+								tempname _mdb_b0s
+								if `_mdb_wanted' & `estimator'!=4 {
+									/*
+										polbunch already has an outer preserve
+										open around this whole section (closed
+										by the "restore" below the test-running
+										loop), so a nested preserve here errors
+										"already preserved" -- round-trip through
+										our own tempfile instead (same idiom the
+										existing bootstrap loop uses for exactly
+										this reason; `_pbsim_boot_data' isn't
+										reliably available here since it's only
+										saved on the vce(bootstrap) path).
+									*/
+									tempfile _mdb_realdata
+									quietly save `_mdb_realdata'
+										quietly bunch_profile `y' `z' `side' `bunch', ///
+											estimator(`estimator') k(`polynomial') ///
+											cutoff_orig(`cutoff_orig') bw_orig(`bw_orig') ///
+											cutoff_est(`cutoff_est') bw_est(`bw_est') ///
+											l(`L') h(`H') `log' `normalize' vce(analytic) ///
+											hctype(`hctype') masscorr(`masscorr') ///
+											initdelta(`dstart') deltamax(`deltamax') ///
+											zbar_est(`zbar_est') ///
+											zl_excl_orig(`zL_excl_orig') zh_excl_orig(`zH_excl_orig') ///
+											zl_excl_est(`zL_excl_est') zh_excl_est(`zH_excl_est') ///
+											nosplit(`nosplit') `positive'
+
+										local _mdb_rbphi = .
+										capture confirm scalar e(dispersion)
+										if !_rc local _mdb_rbphi = e(dispersion)
+
+										if "`mdbtype'"=="parametric" {
+											/*
+												Draw y* from the CHOSEN estimator's own
+												null-implied sampling model, not from
+												reweighted observed residuals (see the
+												conversation: wild/residual re-inject a
+												same-sized copy of any real model-data
+												gap, just sign-scrambled, so they have
+												essentially no power against genuine
+												misspecification even though they are
+												correctly SIZED under a true null).
+
+												Reference bins: multinomial with the
+												model's own fitted mean (r_mu_bins --
+												h0-hat below the kink, delta-hat-implied
+												h1-hat above); this satisfies the null by
+												construction; scale(x2) inflates the
+												Dirichlet concentration by 1/phi-hat to
+												match the SAME overdispersion assumption
+												used for the reported SEs (quasi-
+												multinomial: Var(Y_j)=phi*N*p_j*(1-p_j)).
+
+												Excluded (bunching) bins: the null being
+												tested restricts the AGGREGATE mass B
+												(polbunch_mdt_qG's q_mass row), not its
+												within-window shape, which the model never
+												specifies -- so keep the observed within-
+												window shape but rescale it to the MODEL's
+												own implied total mass, imposing the null
+												on the one thing about these bins that is
+												actually part of it.
+											*/
+											tempvar _mdb_mu
+											gen double `_mdb_mu' = .
+											mata: st_store(., "`_mdb_mu'", st_matrix("r_mu_bins"))
+
+											local _mdb_Bhat = .
+											capture local _mdb_Bhat = _b[bunching:number_bunchers]
+											quietly summarize `y' if missing(`_mdb_mu'), meanonly
+											local _mdb_Bobs = r(sum)
+											if !missing(`_mdb_Bhat') & `_mdb_Bobs' > 0 {
+												quietly replace `_mdb_mu' = `y' * (`_mdb_Bhat'/`_mdb_Bobs') if missing(`_mdb_mu')
+											}
+											else {
+												quietly replace `_mdb_mu' = `y' if missing(`_mdb_mu')
+											}
+
+											local _mdb_phiscale = 1
+											if "`scalemode'"=="x2" & !missing(`_mdb_rbphi') & `_mdb_rbphi'>0 local _mdb_phiscale = `_mdb_rbphi'
+
+											tempvar _mdb_g
+											gen double `_mdb_g' = .
+										}
+										else {
+											capture matrix drop r_mu_bins
+											capture scalar drop r_rbsetup_ok
+											mata: pbx_resboot_setup_model("`y'", "`bunch'", `_mdb_rbphi')
+											capture confirm scalar r_rbsetup_ok
+											if _rc | r_rbsetup_ok!=1 {
+												mata: pbx_resboot_setup("`y'","`z'","`side'","`bunch'", `polynomial')
+											}
+										}
+
+										local _mdb_wildflag = ("`mdbtype'"=="wild")
+										local _mdb_wildcode = cond("`mdbwildwt'"=="webb",3,cond("`mdbwildwt'"=="mammen",2,1))
+
+										forvalues _mdbs = 1/`mdbreps' {
+											if "`mdbtype'"=="parametric" {
+												quietly replace `_mdb_g' = rgamma(max(1e-6,`_mdb_mu')/`_mdb_phiscale', 1)
+												quietly summarize `_mdb_g', meanonly
+												quietly replace `y' = `_mdb_g' * `N' / r(sum)
+											}
+											else {
+												mata: pbx_resboot_draw("`y'", `_mdb_wildflag', `_mdb_wildcode')
+											}
+											capture quietly bunch_profile `y' `z' `side' `bunch', ///
+												estimator(0) k(`polynomial') ///
+												cutoff_orig(`cutoff_orig') bw_orig(`bw_orig') ///
+												cutoff_est(`cutoff_est') bw_est(`bw_est') ///
+												l(`L') h(`H') `log' `normalize' vce(none) ///
+												hctype(`hctype') masscorr(`masscorr') ///
+												initdelta(`dstart') ///
+												zbar_est(`zbar_est') ///
+												zl_excl_orig(`zL_excl_orig') zh_excl_orig(`zH_excl_orig') ///
+												zl_excl_est(`zL_excl_est') zh_excl_est(`zH_excl_est') ///
+												nosplit(0) `positive'
+											capture confirm matrix e(b)
+											if !_rc {
+												capture matrix `_mdb_b0s' = nullmat(`_mdb_b0s') \ e(b)
+											}
+										}
+									quietly use `_mdb_realdata', clear
+								}
+
+								/*
+									Post b0/V0 once for all wald/md tests. Must
+									run AFTER the independent test-bootstrap
+									block above -- that block's own
+									bunch_profile calls are eclass and would
+									otherwise clobber this posted e(b)/e(V)
+									before polbunch_minimumdistancetest /
+									polbunch_waldtest get to read it.
+								*/
 								local _needs_post = 0
 								foreach _tt of local _tests_to_run {
 									if inlist("`_tt'","wald","minimumdistance") local _needs_post = 1
 								}
+								/*
+									ereturn post consumes/renames its source
+									matrices as a side effect -- `b0'/`V0'
+									themselves become invalid right after this
+									call (confirmed empirically: rowsof(V0)
+									errors "not found" immediately following
+									ereturn post). The legacy bootstrap-only
+									trigger never noticed because it let Mata
+									derive its own weighting matrix internally
+									(quadvariance(b0s)); pbx_mdt_bootstat /
+									pbx_wald_bootstat now take an explicit V0
+									so the test-bootstrap uses the SAME
+									weighting matrix as the real W_hat -- so
+									make an independent copy before posting.
+								*/
+								tempname _mdb_V0copy
+								if `_needs_post' capture matrix `_mdb_V0copy' = `V0'
 								if `_needs_post' {
 									local nm: colnames `b0'
 									local neq: coleq `b0'
@@ -1658,6 +1903,36 @@
 											if _rc | missing(real("`init'")) {
 												local init 0.05
 											}
+											/*
+												Null-imposed bootstrap of the MD test
+												statistic itself (see pbx_mdt_bootstat):
+												validated to fix the chi2 test's severe
+												under-rejection at high K (0% vs. nominal
+												5% on a null-true DGP; the bootstrap gives
+												4.7%), but ONLY for wild resampling --
+												residual was tested the same way and
+												over-rejects (18.7%), so test(..., boot
+												residual) is allowed (for exploration) but
+												not the default. Fires only on an explicit
+												test(minimumdistance/all/forceall, boot
+												[...]) suboption -- see _mdb_b0s above,
+												built independently of vce().
+											*/
+											local _mdboot_ok = 0
+											if `_mdb_wanted' {
+												scalar r_pbx_est          = `estimator'
+												scalar r_pbx_K            = `polynomial'
+												scalar r_pbx_cutoff_orig  = `cutoff_orig'
+												scalar r_pbx_cutoff_est   = `cutoff_est'
+												scalar r_pbx_bw_orig      = `bw_orig'
+												scalar r_pbx_bw_est       = `bw_est'
+												scalar r_pbx_zbar         = `zbar_est'
+												scalar r_pbx_islog        = ("`log'" != "")
+												scalar r_pbx_positive     = ("`positive'" != "")
+												scalar r_pbx_init         = `init'
+												capture noisily mata: pbx_mdt_bootstat("`_mdb_b0s'", "`_mdb_V0copy'")
+												if !_rc local _mdboot_ok = 1
+											}
 											capture noisily polbunch_minimumdistancetest, ///
 												estimator(`estimator') ///
 												k(`polynomial') ///
@@ -1672,6 +1947,30 @@
 												initdelta(`init')
 										}
 										else if "`_tt'"=="wald" {
+											/*
+												Same null-imposed wild bootstrap as the
+												minimum-distance test above, applied to
+												polbunch_wald_from_unrestricted's own
+												Vq=Gq*V*Gq'; W=q'*qrinv(Vq)*q; chi2tail(df,W)
+												-- an identical quadratic-form-on-a-near-
+												singular-estimated-covariance construction,
+												so it is expected to suffer (and be fixable
+												by) the same finite-sample mechanism. See
+												pbx_wald_bootstat.
+											*/
+											local _waldboot_ok = 0
+											if `_mdb_wanted' {
+												scalar r_pbx_est          = `estimator'
+												scalar r_pbx_K            = `polynomial'
+												scalar r_pbx_cutoff_orig  = `cutoff_orig'
+												scalar r_pbx_cutoff_est   = `cutoff_est'
+												scalar r_pbx_bw_orig      = `bw_orig'
+												scalar r_pbx_bw_est       = `bw_est'
+												scalar r_pbx_zbar         = `zbar_est'
+												scalar r_pbx_islog        = ("`log'" != "")
+												capture noisily mata: pbx_wald_bootstat("`_mdb_b0s'", "`_mdb_V0copy'")
+												if !_rc local _waldboot_ok = 1
+											}
 											capture noisily polbunch_waldtest, ///
 												estimator(`estimator') ///
 												k(`polynomial') ///
@@ -1714,7 +2013,7 @@
 										noi di as text "Note: `_tname' could not be computed; statistic not reported (rc=`_tfc')."
 										if "`_tt'"=="hausman" & inlist(`_tfc',110,111) {
 											noi di as text "      The exact response inversion has no real root on the unrestricted"
-											noi di as text "      counterfactual.  Use a lower polynomial() or narrower limits(), or read"
+											noi di as text "      counterfactual.  Use a lower polynomial() or narrower window(), or read"
 											noi di as text "      the minimum-distance test, which needs no inversion."
 										}
 									}
@@ -1725,6 +2024,83 @@
 										if "`_tt'"=="minimumdistance" local delta_md = r(delta)
 										if "`_tt'"=="hausman" local _shaus_seU = r(seU)
 										local _tests_done "`_tests_done' `_tt'"
+
+										/*
+											Finish the wild bootstrap-of-statistic
+											started above: the real W_hat is only known
+											now (r(chi2)), so compare it to the
+											already-computed r_pbx_Wboot draws here.
+										*/
+										/*
+											Stata's & does not short-circuit (both
+											sides get evaluated), so a compound
+											"!_rc & !missing(scalar)" check crashes
+											with "not found" whenever the mata call
+											errored (or the empty-selection edge
+											case below) left the scalar undefined.
+											Nest the missing() check inside its own
+											confirm instead, and clear any stale
+											scalar from a previous test call first
+											so a failure here never silently reuses
+											an old value.
+										*/
+										if "`_tt'"=="minimumdistance" & `_mdboot_ok' {
+											capture scalar drop r_pbx_mdboot_p
+											capture confirm matrix r_pbx_Wboot
+											if !_rc {
+												/*
+													mean() of an empty selection (every
+													Wboot draw missing, e.g. every
+													bootstrap replicate itself failed to
+													fit) errors rather than returning
+													missing -- guard on nboot_ok first.
+												*/
+												capture confirm scalar r_pbx_nboot_ok
+												if !_rc & r_pbx_nboot_ok >= 1 {
+													capture mata: st_numscalar("r_pbx_mdboot_p", mean(select(st_matrix("r_pbx_Wboot"), st_matrix("r_pbx_Wboot"):<.) :>= `chi2_`_tt''))
+													if !_rc {
+														capture confirm scalar r_pbx_mdboot_p
+														if !_rc & !missing(r_pbx_mdboot_p) {
+															local p_md_boot   = r_pbx_mdboot_p
+															local nboot_md_ok = r_pbx_nboot_ok
+														}
+													}
+												}
+											}
+											if "`p_md_boot'" == "" {
+												local _mdb_nok_shown = 0
+												capture confirm scalar r_pbx_nboot_ok
+												if !_rc local _mdb_nok_shown = r_pbx_nboot_ok
+												noi di as text "Note: bootstrap p-value for the minimum-distance test not computed" ///
+													" -- too few of the mdbreps() replicates gave a usable statistic" ///
+													" (nboot_ok=`_mdb_nok_shown')."
+											}
+										}
+										if "`_tt'"=="wald" & `_waldboot_ok' {
+											capture scalar drop r_pbx_waldboot_p
+											capture confirm matrix r_pbx_Wboot_wald
+											if !_rc {
+												capture confirm scalar r_pbx_wnboot_ok
+												if !_rc & r_pbx_wnboot_ok >= 1 {
+													capture mata: st_numscalar("r_pbx_waldboot_p", mean(select(st_matrix("r_pbx_Wboot_wald"), st_matrix("r_pbx_Wboot_wald"):<.) :>= `chi2_`_tt''))
+													if !_rc {
+														capture confirm scalar r_pbx_waldboot_p
+														if !_rc & !missing(r_pbx_waldboot_p) {
+															local p_wald_boot   = r_pbx_waldboot_p
+															local nboot_wald_ok = r_pbx_wnboot_ok
+														}
+													}
+												}
+											}
+											if "`p_wald_boot'" == "" {
+												local _wdb_nok_shown = 0
+												capture confirm scalar r_pbx_wnboot_ok
+												if !_rc local _wdb_nok_shown = r_pbx_wnboot_ok
+												noi di as text "Note: bootstrap p-value for the Wald test not computed" ///
+													" -- too few of the mdbreps() replicates gave a usable statistic" ///
+													" (nboot_ok=`_wdb_nok_shown')."
+											}
+										}
 									}
 								}
 
@@ -1777,12 +2153,25 @@
 								estadd scalar p_`_tt'    = `p_`_tt''
 								estadd scalar df_`_tt'   = `df_`_tt''
 							}
-							if strpos(" `_tests_done' "," minimumdistance ") estadd scalar delta_md = `delta_md'
+							if strpos(" `_tests_done' "," minimumdistance ") {
+								estadd scalar delta_md = `delta_md'
+								if "`p_md_boot'" != "" {
+									estadd scalar p_minimumdistance_boot   = `p_md_boot'
+									estadd scalar minimumdistance_boot_n   = `nboot_md_ok'
+								}
+							}
+							if strpos(" `_tests_done' "," wald ") & "`p_wald_boot'" != "" {
+								estadd scalar p_wald_boot   = `p_wald_boot'
+								estadd scalar wald_boot_n   = `nboot_wald_ok'
+							}
+							if "`p_md_boot'" != "" | "`p_wald_boot'" != "" {
+								ereturn local mdboot_type "`mdbtype'"
+								ereturn scalar mdboot_reps = `mdbreps'
+								if "`mdbtype'"=="wild" ereturn local mdboot_wildweights "`mdbwildwt'"
+							}
 							if strpos(" `_tests_done' "," hausman ") {
-								capture confirm number `_shaus_eU'
-								if !_rc & !missing(`_shaus_eU')  ereturn scalar elast_unrestricted    = `_shaus_eU'
-								capture confirm number `_shaus_seU'
-								if !_rc & !missing(`_shaus_seU') ereturn scalar se_elast_unrestricted = `_shaus_seU'
+								if !missing(`_shaus_eU')  ereturn scalar elast_unrestricted    = `_shaus_eU'
+								if !missing(`_shaus_seU') ereturn scalar se_elast_unrestricted = `_shaus_seU'
 							}
 						}
 						if `docontrast' {
@@ -1845,7 +2234,6 @@
 						ereturn scalar zH_excl_est = `zH_excl_est'
 						ereturn scalar dL = `dL'
 						ereturn scalar dR = `dR'
-						ereturn local zname = "`z'"
 						ereturn local transform="`transform'"
 
 						/*
@@ -1949,7 +2337,15 @@
 							if !_rc ereturn scalar delta_weakid = `weakid_main'
 							capture confirm number `nbasin_main'
 							if !_rc & !missing(`nbasin_main') ereturn scalar delta_nbasin = `nbasin_main'
+							capture confirm number `zerosub_main'
+							if !_rc ereturn scalar delta_zerosub = `zerosub_main'
 							ereturn scalar delta_nonneg = ("`allownegative'" == "")
+							if `zerosub_main'==1 {
+								noi di as text "Note: the response length (delta) for estimator `estimator' was weakly identified for"
+								noi di as text "      this window / polynomial order, but a near-zero response fit the profile just as"
+								noi di as text "      well -- reporting that near-zero solution instead of withholding shift, marginal"
+								noi di as text "      response and elasticity. See e(delta_zerosub)."
+							}
 						}
 
 						//Display results
@@ -2052,6 +2448,14 @@
 										}
 										di as txt _col(`=`W'-35') "p-value" ///
 											_col(`=`W'-10') as res %10.4f `p_`_tt''
+										if "`_tt'"=="minimumdistance" & "`p_md_boot'" != "" {
+											di as txt _col(`=`W'-35') "bootstrap p-value (`mdbtype', N=`nboot_md_ok')" ///
+												_col(`=`W'-10') as res %10.4f `p_md_boot'
+										}
+										if "`_tt'"=="wald" & "`p_wald_boot'" != "" {
+											di as txt _col(`=`W'-35') "bootstrap p-value (`mdbtype', N=`nboot_wald_ok')" ///
+												_col(`=`W'-10') as res %10.4f `p_wald_boot'
+										}
 									}
 								}
 								else {
@@ -2060,9 +2464,16 @@
 										_col(`=`W'-10') as res %10.4f `chi2_`test''
 									di as txt _col(`=`W'-35') as txt "p-value" ///
 										_col(`=`W'-10') as res %10.4f `p_`test''
+									if "`test'"=="minimumdistance" & "`p_md_boot'" != "" {
+										di as txt _col(`=`W'-35') "bootstrap p-value (`mdbtype', N=`nboot_md_ok')" ///
+											_col(`=`W'-10') as res %10.4f `p_md_boot'
+									}
+									if "`test'"=="wald" & "`p_wald_boot'" != "" {
+										di as txt _col(`=`W'-35') "bootstrap p-value (`mdbtype', N=`nboot_wald_ok')" ///
+											_col(`=`W'-10') as res %10.4f `p_wald_boot'
+									}
 								}
-								capture confirm number `_shaus_seU'
-								if !_rc & strpos(" `_tests_done' "," hausman ") & !missing(`_shaus_seU') {
+								if strpos(" `_tests_done' "," hausman ") & !missing(`_shaus_seU') {
 									di as txt _col(`=`W'-35') "(unrestricted elast." ///
 										_col(`=`W'-10') as res %10.4f `_shaus_eU'
 									di as txt _col(`=`W'-35') " std. err.)" ///
@@ -2154,7 +2565,7 @@
 									local _bK  = r(polynomial)
 									local _bKfull = r(bias_polyfull)
 									local _bl2 = r(bias_l2err)
-									local _bdiv = r(iterate_diverged)
+									local _bdiv = r(bias_iterate_diverged)
 									local _biterK  = r(bias_iter_polynomial)
 									local _biterl2 = r(bias_iter_l2err)
 									local _biterbe = r(bias_iter_elasticity)
@@ -2337,6 +2748,39 @@
 			sreturn local seed   "`seed'"
 		end
 
+		cap program drop _pb_parse_testsub
+		program define _pb_parse_testsub, sclass
+			/*
+				test(NAME, <this>) -- the null-imposed bootstrap-of-the-
+				statistic suboptions.  Mirrors _pb_parse_vcesub's style.
+				Giving reps()/wild/residual/parametric/wildweights() implies
+				boot even without the literal word.
+
+				PARAMetric (the default type -- see pbx_mdt_paramdraw) draws
+				fresh y* from the model's OWN implied null sampling process
+				(multinomial with the fitted mean, optionally phi-hat-scaled
+				to match scale(x2)) -- validated to have real power against
+				misspecification.  wild/residual are kept for comparison /
+				exploration only: both were found to have essentially ZERO
+				power against genuine misspecification (every bootstrap
+				replicate re-injects a same-sized copy of the real
+				model-data gap, just sign-scrambled, rather than drawing
+				fresh null-consistent noise) even though wild alone gives
+				correct SIZE under a true null -- so don't use them to judge
+				whether a model fits.
+			*/
+			syntax , [ BOOT RESidual WILD PARAMetric WILDWeights(string) REPS(integer -1) ]
+
+			sreturn clear
+			sreturn local boot = (`"`boot'"'!="" | "`residual'"!="" | "`wild'"!="" | "`parametric'"!="" ///
+				| `"`wildweights'"'!="" | `reps'>1)
+			sreturn local mdbtype = cond("`residual'"!="","residual", ///
+				cond("`wild'"!="","wild", ///
+				cond("`parametric'"!="","parametric","")))
+			sreturn local wildwt "`wildweights'"
+			sreturn local reps   "`reps'"
+		end
+
 
 
 		program define bunch_profile, eclass
@@ -2384,7 +2828,7 @@
 
 			tempname b V Gstack mustack ystack
 
-			capture scalar drop r_weakid_profile r_nbasin_profile
+			capture scalar drop r_weakid_profile r_nbasin_profile r_zerosub_profile
 
 			mata: profile_run( ///
 				"`y_t'", ///
@@ -2434,6 +2878,9 @@
 			local nbasin0 = .
 			capture confirm scalar r_nbasin_profile
 			if !_rc local nbasin0 = r_nbasin_profile
+			local zerosub0 = 0
+			capture confirm scalar r_zerosub_profile
+			if !_rc local zerosub0 = r_zerosub_profile
 
 			local h0names
 			forvalues j = 1/`k' {
@@ -2500,6 +2947,7 @@
 			if inlist(`estimator',2,3) {
 				ereturn scalar delta_weakid = `weakid0'
 				if `nbasin0'<. ereturn scalar delta_nbasin = `nbasin0'
+				ereturn scalar delta_zerosub = `zerosub0'
 			}
 			ereturn scalar K           = `k'
 			ereturn scalar cutoff_orig = `cutoff_orig'
@@ -4690,6 +5138,33 @@ cap program drop bunch_saez
 	}
 
 
+	/* --------------------------------------------------------------------
+	   pbx_bread(G): (G'G)^{-1} via an explicit QR factorization of G
+	   itself, rather than forming G'G and pinv()-ing it.  quadcross(G,G)
+	   squares G's condition number before inversion; qrd()+luinv() on the
+	   R factor does not (cond(R) = cond(G)).  Verified against real
+	   Panel-B-style ill-conditioned design matrices (cond(G) ~ 1.9e5,
+	   cond(G'G) ~ 3.6e10): point estimates, this bread, and every
+	   downstream quadratic-form test statistic built from it reproduce
+	   the old pinv(quadcross(G,G)) computation to ~1e-7 relative /
+	   ~1e-9 absolute precision -- i.e. this is not a fix for any finite-
+	   sample calibration issue (double precision was never the
+	   bottleneck), just a strictly more careful way to compute the same
+	   number, with no downside.
+	   -------------------------------------------------------------------- */
+	real matrix pbx_bread(real matrix G)
+	{
+		real matrix Q, R, Rinv
+		real scalar p
+
+		p = cols(G)
+		Q = .
+		R = .
+		qrd(G, Q, R)
+		Rinv = luinv(R[1::p, 1::p])
+		return(Rinv * Rinv')
+	}
+
 	real matrix variance_multinomial(
 		real matrix G_stack,
 		real colvector y_stack,
@@ -4722,7 +5197,7 @@ cap program drop bunch_saez
 		Vm = diag(y_stack) - (y_stack * y_stack') / N
 		Vm = (Vm + Vm') / 2
 
-		bread = pinv(quadcross(G, G))
+		bread = pbx_bread(G)
 
 		V = bread * G' * Vm * G * bread
 		V = (V + V') / 2
@@ -4816,7 +5291,7 @@ cap program drop bunch_saez
 			dr = dr :* dfadj
 		}
 		else if (hctype == 2 | hctype == 3) {
-			bread = pinv(quadcross(G, G))
+			bread = pbx_bread(G)
 			PG = G * bread
 			hjj = rowsum(PG :* G)
 			for (j = 1; j <= rows(hjj); j++) {
@@ -4855,7 +5330,7 @@ cap program drop bunch_saez
 		Vm = Vm - diag(dm) + diag(dr)
 		Vm = (Vm + Vm') / 2
 
-		bread = pinv(quadcross(G, G))
+		bread = pbx_bread(G)
 
 		V = bread * G' * Vm * G * bread
 		V = (V + V') / 2
@@ -5052,7 +5527,7 @@ cap program drop bunch_saez
 
 		meat  = (nclust / (nclust - 1)) :* (M - (y_stack * y_stack') / nclust)
 		meat  = (meat + meat') / 2
-		bread = pinv(quadcross(G, G))
+		bread = pbx_bread(G)
 		V     = bread * G' * meat * G * bread
 		V     = (V + V') / 2
 
@@ -5573,9 +6048,21 @@ cap program drop bunch_saez
 			for an infeasible delta, so the bounded search cannot throw.
 
 			Written back by reference:
-			  bestQ   SSR at the returned optimum
-			  nbasin  number of interior local minima found on the grid
-			  gapQ    (2nd-best basin SSR)/(best basin SSR), or . if nbasin<2
+			  bestQ    SSR at the returned optimum
+			  nbasin   number of interior local minima found on the grid
+			  gapQ     (2nd-best basin SSR)/(best basin SSR), or . if nbasin<2
+			  nearzeroD  delta of the REFINED (golden-section-optimized) basin
+			             closest to 0, among all basins found -- not simply
+			             the raw grid's own delta=0 evaluation, since the true
+			             nearby optimum can sit meaningfully off of 0 (and fit
+			             better than the raw grid point there). Only ever
+			             populated on the allownegative grid, since 0 isn't a
+			             candidate at all on the positive-only grid.
+			  nearzeroQ  that basin's SSR. Lets the caller prefer a "near
+			             zero response" point over a weakly identified winner
+			             when the two are statistically tied -- see the
+			             weakid/zerosub block right after this function's
+			             call site.
 		*/
 		real scalar prof_delta_solve(
 			real colvector y,
@@ -5602,7 +6089,9 @@ cap program drop bunch_saez
 			real scalar dhi,
 			real scalar bestQ,
 			real scalar nbasin,
-			real scalar gapQ
+			real scalar gapQ,
+			real scalar nearzeroD,
+			real scalar nearzeroQ
 		)
 		{
 			real colvector grid, cand, gd, gq, rds, rqs
@@ -5610,9 +6099,11 @@ cap program drop bunch_saez
 			real scalar a, b, x1, x2, f1, f2, iter
 			real scalar rd, rQ, bd, bQ, b2Q, btol, dgap
 
-			bestQ  = .
-			nbasin = 0
-			gapQ   = .
+			bestQ     = .
+			nbasin    = 0
+			gapQ      = .
+			nearzeroD = .
+			nearzeroQ = .
 
 			lo = dlo
 			hi = dhi
@@ -5725,6 +6216,27 @@ cap program drop bunch_saez
 				rqs = rqs \ rQ
 			}
 
+			/*
+				Refined basin closest to delta=0 (allownegative case only --
+				0 is never a feasible candidate on the positive-only grid, so
+				this stays missing there by construction). Deliberately scans
+				the REFINED rds/rqs, not the raw, unrefined grid: the raw
+				grid's own delta=0 evaluation is not itself a verified local
+				optimum and can fit meaningfully worse than the true nearby
+				minimum (e.g. one live case: raw grid Q(0)=559.43 vs the
+				refined nearby basin's Q=556.81 at delta=-0.00087 -- forcing
+				exactly 0 would report a strictly worse fit than what the
+				data actually supports near zero).
+			*/
+			if (positive == 0) {
+				for (j = 1; j <= rows(rds); j++) {
+					if (nearzeroD >= . | abs(rds[j]) < abs(nearzeroD)) {
+						nearzeroD = rds[j]
+						nearzeroQ = rqs[j]
+					}
+				}
+			}
+
 			// global optimum among the refined minima
 			bQ = 1e300
 			bd = .
@@ -5807,6 +6319,7 @@ cap program drop bunch_saez
 			real colvector y, z, side, bunch
 			real scalar Kb, Hstar_obs, delta_hat, lb, nref_
 			real scalar dhi, bestQ, nbasin, gapQ, weakid
+			real scalar nearzeroD, nearzeroQ, zerosub, edgezone, nearedge
 			real rowvector theta_hat, beta_hat, b
 			real matrix Vout
 
@@ -5869,16 +6382,18 @@ cap program drop bunch_saez
 				if (dhi >= . | dhi <= 0)  dhi = 1
 				if (dhi <= lb)            dhi = lb + 1e-6
 
-				bestQ  = .
-				nbasin = .
-				gapQ   = .
+				bestQ     = .
+				nbasin    = .
+				gapQ      = .
+				nearzeroD = .
+				nearzeroQ = .
 				delta_hat = prof_delta_solve(
 					y, z, side, bunch, Hstar_obs,
 					cutoff_orig, bw_orig, cutoff_est, bw_est,
 					K, estimator, islog,
 					zL_excl_orig, zH_excl_orig, zL_excl_est, zH_excl_est,
 					zbar_est, positive, nosplit, initdelta, lb, dhi,
-					bestQ, nbasin, gapQ)
+					bestQ, nbasin, gapQ, nearzeroD, nearzeroQ)
 
 				if (delta_hat >= .) delta_hat = initdelta
 
@@ -5896,8 +6411,57 @@ cap program drop bunch_saez
 				if (delta_hat >= dhi - 1e-6)        weakid = 1
 				if (nbasin >= 2 & gapQ < 1.10)      weakid = 1
 
+				/*
+					Prefer the refined basin nearest delta=0 ("no/near-zero
+					response") over a winner that is itself blowing up toward
+					a search bound (a runaway/degenerate optimum, the failure
+					mode this whole mechanism targets), when the two are
+					statistically tied. Deliberately NOT gated on the generic
+					weakid==1 flag: that flag ALSO fires for two well-
+					separated, both comfortably INTERIOR competing basins
+					(e.g. delta=0.3 vs 0.5, nbasin>=2 & gapQ<1.10) that have
+					nothing to do with a boundary -- there, "closer to zero"
+					is an arbitrary tie-break with no economic meaning, and
+					must NOT trigger a substitution. "edgezone" (10% of the
+					[lb,dhi] range from either bound) captures exactly the
+					boundary-blowup case (e.g. delta_hat=-0.997 with lb=-1)
+					without touching genuinely-interior multi-modality.
+
+					Also deliberately NOT forced to exactly 0: the raw grid's
+					own delta=0 evaluation is not itself a verified local
+					optimum and can fit meaningfully worse than the true
+					nearby minimum (one live case: raw grid Q(0)=559.43 vs
+					the refined basin's Q=556.81 at delta=-0.00087 --
+					snapping to exactly 0 would report a strictly worse fit
+					than the data actually supports near zero). nearzeroD/
+					nearzeroQ come from prof_delta_solve's own golden-
+					section-refined basins, so this reports whatever fits
+					best in that neighbourhood, not a fixed point. Only ever
+					populated on the allownegative grid (nearzeroD stays
+					missing for positive==1, automatically a no-op there,
+					confirmed: positive==0 iff allownegative was specified,
+					polbunch.ado's own option parsing, so this substitution
+					can never fire for an ordinary default-delta>=0 fit).
+					Reuses the SAME 1.10 tie threshold gapQ already uses for
+					the ratio itself -- no new judgment call there, just a
+					narrower gate on WHEN to act on a tie.
+				*/
+				edgezone = 0.10 * (dhi - lb)
+				nearedge = (delta_hat <= lb + edgezone | delta_hat >= dhi - edgezone)
+
+				zerosub = 0
+				if (nearedge & positive==0 & nearzeroD<. & bestQ>0) {
+					if (abs(nearzeroD - delta_hat) > 1e-6 & nearzeroQ/bestQ < 1.10) {
+						delta_hat = nearzeroD
+						bestQ     = nearzeroQ
+						weakid    = 0
+						zerosub   = 1
+					}
+				}
+
 				st_numscalar("r_weakid_profile", weakid)
 				st_numscalar("r_nbasin_profile", nbasin)
+				st_numscalar("r_zerosub_profile", zerosub)
 
 				beta_hat = profTheta(
 					delta_hat,
@@ -6303,7 +6867,7 @@ cap program drop bunch_saez
 		Vq = Gq * V * Gq'
 		if (missing(Vq)) return(1e300)
 
-		Vqi = pinv(Vq)
+		Vqi = qrinv(Vq)
 		if (missing(Vqi)) return(1e300)
 
 		W = (q' * Vqi * q)[1,1]
@@ -6618,6 +7182,170 @@ cap program drop bunch_saez
 	}
 
 	/*
+		pbx_mdt_bootstat -- null-imposed bootstrap of the minimum-distance
+		test statistic.
+
+		Rationale (validated against the real Panel-B-style ill-conditioned
+		design, K=6/7, 150 outer x 199 inner reps, null-true DGP): plugging a
+		bootstrap-estimated covariance into the SAME asymptotic chi2 formula
+		does not fix anything -- the chi2 reference distribution itself is a
+		poor finite-sample approximation when the true weighting matrix is
+		this close to singular.  What works is comparing the observed W_hat
+		to the EMPIRICAL distribution of W* recomputed on every bootstrap
+		replicate, using resamples that are null-consistent by construction.
+
+		vce(bootstrap, wild) already resamples the binned counts around the
+		CHOSEN estimator's own fitted mean (delta-hat-implied for estimator
+		2/3), so the null holds in the resampled world "for free"; polbunch's
+		bootstrap loop already refits an unrestricted estimator(0) companion
+		model on every replicate (b0s).  This function takes those existing
+		draws and the already-computed bootstrap covariance V0 = cov(b0s)
+		(the SAME weighting matrix polbunch already substitutes for the
+		asymptotic V when vce(bootstrap) is used) and recomputes W*_b via
+		polbunch_mdt_mata itself for each row -- so it is exactly the same
+		test statistic construction as the real data, not a reimplementation.
+
+		vce(bootstrap, RESIDUAL) was tested the same way and does NOT work
+		(18.7% empirical rejection vs. nominal 5%, on the same DGP where wild
+		gave 4.7%) -- residual pools reference-bin residuals as if bins were
+		homoskedastic, which is badly wrong across a wide high-K fitting
+		window where bin counts vary hugely; wild preserves each bin's own
+		residual magnitude and does not have this problem.  So this is wired
+		to fire ONLY for vce(bootstrap, wild); residual/multinomial/bayesian
+		bootstrap keep the asymptotic chi2 p-value only.
+
+		Stores r_pbx_Wboot (the bootstrap draws of W*, missing entries
+		dropped) and r_pbx_nboot_ok (how many survived) as Stata objects;
+		the caller compares the real W_hat to r_pbx_Wboot once the real MD
+		test has been run (b0s/V0 are built before that point in polbunch's
+		own estimation flow).
+	*/
+	void pbx_mdt_bootstat(string scalar b0sname, string scalar V0name)
+	{
+		real matrix  b0s, V0
+		real colvector keep, Wb
+		real scalar   nB, s
+		real scalar   est_, K_, co_, ce_, bwo_, bwe_, zb_, islog_, pos_, init_
+
+		b0s  = st_matrix(b0sname)
+		keep = rowsum(b0s :>= .) :== 0
+		b0s  = select(b0s, keep)
+		nB   = rows(b0s)
+
+		st_numscalar("r_pbx_nboot_ok", nB)
+
+		/*
+			The weighting matrix must be the SAME one used to compute the
+			real W_hat, or the comparison is apples-to-oranges. When the
+			caller already has one in hand (V0name != ""), e.g. the
+			analytic covariance polbunch used for vce(analytic) plus a
+			decoupled test(..., boot)), use it -- in which case nB just
+			needs to be >=1 (there's no covariance being derived from b0s
+			here, so cols(b0s) is irrelevant). Otherwise (legacy path: the
+			automatic trigger under vce(bootstrap, wild), no V0name given)
+			fall back to cov(b0s) itself, which DOES need nB > cols(b0s) to
+			be a sensible covariance -- exactly as before.
+		*/
+		if (V0name != "") {
+			if (nB < 1) {
+				st_matrix("r_pbx_Wboot", J(1, 1, .))
+				return
+			}
+			V0 = st_matrix(V0name)
+		}
+		else {
+			if (nB <= cols(b0s)) {
+				st_matrix("r_pbx_Wboot", J(1, 1, .))
+				return
+			}
+			V0 = quadvariance(b0s)
+		}
+		st_matrix("__pbx_tmp_V0", V0)
+
+		est_   = st_numscalar("r_pbx_est")
+		K_     = st_numscalar("r_pbx_K")
+		co_    = st_numscalar("r_pbx_cutoff_orig")
+		ce_    = st_numscalar("r_pbx_cutoff_est")
+		bwo_   = st_numscalar("r_pbx_bw_orig")
+		bwe_   = st_numscalar("r_pbx_bw_est")
+		zb_    = st_numscalar("r_pbx_zbar")
+		islog_ = st_numscalar("r_pbx_islog")
+		pos_   = st_numscalar("r_pbx_positive")
+		init_  = st_numscalar("r_pbx_init")
+
+		Wb = J(nB, 1, .)
+		for (s = 1; s <= nB; s++) {
+			st_matrix("__pbx_tmp_theta_row", b0s[s, .])
+			polbunch_mdt_mata("__pbx_tmp_theta_row", "__pbx_tmp_V0", est_, co_, bwo_, ce_, bwe_, K_, islog_, zb_, pos_, init_)
+			Wb[s] = st_numscalar("r(pb_md)")
+		}
+		st_matrix("r_pbx_Wboot", Wb)
+	}
+
+	/*
+		pbx_wald_bootstat -- the same null-imposed bootstrap idea as
+		pbx_mdt_bootstat, applied to the Wald test (polbunch_waldtest /
+		polbunch_wald_from_unrestricted) instead of the minimum-distance
+		test.  Both tests share the identical failure mode: a quadratic
+		form q' * qrinv(Gq*V*Gq') * q referred to an asymptotic chi2 --
+		polbunch_wald_from_unrestricted's own final step (Vq = Gq*V*Gq';
+		W = q'*qrinv(Vq)*q; chi2tail(df,W)) is line-for-line the same
+		construction as polbunch_mdt_crit, just without a delta-profiling
+		loop (estimator 2/3's delta here is a closed-form inversion, not a
+		grid search). So the same wild-bootstrap-of-the-statistic fix
+		applies for the same reason, and is expected to need the same
+		wild-only restriction (residual bootstrap over-rejects -- see
+		pbx_mdt_bootstat).
+	*/
+	void pbx_wald_bootstat(string scalar b0sname, string scalar V0name)
+	{
+		real matrix  b0s, V0
+		real colvector keep, Wb
+		real scalar   nB, s
+		real scalar   est_, K_, co_, ce_, bwo_, bwe_, zb_, islog_
+
+		b0s  = st_matrix(b0sname)
+		keep = rowsum(b0s :>= .) :== 0
+		b0s  = select(b0s, keep)
+		nB   = rows(b0s)
+
+		st_numscalar("r_pbx_wnboot_ok", nB)
+
+		if (V0name != "") {
+			if (nB < 1) {
+				st_matrix("r_pbx_Wboot_wald", J(1, 1, .))
+				return
+			}
+			V0 = st_matrix(V0name)
+		}
+		else {
+			if (nB <= cols(b0s)) {
+				st_matrix("r_pbx_Wboot_wald", J(1, 1, .))
+				return
+			}
+			V0 = quadvariance(b0s)
+		}
+		st_matrix("__pbx_tmp_V0", V0)
+
+		est_   = st_numscalar("r_pbx_est")
+		K_     = st_numscalar("r_pbx_K")
+		co_    = st_numscalar("r_pbx_cutoff_orig")
+		ce_    = st_numscalar("r_pbx_cutoff_est")
+		bwo_   = st_numscalar("r_pbx_bw_orig")
+		bwe_   = st_numscalar("r_pbx_bw_est")
+		zb_    = st_numscalar("r_pbx_zbar")
+		islog_ = st_numscalar("r_pbx_islog")
+
+		Wb = J(nB, 1, .)
+		for (s = 1; s <= nB; s++) {
+			st_matrix("__pbx_tmp_theta_row", b0s[s, .])
+			polbunch_wald_from_unrestricted("__pbx_tmp_theta_row", "__pbx_tmp_V0", est_, co_, bwo_, ce_, bwe_, K_, islog_, zb_)
+			Wb[s] = st_numscalar("r(pb_wald)")
+		}
+		st_matrix("r_pbx_Wboot_wald", Wb)
+	}
+
+	/*
 		polbunch_shausman_mata -- scalar Hausman test on the ELASTICITY.
 
 		Contrasts the restricted estimator's elasticity e_R (efficient under
@@ -6632,7 +7360,7 @@ cap program drop bunch_saez
 
 			e_j - e0  ~=  psi_j' (y - mu),   psi_j = A_j' grad_j'
 
-		A_j = diag(1/s_j) pinv(G_j / s_j) is the stacked-fit "bread" and
+		A_j = diag(1/s_j) qrinv(G_j / s_j) is the stacked-fit "bread" and
 		grad_j is the delta-method gradient of the elasticity w.r.t. the raw
 		stacked coefficients -- the LAST row of the bunch_transform Jacobian
 		e(G).  Then
@@ -6740,7 +7468,7 @@ cap program drop bunch_saez
 					drU  = drU :* adjU
 				}
 				else if (hctype == 2 | hctype == 3) {
-					PGU = GU * pinv(quadcross(GU, GU))
+					PGU = GU * pbx_bread(GU)
 					hxU = rowsum(PGU :* GU)
 					for (jj = 1; jj <= nbinU; jj++) {
 						if (hxU[jj] < 1) {
@@ -6766,8 +7494,8 @@ cap program drop bunch_saez
 		}
 		GUs = GU :/ sU
 		GRs = GR :/ sR
-		AU = diag(1 :/ sU) * pinv(GUs)
-		AR = diag(1 :/ sR) * pinv(GRs)
+		AU = diag(1 :/ sU) * qrinv(GUs)
+		AR = diag(1 :/ sR) * qrinv(GRs)
 
 		psiU = AU' * gradU'
 		psiR = AR' * gradR'
@@ -7026,7 +7754,7 @@ cap program drop bunch_saez
 			*/
 			Vq = Gq * V * Gq'
 
-			W = q' * pinv(Vq) * q
+			W = q' * qrinv(Vq) * q
 			df = rows(q)
 			pval = chi2tail(df, W)
 

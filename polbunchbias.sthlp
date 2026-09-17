@@ -1,5 +1,5 @@
 {smcl}
-{* *! version 2.0.0 26sep2026}{...}
+{* *! version 2.8.0 17sep2026}{...}
 {vieweralsosee "[R] return" "help return"}{...}
 {viewerjumpto "Syntax" "polbunchbias##syntax"}{...}
 {viewerjumpto "Description" "polbunchbias##description"}{...}
@@ -34,10 +34,8 @@ Standalone mode (all required options supplied explicitly):
 {cmd:t0(}{it:#}{cmd:)}
 {cmd:t1(}{it:#}{cmd:)}
 {cmd:elasticity(}{it:#}{cmd:)}
-{cmd:zlo(}{it:#}{cmd:)}
-{cmd:zhi(}{it:#}{cmd:)}
-{cmd:zl(}{it:#}{cmd:)}
-{cmd:zh(}{it:#}{cmd:)}
+{cmd:support(}{it:# #}{cmd:)}
+{cmd:window(}{it:# #}{cmd:)}
 {c -(}{cmd:relslope(}{it:#}{cmd:)} {cmd:|} {cmd:h0poly(}{it:numlist}{cmd:)}{c )-}
 [{it:options}]
 
@@ -50,10 +48,8 @@ Standalone mode (all required options supplied explicitly):
 {synopt :{cmd:t0(}{it:#}{cmd:)}}lower tax rate, t0{p_end}
 {synopt :{cmd:t1(}{it:#}{cmd:)}}higher tax rate, t1{p_end}
 {synopt :{cmd:elasticity(}{it:#}{cmd:)}}true elasticity against which bias is evaluated{p_end}
-{synopt :{cmd:zlo(}{it:#}{cmd:)}}lower bound of the estimation (fitting) window{p_end}
-{synopt :{cmd:zhi(}{it:#}{cmd:)}}upper bound of the estimation (fitting) window{p_end}
-{synopt :{cmd:zl(}{it:#}{cmd:)}}lower edge of the excluded / bunching region{p_end}
-{synopt :{cmd:zh(}{it:#}{cmd:)}}upper edge of the excluded / bunching region{p_end}
+{synopt :{cmd:support(}{it:zlo zhi}{cmd:)}}lower/upper bound of the estimation (fitting) window, in {it:z}-units (not bins){p_end}
+{synopt :{cmd:window(}{it:zl zh}{cmd:)}}lower/upper edge of the excluded / bunching region, in {it:z}-units (not bins){p_end}
 {synopt :{cmd:relslope(}{it:#}{cmd:)}}relative slope of a degree-1 counterfactual at z*, h0'(z*)/h0(z*); mutually exclusive with {cmd:h0poly()}{p_end}
 {synopt :{cmd:h0poly(}{it:numlist}{cmd:)}}counterfactual density as a polynomial in the centred running variable s, {it:lowest order first} (b0 = height at z*, b1 = slope, ...); any degree{p_end}
 
@@ -135,7 +131,7 @@ used.  A partial specification is an error.
 {pstd}
 {it:Log mode.}  With {cmd:log} (or {cmd:e(log)==1}), and exactly as in
 {helpb polbunch}, the running variable is assumed to be {ul:already} in logs:
-{cmd:zstar()}, {cmd:zlo/zhi()}, {cmd:zl/zh()} and the {cmd:h0poly()} /
+{cmd:zstar()}, {cmd:support()}, {cmd:window()} and the {cmd:h0poly()} /
 {cmd:relslope()} coefficients are all in ln-earnings units.  The
 counterfactual is then a polynomial in {it:s} = ln z - ln z*, the behavioural
 response is the pure log translation {it:h1(s) = h0(s + rho)}, and there is
@@ -223,13 +219,17 @@ degree.  Mutually exclusive with {cmd:relslope()}.
 evaluated.
 
 {phang}
-{cmd:zlo(}{it:#}{cmd:)} / {cmd:zhi(}{it:#}{cmd:)} are the lower / upper bounds
-of the estimation (polynomial-fitting) window.  Post-estimation mode reads
-the compressed observed bounds from {cmd:e(zlo)} / {cmd:e(zhi)}.
+{cmd:support(}{it:zlo zhi}{cmd:)} gives the lower / upper bounds of the
+estimation (polynomial-fitting) window, in {it:z}-units (not bins).
+Post-estimation mode reads the compressed observed bounds from {cmd:e(zlo)} /
+{cmd:e(zhi)}.  ({cmd:zlo()}/{cmd:zhi()} are accepted as undocumented synonyms
+for the two elements of {cmd:support()}.)
 
 {phang}
-{cmd:zl(}{it:#}{cmd:)} / {cmd:zh(}{it:#}{cmd:)} are the lower / upper edges of
-the excluded (bunching) region.
+{cmd:window(}{it:zl zh}{cmd:)} gives the lower / upper edges of the excluded
+(bunching) region, in {it:z}-units (not bins -- unlike {helpb polbunch}'s own
+{cmd:window()}/{cmd:limits()}, which count bins).  ({cmd:zl()}/{cmd:zh()} are
+accepted as undocumented synonyms for the two elements of {cmd:window()}.)
 
 {phang}
 {cmd:log} calculates in log z.  Post-estimation mode reads this from
@@ -384,27 +384,27 @@ Post-estimation, overriding the counterfactual with an explicit cubic:
 {pstd}
 Standalone, estimator 1, a curved (degree-3) counterfactual, exact inversion:
 
-{phang2}{cmd:. polbunchbias, estimator(1) zstar(1) t0(0.2) t1(0.6) elasticity(0.4) zlo(0) zhi(2.2) zl(0.9) zh(1.15) h0poly(1 -0.5 -0.75 0.25) exact}
+{phang2}{cmd:. polbunchbias, estimator(1) zstar(1) t0(0.2) t1(0.6) elasticity(0.4) support(0 2.2) window(0.9 1.15) h0poly(1 -0.5 -0.75 0.25) exact}
 
 {pstd}
 Standalone, degree-1 counterfactual (reproduces the earlier behaviour):
 
-{phang2}{cmd:. polbunchbias, estimator(1) zstar(1) t0(0.2) t1(0.6) elasticity(0.4) zlo(0) zhi(2) zl(0.99) zh(1) relslope(0.5) constant}
+{phang2}{cmd:. polbunchbias, estimator(1) zstar(1) t0(0.2) t1(0.6) elasticity(0.4) support(0 2) window(0.99 1) relslope(0.5) constant}
 
 {pstd}
 Estimator 2 with the split-at-the-kink bunching mass and exact inversion:
 
-{phang2}{cmd:. polbunchbias, estimator(2) zstar(1) t0(0.2) t1(0.6) elasticity(0.4) zlo(0) zhi(2) zl(0.99) zh(1) relslope(0.5) splitmass exact}
+{phang2}{cmd:. polbunchbias, estimator(2) zstar(1) t0(0.2) t1(0.6) elasticity(0.4) support(0 2) window(0.99 1) relslope(0.5) splitmass exact}
 
 {pstd}
 Saez-style estimator:
 
-{phang2}{cmd:. polbunchbias, estimator(4) zstar(1) t0(0.2) t1(0.6) elasticity(0.4) zlo(0) zhi(2.2) zl(0.99) zh(1) relslope(0)}
+{phang2}{cmd:. polbunchbias, estimator(4) zstar(1) t0(0.2) t1(0.6) elasticity(0.4) support(0 2.2) window(0.99 1) relslope(0)}
 
 {pstd}
 Iterated (self-consistent) bias correction:
 
-{phang2}{cmd:. polbunchbias, estimator(1) zstar(1) t0(0.2) t1(0.6) elasticity(0.4) zlo(0) zhi(2) zl(0.99) zh(1) relslope(0.5) iterate}
+{phang2}{cmd:. polbunchbias, estimator(1) zstar(1) t0(0.2) t1(0.6) elasticity(0.4) support(0 2) window(0.99 1) relslope(0.5) iterate}
 
 
 {marker results}{...}
@@ -450,7 +450,7 @@ Iterated (self-consistent) bias correction:
 {synopt :{cmd:r(corrected_elasticity)}}elasticity after {cmd:iterate}, else the input value{p_end}
 {synopt :{cmd:r(iterations)}}number of iterations performed{p_end}
 {synopt :{cmd:r(converged)}}1 if {cmd:iterate} converged; 0 if not; missing otherwise{p_end}
-{synopt :{cmd:r(iterate_diverged)}}1 if the {cmd:iterate} self-consistency loop failed to converge and the un-iterated bias was reported instead; 0 otherwise{p_end}
+{synopt :{cmd:r(bias_iterate_diverged)}}1 if the {cmd:iterate} self-consistency loop failed to converge and the un-iterated bias was reported instead; 0 otherwise{p_end}
 {synopt :{cmd:r(bias_uniter_polynomial)}}set only when {cmd:iterate} failed to converge at this order and was PROMOTED (the default) to a converged lower order: the un-iterated (plug-in) order that was demoted{p_end}
 {synopt :{cmd:r(bias_uniter_h)} / {cmd:r(bias_uniter_B)} / {cmd:r(bias_uniter_response)} / {cmd:r(bias_uniter_shift)} / {cmd:r(bias_uniter_elasticity)}}the demoted un-iterated (plug-in) bias estimands, kept alongside the promoted {cmd:r(bias_h)} etc.{p_end}
 {synopt :{cmd:r(bias_iter_polynomial)}}with {cmd:nopromote}: when {cmd:iterate} failed to converge at the reported order, the highest lower order at which it DOES reach a genuine self-consistent fixed point; missing if none does (or {cmd:iterate} converged / was not requested / was promoted instead){p_end}

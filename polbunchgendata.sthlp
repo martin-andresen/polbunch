@@ -31,10 +31,10 @@ relocated according to the model.  The behavioural response is written into
 {synopt:{opt cutoff(#)}}Kink point (in levels, or in logs with {opt log}).  Default 1.{p_end}
 {synopt:{opt t0(#)}}Marginal tax rate below the kink.  Default 0.2.{p_end}
 {synopt:{opt t1(#)}}Marginal tax rate above the kink.  Default 0.6.{p_end}
-{synopt:{opt el(spec)}}Compensated elasticity.  {it:spec} is {bf:either} a
+{synopt:{opt el:asticity(spec)}}Compensated elasticity.  {it:spec} is {bf:either} a
 nonnegative number (homogeneous elasticity) {bf:or} any Stata expression,
 evaluated per observation, that draws an individual elasticity -- e.g.
-{cmd:el(0.4)}, {cmd:el(0.4 + rnormal(0,0.1))}, {cmd:el(rbeta(2,3)*1.5)}.
+{cmd:elasticity(0.4)}, {cmd:elasticity(0.4 + rnormal(0,0.1))}, {cmd:elasticity(rbeta(2,3)*1.5)}.
 Draws are floored at 1e-8.  Default 0.4.{p_end}
 {synopt:{opt incomeeffect(spec)}}Income effects.  {it:spec} is {bf:either} a
 number in [0,1) {bf:or} a Stata expression, evaluated per observation, drawing
@@ -60,13 +60,13 @@ expression, e.g. {cmd:buncherror(+rnormal(0,0.05))} or
 {title:Examples}
 
 {pstd}Homogeneous elasticity, default triangular counterfactual:{p_end}
-{phang2}{cmd:. polbunchgendata z, obs(20000) cutoff(1) el(0.4) t0(0.2) t1(0.6)}{p_end}
+{phang2}{cmd:. polbunchgendata z, obs(20000) cutoff(1) elasticity(0.4) t0(0.2) t1(0.6)}{p_end}
 
 {pstd}Heterogeneous elasticity centred on 0.4:{p_end}
-{phang2}{cmd:. polbunchgendata z, el(0.4 + rnormal(0,0.15)) t0(0.2) t1(0.6)}{p_end}
+{phang2}{cmd:. polbunchgendata z, elasticity(0.4 + rnormal(0,0.15)) t0(0.2) t1(0.6)}{p_end}
 
 {pstd}Heterogeneous income effects and an optimisation friction:{p_end}
-{phang2}{cmd:. polbunchgendata z, el(0.5) incomeeffect(rbeta(2,3)*0.6) buncherror(+rnormal(0,0.03))}{p_end}
+{phang2}{cmd:. polbunchgendata z, elasticity(0.5) incomeeffect(rbeta(2,3)*0.6) buncherror(+rnormal(0,0.03))}{p_end}
 
 
 {marker results}{...}

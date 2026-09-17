@@ -28,7 +28,7 @@ from the bin spacing and {opt bw()} may not be specified.
 {synopt:{opt cut:off(#)}}required; specifies the kink point or bunching point{p_end}
 {synopt:{opt bw(#)}}bin width; required with individual-level data and not allowed with pre-binned data{p_end}
 {synopt:{opt pol:ynomial(#)}}degree of the counterfactual polynomial; default is {cmd:polynomial(7)}{p_end}
-{synopt:{opt lim:its(numlist)}}two integers specifying the number of excluded bins below and above the cutoff; default is {cmd:limits(1 0)}{p_end}
+{synopt:{opt w:indow(numlist)}}two integers specifying the number of excluded bins below and above the cutoff; default is {cmd:window(1 0)}{p_end}
 {synopt:{opt est:imator(#)}}estimator to use; default is {cmd:estimator(3)}{p_end}
 {synopt:{opt delta:max(#)}}upper bound on the structural shift {cmd:delta} in the estimator 2/3 profile search; default {cmd:deltamax(1)} (a 100% earnings response){p_end}
 {synopt:{opt log}}specifies that the running variable is in logs{p_end}
@@ -54,7 +54,7 @@ from the bin spacing and {opt bw()} may not be specified.
 {syntab:Inference}
 {synopt:{opt vce(vcetype)}}{it:vcetype} is {cmd:conventional} (default; synonym {cmd:analytic}), {cmd:robust}, {cmd:hc2}, {cmd:hc3}, {cmd:cluster} {it:clustvar} (or {cmd:cluster} {it:stub}{cmd:, nclusters(}{it:#}{cmd:)} for pre-binned data), {cmd:bootstrap}{cmd:[, }{it:subopts}{cmd:]}, or {cmd:none}{p_end}
 {synopt:{opt scale(spec)}}overdispersion multiplier for {cmd:vce(conventional)}, as in {helpb glm}; {it:spec} is {cmd:1} (default), {cmd:x2} (Pearson {it:phi}-hat), or a positive number{p_end}
-{synopt:{opt boot:reps(#)}}number of bootstrap repetitions for {cmd:vce(bootstrap)}; default {cmd:bootreps(500)}; also settable as {cmd:vce(bootstrap, reps(#))}{p_end}
+{synopt:{opt reps(#)}}number of bootstrap repetitions for {cmd:vce(bootstrap)}; default {cmd:reps(500)}; also settable as {cmd:vce(bootstrap, reps(#))}{p_end}
 {synopt:{opt nomasscorr}}disable the reference-region overdispersion correction to the bunching-mass row under {cmd:vce(robust)}/{cmd:hc2}/{cmd:hc3}{p_end}
 {synopt:{opt nodots}}suppress bootstrap progress dots{p_end}
 {synopt:{it:vce(bootstrap) subopts}}{cmd:multinomial} (default) {c |} {cmd:residual} {c |} {cmd:wild}; {cmd:bayesian}; {cmd:normal} (default) {c |} {cmd:bc} {c |} {cmd:percentile}; {cmd:wildweights(rademacher|mammen|webb)}; {cmd:reps(#)}; {cmd:seed(#)}{p_end}
@@ -93,7 +93,7 @@ By default, {cmd:polbunch} normalizes the estimation scale to
 This normalization improves numerical conditioning. Specify {opt nonormalize} to estimate on the original scale.
 
 {pstd}
-The option {opt limits(L H)} defines the excluded bunching region. If the cutoff lies inside a bin, that cutoff-crossing bin is included in the excluded region together with {it:L} bins below
+The option {opt window(L H)} defines the excluded bunching region. If the cutoff lies inside a bin, that cutoff-crossing bin is included in the excluded region together with {it:L} bins below
 and {it:H} bins above. If the cutoff lies exactly on a bin edge, there is no cutoff-crossing bin; the command excludes {it:L} bins below and {it:H} bins above the cutoff. Non-excluded control
 bins are classified as left or right according to the edges of the excluded region.
 
@@ -137,7 +137,7 @@ plausible; specify {opt allownegative} to search {bf:(-1, deltamax]} instead.
 {pstd}
 If the profile minimizer lands on a bound of the search interval, or the profiled sum of squares has a second interior local minimum at a materially different {cmd:delta} whose fit is within 10% of the best, the structural shift is treated as weakly identified: {cmd:polbunch}
 reports the counterfactual density, number of bunchers and excess mass (and, for estimator 2, the {cmd:delta} column), but withholds the shift, marginal response and elasticity, sets {cmd:e(hasresp)} to 0 and {cmd:e(delta_weakid)} to 1, and displays a
-note. This most often means the excluded window is too narrow to pin down the response length or the level-shift restriction is rejected -- consult the minimum-distance or Hausman test and try a different {opt polynomial()} or {opt limits()}.
+note. This most often means the excluded window is too narrow to pin down the response length or the level-shift restriction is rejected -- consult the minimum-distance or Hausman test and try a different {opt polynomial()} or {opt window()}.
 {p_end}
 
 {marker transform}{...}
@@ -169,7 +169,7 @@ For estimators 1--4, {cmd:polbunch} tests the restrictions the selected estimato
 {cmd:test(minimumdistance)} -- the {bf:omnibus} test. A minimum-distance / overidentification statistic on the whole cross-kink coefficient vector (the {it:K}+1 polynomial-coefficient jumps plus the excess mass), profiling out the estimator's structural nuisance parameter. Distributed chi-squared with {it:K}+1 degrees of freedom. For the naive estimator this coincides with {cmd:test(wald)} (there is no nuisance parameter), so it is not offered separately there. Available for estimators 2 and 3.
 
 {phang}
-{cmd:test(hausman)} -- the {bf:focused} test. A generalised (Wooldridge-form) Hausman statistic on the single parameter of interest: it contrasts the restricted elasticity with the elasticity implied by the unrestricted fit, standardised by the variance of the {it:difference} -- built from the joint influence functions of the two estimators on the shared bin counts, so their covariance is accounted for and no efficiency assumption on the restricted estimator is required. Distributed chi-squared with 1 degree of freedom. Requires an analytic {cmd:vce()} ({cmd:analytic}, {cmd:robust}, {cmd:hc2}, {cmd:hc3} or {cmd:cluster}); the meat matrix carries through. Available for estimators 1, 2 and 3. {cmd:polbunch} also reports the unrestricted elasticity and its standard error ({cmd:e(elast_unrestricted)}, {cmd:e(se_elast_unrestricted)}): a large standard error there -- wild extrapolation of the counterfactual into the excluded region -- means the test has little power in that application and the omnibus statistic is the one to read. {it:e_U} is always computed on the {cmd:exact} + {cmd:splitmass} axes -- the consistent combination -- regardless of the reported estimate's axes. So for the model-consistent estimator the contrast isolates the cross-kink density restriction; for the naive and Chetty estimators it additionally reflects their own {cmd:constant}/{cmd:poolmass} approximations, which is appropriate, since those are part of the estimator's bias. When the exact inversion has no real root on the extrapolated unrestricted counterfactual -- common with a high {opt polynomial()} and a wide excluded region -- {it:e_U} cannot be formed and the Hausman test is not reported; lower the degree, narrow {opt limits()}, or use {cmd:minimumdistance}, which needs no inversion.
+{cmd:test(hausman)} -- the {bf:focused} test. A generalised (Wooldridge-form) Hausman statistic on the single parameter of interest: it contrasts the restricted elasticity with the elasticity implied by the unrestricted fit, standardised by the variance of the {it:difference} -- built from the joint influence functions of the two estimators on the shared bin counts, so their covariance is accounted for and no efficiency assumption on the restricted estimator is required. Distributed chi-squared with 1 degree of freedom. Requires an analytic {cmd:vce()} ({cmd:analytic}, {cmd:robust}, {cmd:hc2}, {cmd:hc3} or {cmd:cluster}); the meat matrix carries through. Available for estimators 1, 2 and 3. {cmd:polbunch} also reports the unrestricted elasticity and its standard error ({cmd:e(elast_unrestricted)}, {cmd:e(se_elast_unrestricted)}): a large standard error there -- wild extrapolation of the counterfactual into the excluded region -- means the test has little power in that application and the omnibus statistic is the one to read. {it:e_U} is always computed on the {cmd:exact} + {cmd:splitmass} axes -- the consistent combination -- regardless of the reported estimate's axes. So for the model-consistent estimator the contrast isolates the cross-kink density restriction; for the naive and Chetty estimators it additionally reflects their own {cmd:constant}/{cmd:poolmass} approximations, which is appropriate, since those are part of the estimator's bias. When the exact inversion has no real root on the extrapolated unrestricted counterfactual -- common with a high {opt polynomial()} and a wide excluded region -- {it:e_U} cannot be formed and the Hausman test is not reported; lower the degree, narrow {opt window()}, or use {cmd:minimumdistance}, which needs no inversion.
 
 {phang}
 {cmd:test(wald)} (default for estimators 1 and 4) is a Wald test of the restriction the selected estimator imposes, evaluated at the unrestricted estimates. For the naive estimator it is the omnibus test. When specified for estimators 2 or 3 it plugs in a mass-implied value of the structural parameter rather than profiling it, so {cmd:polbunch} prints a note pointing to {cmd:minimumdistance} as the formal test.
@@ -246,10 +246,10 @@ The variance estimator is controlled by {opt vce(vcetype)}, following the usual 
 {cmd:scale(x2)} multiplies the {cmd:vce(conventional)} covariance by the Pearson overdispersion {bf:phi-hat = sum_j (y_j - yhat_j)^2 / yhat_j / (n_ref - p)} estimated from the reference bins -- the quasi-Poisson standard error, as in {helpb glm}. {cmd:scale(#)} uses a literal factor. Supported only with {cmd:vce(conventional)}; {cmd:phi-hat} is returned in {cmd:e(dispersion)} for every analytic run regardless.
 
 {phang}
-{cmd:vce(robust)} (= {cmd:hc1}; {cmd:vce(hc0)}/{cmd:vce(hc2)}/{cmd:vce(hc3)} select the other finite-sample corrections) replaces the multinomial diagonal with the Eicker-White residual meat {bf:(y_j - yhat_j)^2}, HC-corrected. The bunching-mass row, whose fitted residual is ~0 by construction, is instead lifted to {bf:phi-hat * Hstar(1 - Hstar/N)} -- borrowing the reference-region overdispersion into the excluded window (turn this off with {opt nomasscorr}). Robust to arbitrary bin-level heteroskedasticity, to polynomial misspecification treated as noise (round-number heaping, secondary bumps, a neighbouring kink), and to the per-bin part of overdispersion from repeated individuals or year effects. {it:Not} robust to cross-bin correlation (the off-diagonals stay multinomial). Typically wider than {cmd:vce(conventional)} and close to the residual-bootstrap standard errors common in the bunching literature.
+{cmd:vce(robust)} (= {cmd:hc1}; {cmd:vce(hc0)}/{cmd:vce(hc2)}/{cmd:vce(hc3)} select the other finite-sample corrections) replaces the multinomial diagonal with the Eicker-White residual meat {bf:(y_j - yhat_j)^2}, HC-corrected. The bunching-mass row, whose fitted residual is ~0 by construction, is instead lifted to {bf:phi-hat * Hstar(1 - Hstar/N)} -- borrowing the reference-region overdispersion into the excluded window (turn this off with {opt nomasscorr}). Robust to arbitrary bin-level heteroskedasticity, to polynomial misspecification treated as noise (round-number heaping, secondary bumps, a neighbouring kink), and to the per-bin part of overdispersion from repeated individuals or year effects. {it:Not} robust to cross-bin correlation (the off-diagonals stay multinomial). Typically wider than {cmd:vce(conventional)} and close to the residual-bootstrap standard errors common in the bunching literature. Replacing only the diagonal of an otherwise-multinomial meat is not guaranteed to leave it positive semi-definite; when it isn't, the reported standard errors come from the nearest valid covariance instead (see {cmd:e(vce_psdclip)}).
 
 {phang}
-{cmd:vce(bootstrap)} re-runs the full estimator (integration constraint and all) on {opt bootreps(#)} resampled bin-count vectors and reports the standard deviation of the resulting estimates. The {it:subopts} select the resampling scheme:
+{cmd:vce(bootstrap)} re-runs the full estimator (integration constraint and all) on {opt reps(#)} resampled bin-count vectors and reports the standard deviation of the resulting estimates. The {it:subopts} select the resampling scheme:
 
 {phang2}{cmd:multinomial} (default) -- Dirichlet resample of the bin counts. Equivalent to resampling individuals and re-binning, so it targets the same object as {cmd:vce(conventional)}.{p_end}
 {phang2}{cmd:residual} -- resample, {it:iid} with replacement, the reference-bin residuals of the {it:fitted model itself} -- {bf:y_j - h0(z_j)} below the kink and {bf:y_j - h1(z_j; delta-hat)} above -- and add them back to that same fitted mean (Chetty/CFOP). Because the pool is drawn around the estimated counterfactual (not a separate, more flexible per-side fit), it carries the model's own lack of fit; it imposes a common residual variance across bins, so it is close to {cmd:scale(x2)} in spirit. The integration constraint is re-solved each draw. The excluded bins carry no per-bin counterfactual, so they are perturbed by {bf:sqrt(phi-hat * y_j)} noise -- the resampling twin of the {cmd:vce(robust)} mass row.{p_end}
@@ -318,7 +318,7 @@ With {it:pre-binned} input, {it:clustvar} is instead a {it:stub} naming {bf:J} v
 {pstd}
 Generate simulated data from the companion data-generating command:{p_end}
 
-{phang2}{cmd:. polbunchgendata, obs(10000) t0(0.2) t1(0.6) el(0.4) cutoff(1)}{p_end}
+{phang2}{cmd:. polbunchgendata, obs(10000) t0(0.2) t1(0.6) elasticity(0.4) cutoff(1)}{p_end}
 
 {pstd}
 Estimate bunching using the default estimator and a correctly specified first-degree polynomial with bandwidth 0.01:{p_end}
@@ -353,7 +353,7 @@ Compare with the Saez trapezoid estimator, restricting to a small region around 
 {pstd}
 Use the bootstrap for inference with 200 repetitions:{p_end}
 
-{phang2}{cmd:. polbunch z, cutoff(1) bw(0.01) polynomial(1) vce(bootstrap) bootreps(200)}{p_end}
+{phang2}{cmd:. polbunch z, cutoff(1) bw(0.01) polynomial(1) vce(bootstrap) reps(200)}{p_end}
 
 {pstd}
 Report misspecification-robust (Eicker-White residual) standard errors, comparable to the residual-bootstrap standard errors common in the bunching literature:{p_end}
@@ -369,12 +369,12 @@ Quasi-Poisson standard errors (one overdispersion parameter):{p_end}
 Reproduce the Chetty/CFOP residual bootstrap, or its heteroskedasticity-robust (wild) counterpart with percentile intervals:{p_end}
 
 {phang2}{cmd:. polbunch z, cutoff(1) bw(0.01) polynomial(7) t0(0.2) t1(0.6) vce(bootstrap, residual)}{p_end}
-{phang2}{cmd:. polbunch z, cutoff(1) bw(0.01) polynomial(7) t0(0.2) t1(0.6) vce(bootstrap, wild percentile) bootreps(999)}{p_end}
+{phang2}{cmd:. polbunch z, cutoff(1) bw(0.01) polynomial(7) t0(0.2) t1(0.6) vce(bootstrap, wild percentile) reps(999)}{p_end}
 
 {pstd}
 Test whether the Chetty estimate's elasticity differs significantly from the model-consistent efficient estimator, accounting for the two being estimated on the same data:{p_end}
 
-{phang2}{cmd:. polbunch z, cutoff(1) bw(0.01) polynomial(7) t0(0.2) t1(0.6) estimator(2) vce(bootstrap) bootreps(999) contrast}{p_end}
+{phang2}{cmd:. polbunch z, cutoff(1) bw(0.01) polynomial(7) t0(0.2) t1(0.6) estimator(2) vce(bootstrap) reps(999) contrast}{p_end}
 
 {pstd}
 Suppress internal variance estimation, for example when using Stata's bootstrap prefix:{p_end}
@@ -451,6 +451,7 @@ Collapse to binned data and use polbunch with bin counts {cmd:freq} and bin midp
 {synopt:{cmd:e(dispersion_below)}, {cmd:e(dispersion_above)}}Pearson dispersion of the reference fit {it:below} and {it:above} the cutoff (with {cmd:e(deviance_below)} / {cmd:e(deviance_above)} and their df). Below the cutoff there is no bunching and {it:h1 = h0}, so {cmd:e(dispersion_below)} is a near-pure test of A3; {cmd:e(dispersion_above)} also reflects an A1/A2 shape error in {it:h1}. See {help polbunch##gof:Goodness of fit}{p_end}
 {synopt:{cmd:e(scalefactor)}}factor actually applied by {opt scale()}, when not 1{p_end}
 {synopt:{cmd:e(masscorr)}}1 if the bunching-mass overdispersion correction was applied ({cmd:vce(robust)}/{cmd:hc2}/{cmd:hc3}){p_end}
+{synopt:{cmd:e(vce_psdclip)}}{cmd:vce(robust)}/{cmd:hc2}/{cmd:hc3} only: 1 if the sandwich was not positive semi-definite and was projected onto the nearest valid covariance before standard errors were computed, 0 otherwise. Swapping only the diagonal of the multinomial meat for squared residuals is not guaranteed to leave it PSD; without this projection Stata's own {cmd:ereturn post} would silently report an all-zero variance (with only a terse, easily-missed warning) rather than error. A 1 here does not mean the fit is wrong -- it means the reported standard errors were the nearest valid ones to an otherwise-indefinite sandwich, most often when the polynomial order was reduced for multicollinearity or the sample sits far from the reference bins' center.{p_end}
 {synopt:{cmd:e(bootreps)}}number of bootstrap repetitions, for {cmd:vce(bootstrap)}{p_end}
 {synopt:{cmd:e(N_clust)}}number of clusters, for {cmd:vce(cluster)}{p_end}
 {synopt:{cmd:e(hasresp)}}1 if the shift, marginal response and elasticity are identified and reported; 0 if they were withheld{p_end}
@@ -473,6 +474,7 @@ Collapse to binned data and use polbunch with bin counts {cmd:freq} and bin midp
 {synopt:{cmd:e(contrast_ci_ll)}, {cmd:e(contrast_ci_ul)}}95% normal-approximation CI for the difference{p_end}
 {synopt:{cmd:e(contrast_elast)}, {cmd:e(contrast_elast_ref)}}the reported and reference elasticity point estimates{p_end}
 {synopt:{cmd:e(contrast_reps)}, {cmd:e(contrast_reps_used)}}bootstrap replications requested, and those yielding a paired difference{p_end}
+{p2colreset}{...}
 
 {synoptset 26 tabbed}{...}
 {p2col 5 26 30 2: Macros}{p_end}
@@ -494,6 +496,7 @@ Collapse to binned data and use polbunch with bin counts {cmd:freq} and bin midp
 {synopt:{cmd:e(wildweights)}}wild-bootstrap weight distribution, for {cmd:vce(bootstrap, wild)}{p_end}
 {synopt:{cmd:e(scale)}}{opt scale()} specification, when not 1{p_end}
 {synopt:{cmd:e(properties)}}usually {cmd:b V} when a variance matrix is posted{p_end}
+{p2colreset}{...}
 
 {synoptset 26 tabbed}{...}
 {p2col 5 26 30 2: Matrices}{p_end}
@@ -503,10 +506,12 @@ Collapse to binned data and use polbunch with bin counts {cmd:freq} and bin midp
 {synopt:{cmd:e(bins)}}the raw histogram actually fitted: bin count ({cmd:freq}) and bin {cmd:midpoint} in the original {it:z} units.  Read by {helpb polbunch_contrast} to refit the specification on resampled histograms{p_end}
 {synopt:{cmd:e(G)}}delta-method Jacobian for transformed parameters, when available{p_end}
 {synopt:{cmd:e(ci_bc)} / {cmd:e(ci_percentile)}}bias-corrected / percentile bootstrap confidence bounds for {cmd:e(b)}, when {cmd:vce(bootstrap, bc)} or {cmd:vce(bootstrap, percentile)} is used{p_end}
+{p2colreset}{...}
 
 {synoptset 26 tabbed}{...}
 {p2col 5 26 30 2: Functions}{p_end}
 {synopt:{cmd:e(sample)}}marks the estimation sample{p_end}
+{p2colreset}{...}
 
 
 {marker references}{...}
