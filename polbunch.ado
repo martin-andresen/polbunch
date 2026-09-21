@@ -198,12 +198,12 @@
 							else              loc test all
 						}
 						else {
-							if !inlist("`test'","none","minimumdistance","wald","hausman","all","forceall") {
-								noi di as error "test() can only take wald, minimumdistance, hausman, all or none."
+							if !inlist("`test'","none","minimumdistance","wald","omnibus","hausman","all") {
+								noi di as error "test() can only take omnibus, wald, minimumdistance, hausman, all or none."
 								exit 301
 							}
-							if `estimator'==4 & !inlist("`test'","wald","all","none") {
-								noi di as error "Only test(wald) supported for estimator 4 (Saez) - simple linear restrictions."
+							if `estimator'==4 & !inlist("`test'","wald","omnibus","all","none") {
+								noi di as error "Only test(wald) (or test(omnibus), its alias for estimator 4) supported for estimator 4 (Saez) - simple linear restrictions."
 								exit 301
 							}
 							if `estimator'==1 & "`test'"=="minimumdistance" {
@@ -1224,7 +1224,7 @@
 
 							//STORE RESTRICTED STACKED GRADIENT for the scalar Hausman test.
 							if `dotest' & `s'==0 & "`vce'"=="analytic" & ///
-							   inlist("`test'","hausman","all","forceall") & inlist(`estimator',1,2,3) {
+							   inlist("`test'","hausman","all") & inlist(`estimator',1,2,3) {
 								matrix `GR_raw' = e(G_stack)
 								matrix `y_raw'  = e(y_stack)
 							}
@@ -1237,6 +1237,7 @@
 								if "`t0'" != "" & "`t1'" != "" {
 									local taxopts t0(`t0') t1(`t1')
 								}
+								capture scalar drop bd_buncher_lb bd_buncher_z0 bd_buncher_z1 bd_buncher_extrap
 								if inlist(`estimator',0,1,2,3) {
 									bunch_transform `z', ///
 										estimator(`estimator') ///
@@ -1265,6 +1266,29 @@
 								else {
 									saez_transform, zstarorig(`cutoff_orig') bworig(`bw_orig') t0(`t0') t1(`t1') `log' `grad' `constant'
 									}
+
+								/* estimator(0) buncher-ATE lower bound (Goff) is
+								   recomputed on every replication like B/excess_mass
+								   itself, but only the MAIN fit's value should ever
+								   reach e() -- same capture-before-clobber idiom as
+								   weakid_main/zerosub_main above, since a later
+								   bootstrap rep would otherwise silently overwrite
+								   these global scalars before the outer ereturn
+								   block reads them. */
+								if `s'==0 & `estimator'==0 {
+									local buncherlb_main     = .
+									local buncherz0_main     = .
+									local buncherz1_main     = .
+									local buncherextrap_main = 0
+									capture confirm scalar bd_buncher_lb
+									if !_rc local buncherlb_main = bd_buncher_lb
+									capture confirm scalar bd_buncher_z0
+									if !_rc local buncherz0_main = bd_buncher_z0
+									capture confirm scalar bd_buncher_z1
+									if !_rc local buncherz1_main = bd_buncher_z1
+									capture confirm scalar bd_buncher_extrap
+									if !_rc local buncherextrap_main = bd_buncher_extrap
+								}
 								}
 								
 								matrix `b' = e(b)
@@ -1281,7 +1305,7 @@
 									*/
 									local _shaus_eR = .
 									if `dotest' & "`vce'"=="analytic" & ///
-									   inlist("`test'","hausman","all","forceall") & inlist(`estimator',1,2,3) {
+									   inlist("`test'","hausman","all") & inlist(`estimator',1,2,3) {
 										capture matrix `GbcR_raw' = e(G)
 										capture local _shaus_eR = _b[bunching:elasticity]
 										if _rc local _shaus_eR = .
@@ -1405,7 +1429,7 @@
 									*/
 									local _shaus_eU = .
 									if `s'==0 & "`vce'"=="analytic" & ///
-									   inlist("`test'","hausman","all","forceall") & inlist(`estimator',1,2,3) {
+									   inlist("`test'","hausman","all") & inlist(`estimator',1,2,3) {
 										capture matrix `GU_raw'  = e(G_stack)
 										capture matrix `muU_raw' = e(mu_stack)
 										summarize `y' if `bunch' > 0, meanonly
@@ -1661,22 +1685,44 @@
 								/*
 									Which tests to run.
 									  wald            -- linear restriction (naive, Saez)
-									  minimumdistance -- omnibus chi2_{K+1} on the cross-kink
+									  minimumdistance -- chi2_{K+1} on the cross-kink
 									                     coefficient vector (Chetty, model-consistent)
 									  hausman         -- focused chi2_1 on the elasticity
 									For the naive estimator wald IS the minimum-distance
 									test (no nuisance parameter), so it is not run twice.
+									Exactly one of wald/minimumdistance is ever the
+									estimator's OWN nested-restriction test -- wald for
+									1/4, minimumdistance for 2/3 -- and is reported under
+									the unified name "omnibus" (see the _tests_pub
+									bookkeeping below). wald CAN still be explicitly
+									requested on estimator 2/3 as a secondary shape
+									diagnostic (see the note a few lines up); that
+									off-label case keeps its own "wald" name, since it is
+									NOT the estimator's omnibus test.
 								*/
-								if inlist("`test'","all","forceall") {
+								if "`test'"=="all" {
 									if `estimator'==4              local _tests_to_run "wald"
 									else if `estimator'==1         local _tests_to_run "wald hausman"
-									else if "`test'"=="forceall"   local _tests_to_run "wald minimumdistance hausman"
 									else                           local _tests_to_run "minimumdistance hausman"
 								}
 								else {
-									local _tests_to_run "`test'"
-									local testname = cond("`test'"=="wald","Wald test", ///
-										cond("`test'"=="minimumdistance","Minimum-distance test","Hausman test"))
+									/*
+										test(omnibus) is an estimator-agnostic alias for
+										"this estimator's own nested-restriction test" --
+										wald for 1/4, minimumdistance for 2/3 -- so the
+										caller never has to know which mechanics apply to
+										their estimator.
+									*/
+									if "`test'"=="omnibus" {
+										local _tests_to_run = cond(inlist(`estimator',1,4), "wald", "minimumdistance")
+									}
+									else local _tests_to_run "`test'"
+									local _is_omnibus_req = ///
+										(inlist(`estimator',1,4) & "`_tests_to_run'"=="wald") | ///
+										(inlist(`estimator',2,3) & "`_tests_to_run'"=="minimumdistance")
+									local testname = cond(`_is_omnibus_req', "Omnibus test", ///
+										cond("`_tests_to_run'"=="wald","Wald test", ///
+										cond("`_tests_to_run'"=="minimumdistance","Minimum-distance test","Hausman test")))
 								}
 
 								/*
@@ -1891,7 +1937,21 @@
 
 								// Run each test and store per-test results
 								local _tests_done ""
+								local _tests_pub  ""
 								foreach _tt of local _tests_to_run {
+
+									/*
+										Public/display name for THIS `_tt': "omnibus"
+										when it's the estimator's own nested-restriction
+										test (wald for 1/4, minimumdistance for 2/3),
+										otherwise its own mechanics name unchanged
+										(hausman always, or wald requested off-label on
+										estimator 2/3 as a diagnostic).
+									*/
+									local _ispub_omni = ///
+										(inlist(`estimator',1,4) & "`_tt'"=="wald") | ///
+										(inlist(`estimator',2,3) & "`_tt'"=="minimumdistance")
+									local _pubname = cond(`_ispub_omni', "omnibus", "`_tt'")
 
 									if `estimator'!=4 {
 										if "`_tt'"=="minimumdistance" {
@@ -1914,7 +1974,7 @@
 												over-rejects (18.7%), so test(..., boot
 												residual) is allowed (for exploration) but
 												not the default. Fires only on an explicit
-												test(minimumdistance/all/forceall, boot
+												test(minimumdistance/omnibus/all, boot
 												[...]) suboption -- see _mdb_b0s above,
 												built independently of vce().
 											*/
@@ -2006,8 +2066,9 @@
 									}
 
 									if (`_test_rc' != 0) | (`_fc' != 0) {
-										local _tname = cond("`_tt'"=="wald","Wald test", ///
-											cond("`_tt'"=="minimumdistance","Minimum-distance test","Hausman test"))
+										local _tname = cond(`_ispub_omni', "Omnibus test", ///
+											cond("`_tt'"=="wald","Wald test", ///
+											cond("`_tt'"=="minimumdistance","Minimum-distance test","Hausman test")))
 										if `_test_rc' != 0 local _tfc = `_test_rc'
 										else local _tfc = `_fc'
 										noi di as text "Note: `_tname' could not be computed; statistic not reported (rc=`_tfc')."
@@ -2024,6 +2085,7 @@
 										if "`_tt'"=="minimumdistance" local delta_md = r(delta)
 										if "`_tt'"=="hausman" local _shaus_seU = r(seU)
 										local _tests_done "`_tests_done' `_tt'"
+										local _tests_pub  "`_tests_pub' `_pubname'"
 
 										/*
 											Finish the wild bootstrap-of-statistic
@@ -2105,6 +2167,7 @@
 								}
 
 								local _tests_done = strtrim("`_tests_done'")
+								local _tests_pub  = strtrim("`_tests_pub'")
 								if "`_tests_done'"=="" local dotest = 0
 							}
 
@@ -2148,21 +2211,41 @@
 						}
 						else eret post `bmain', esample(`touse') obs(`N') depname(freq)
 						if `dotest' {
-							foreach _tt of local _tests_done {
-								estadd scalar chi2_`_tt' = `chi2_`_tt''
-								estadd scalar p_`_tt'    = `p_`_tt''
-								estadd scalar df_`_tt'   = `df_`_tt''
+							/*
+								Stored under the PUBLIC name (_tests_pub, paired
+								index-for-index with _tests_done): "omnibus" for
+								whichever of wald/minimumdistance is this
+								estimator's own nested-restriction test, its own
+								mechanics name otherwise (hausman always; wald
+								when explicitly requested off-label on estimator
+								2/3 as a diagnostic -- see the _ispub_omni logic
+								above).
+							*/
+							local _ntd : word count `_tests_done'
+							forvalues _i = 1/`_ntd' {
+								local _tt  : word `_i' of `_tests_done'
+								local _pub : word `_i' of `_tests_pub'
+								estadd scalar chi2_`_pub' = `chi2_`_tt''
+								estadd scalar p_`_pub'    = `p_`_tt''
+								estadd scalar df_`_pub'   = `df_`_tt''
 							}
 							if strpos(" `_tests_done' "," minimumdistance ") {
 								estadd scalar delta_md = `delta_md'
 								if "`p_md_boot'" != "" {
-									estadd scalar p_minimumdistance_boot   = `p_md_boot'
-									estadd scalar minimumdistance_boot_n   = `nboot_md_ok'
+									/*
+										minimumdistance is only ever valid on
+										estimator 2/3 (disallowed on 1/4), so it is
+										always this estimator's own omnibus test --
+										no off-label case to guard against.
+									*/
+									estadd scalar p_omnibus_boot = `p_md_boot'
+									estadd scalar omnibus_boot_n = `nboot_md_ok'
 								}
 							}
 							if strpos(" `_tests_done' "," wald ") & "`p_wald_boot'" != "" {
-								estadd scalar p_wald_boot   = `p_wald_boot'
-								estadd scalar wald_boot_n   = `nboot_wald_ok'
+								local _pub = cond(inlist(`estimator',1,4), "omnibus", "wald")
+								estadd scalar p_`_pub'_boot = `p_wald_boot'
+								estadd scalar `_pub'_boot_n = `nboot_wald_ok'
 							}
 							if "`p_md_boot'" != "" | "`p_wald_boot'" != "" {
 								ereturn local mdboot_type "`mdbtype'"
@@ -2348,6 +2431,32 @@
 							}
 						}
 
+						/*
+							estimator(0) only: Goff (2023)'s assumption-light
+							lower bound on the buncher ATE E[Y0-Y1|buncher],
+							valid under convex preferences alone -- no common
+							elasticity, no bi-log-concavity. Still relies on
+							the fitted polynomials' own extrapolation past
+							the excluded region, same fragility as any other
+							A3-based quantity here -- see e(buncher_ate_lb_extrap)
+							and polbunch.sthlp.
+						*/
+						if `estimator'==0 {
+							capture confirm number `buncherlb_main'
+							if !_rc ereturn scalar buncher_ate_lb = `buncherlb_main'
+							capture confirm number `buncherz0_main'
+							if !_rc ereturn scalar buncher_ate_lb_z0 = `buncherz0_main'
+							capture confirm number `buncherz1_main'
+							if !_rc ereturn scalar buncher_ate_lb_z1 = `buncherz1_main'
+							capture confirm number `buncherextrap_main'
+							if !_rc ereturn scalar buncher_ate_lb_extrap = `buncherextrap_main'
+							if `buncherextrap_main'==1 {
+								noi di as text "Note: the buncher-ATE lower bound (e(buncher_ate_lb)) required extrapolating"
+								noi di as text "      h0 or h1 beyond the excluded region -- limits() may be narrower than the"
+								noi di as text "      response window this bound implies. See e(buncher_ate_lb_extrap)."
+							}
+						}
+
 						//Display results
 						noi {
 							di _newline
@@ -2431,11 +2540,13 @@
 								local stub = max(`stub', 12)
 								local W = `stub' + 67
 
-								if inlist("`test'","all","forceall") {
+								if "`test'"=="all" {
 									local _first = 1
-									foreach _tt of local _tests_done {
-										local _tshort = cond("`_tt'"=="wald","Wald", ///
-											cond("`_tt'"=="minimumdistance","Min. dist.","Hausman"))
+									local _ntd : word count `_tests_done'
+									forvalues _i = 1/`_ntd' {
+										local _tt  : word `_i' of `_tests_done'
+										local _pub : word `_i' of `_tests_pub'
+										local _tshort = cond("`_pub'"=="hausman","Hausman","Omnibus")
 										if `_first' {
 											di as txt "Model assumption tests:" ///
 												_col(`=`W'-35') "`_tshort': Chi2(`df_`_tt'')" ///
@@ -2459,16 +2570,26 @@
 									}
 								}
 								else {
+									/*
+										`test' may literally be "omnibus" (an
+										estimator-agnostic request); the mechanics
+										name it resolved to (_tests_to_run) is what
+										keys the chi2_/p_/df_ locals set inside the
+										test loop above, so read through that, not
+										through `test' itself. `testname' (set
+										alongside _tests_to_run) already carries the
+										right display label either way.
+									*/
 									di as txt "`testname' of model assumptions:" ///
-										_col(`=`W'-35') "Chi2(`df_`test'') test statistic" ///
-										_col(`=`W'-10') as res %10.4f `chi2_`test''
+										_col(`=`W'-35') "Chi2(`df_`_tests_to_run'') test statistic" ///
+										_col(`=`W'-10') as res %10.4f `chi2_`_tests_to_run''
 									di as txt _col(`=`W'-35') as txt "p-value" ///
-										_col(`=`W'-10') as res %10.4f `p_`test''
-									if "`test'"=="minimumdistance" & "`p_md_boot'" != "" {
+										_col(`=`W'-10') as res %10.4f `p_`_tests_to_run''
+									if "`_tests_to_run'"=="minimumdistance" & "`p_md_boot'" != "" {
 										di as txt _col(`=`W'-35') "bootstrap p-value (`mdbtype', N=`nboot_md_ok')" ///
 											_col(`=`W'-10') as res %10.4f `p_md_boot'
 									}
-									if "`test'"=="wald" & "`p_wald_boot'" != "" {
+									if "`_tests_to_run'"=="wald" & "`p_wald_boot'" != "" {
 										di as txt _col(`=`W'-35') "bootstrap p-value (`mdbtype', N=`nboot_wald_ok')" ///
 											_col(`=`W'-10') as res %10.4f `p_wald_boot'
 									}
@@ -3879,6 +4000,154 @@ cap program drop bunch_saez
 			r[K+1] = b - a
 
 			return(r)
+		}
+
+		// int_a^b z*h(z) dz where h has the same (z,z^2,...,z^K,1) basis
+		// as pbasis_row/intbasis -- used to compute mean(Y | Y in [a,b])
+		// under a fitted h without numerical integration.
+		real rowvector intbasis_y(real scalar a, real scalar b, real scalar K)
+		{
+			real scalar j
+			real rowvector r
+
+			r = J(1, K+1, .)
+
+			for (j=1; j<=K; j++) {
+				r[j] = (b^(j+2) - a^(j+2))/(j+2)
+			}
+
+			// constant term: int_a^b z*1 dz
+			r[K+1] = (b^2 - a^2)/2
+
+			return(r)
+		}
+
+		/*
+			Goff (2023, "Partial Identification from Bunching at Kinks and
+			Notches")'s assumption-light lower bound on the buncher ATE
+			E[Y0-Y1 | buncher], for estimator(0) only (the one fit with two
+			independently-estimated polynomials beta/gamma, so B is
+			identified under A2/A3 alone, no common-elasticity link needed).
+
+			Extrapolate h0 (beta) up from zstar and h1 (gamma) down from
+			zstar until each side's cumulative mass reaches B, take the
+			mean of Y within each band, and difference the means -- Goff's
+			Proposition 3 shows this is always a valid lower bound on the
+			true buncher ATE under convex preferences alone. Both bands are
+			located by a plain bisection (cumulative mass of a positive
+			density is monotonic); returns missing rather than guessing if
+			the bracket never reaches B. A root landing beyond zH/below zL
+			is flagged via `extrap' rather than treated as an error -- it
+			means the implied response window is wider than limits().
+		*/
+		void buncher_ate_lb0(
+			real rowvector beta,
+			real rowvector gamma,
+			real scalar B,
+			real scalar zstar,
+			real scalar zH,
+			real scalar zL,
+			real scalar bw,
+			real scalar K,
+			real scalar zdag,
+			real scalar zddag,
+			real scalar lb,
+			real scalar extrap
+		)
+		{
+			real scalar lo, hi, mid, Fmid, tol, iter, maxiter
+			real scalar C, spanU, spanL, Btarget
+
+			zdag = .; zddag = .; lb = .; extrap = .
+
+			if (B <= 0 | missing(B)) return
+
+			tol = 1e-8
+			maxiter = 100
+			C = 4
+
+			// intbasis(a,b,K)*beta' integrates h0 as a "count per bin"
+			// function of continuous z (matching pbasis_row/intbasis's use
+			// elsewhere, e.g. RB=intbasis(...)/bw_est for the poolmass B),
+			// so it must be compared against B*bw, not B itself -- B is a
+			// count, intbasis(...)*beta' is a count-times-z quantity until
+			// divided by bw. Missed this originally: comparing the raw
+			// integral straight to B silently demanded ~1/bw times too
+			// much accumulated mass, making the bracket search fail (or,
+			// worse, in cases where it still found *a* root, overshoot
+			// zdag/zddag far past where the true root actually sits).
+			Btarget = B*bw
+
+			// spanU/spanL anchor the bracket width to the excluded region on
+			// each side. A one-sided limits() (e.g. limits(0,H), the natural
+			// choice under the "no hole below the cutoff" pure-kink model)
+			// makes one side's own excluded-region width exactly zero -- an
+			// unprincipled constant fallback there (tried and found wanting:
+			// it does not scale with this fit's own units and can make the
+			// bracket search fail even when a perfectly good root exists, as
+			// happened on the *other* side's h1 in a real case). Prefer the
+			// non-degenerate side's own width as the fallback instead, since
+			// it is at least informed by this same fit's scale; only fall
+			// back further, to a multiple of the bin width, if both sides
+			// are degenerate (limits() omitted entirely).
+			// A "degenerate" side is anything under half a bin wide, not
+			// literally <=0: zL/zH/zstar reach here via independent
+			// floating-point paths (e.g. (zL_excl_orig-zmid)/xscale vs.
+			// (cutoff-zmid)/xscale), so limits(0,H) gives spanL a tiny
+			// nonzero residual (observed: 1e-17), not an exact zero -- a
+			// strict <=0 check silently misses it and collapses the
+			// bracket to near-zero width instead of falling back.
+			spanU = (zH - zstar)
+			spanL = (zstar - zL)
+			if (spanU <= 0.5*bw & spanL <= 0.5*bw) {
+				spanU = 10*bw
+				spanL = 10*bw
+			}
+			else {
+				if (spanU <= 0.5*bw) spanU = spanL
+				if (spanL <= 0.5*bw) spanL = spanU
+			}
+
+			// upper band: find zdag>=zstar with int_zstar^zdag h0 = B*bw
+			lo = zstar
+			hi = zstar + C*spanU
+			if ((intbasis(zstar, hi, K)*beta') < Btarget) {
+				// widen once; if still short, give up (missing) rather than
+				// silently extrapolating arbitrarily far
+				hi = zstar + 10*C*spanU
+				if ((intbasis(zstar, hi, K)*beta') < Btarget) return
+			}
+			for (iter=1; iter<=maxiter; iter++) {
+				mid  = (lo+hi)/2
+				Fmid = intbasis(zstar, mid, K)*beta'
+				if (Fmid < Btarget) lo = mid
+				else                hi = mid
+				if (hi-lo < tol) break
+			}
+			zdag = (lo+hi)/2
+
+			// lower band: find zddag<=zstar with int_zddag^zstar h1 = B*bw
+			hi = zstar
+			lo = zstar - C*spanL
+			if ((intbasis(lo, zstar, K)*gamma') < Btarget) {
+				lo = zstar - 10*C*spanL
+				if ((intbasis(lo, zstar, K)*gamma') < Btarget) return
+			}
+			for (iter=1; iter<=maxiter; iter++) {
+				mid  = (lo+hi)/2
+				Fmid = intbasis(mid, zstar, K)*gamma'
+				if (Fmid < Btarget) hi = mid
+				else                lo = mid
+				if (hi-lo < tol) break
+			}
+			zddag = (lo+hi)/2
+
+			// dividing each mean by intbasis(...)*beta'/gamma' (evaluated at
+			// the just-found root, which equals Btarget by construction) is
+			// equivalent to dividing by Btarget itself -- using Btarget
+			// directly avoids recomputing the same integral a third time.
+			lb = (intbasis_y(zstar, zdag, K)*beta')/Btarget - (intbasis_y(zddag, zstar, K)*gamma')/Btarget
+			extrap = (zdag > zH) | (zddag < zL)
 		}
 
 	real scalar response_length(
@@ -5661,6 +5930,7 @@ cap program drop bunch_saez
 			real rowvector Rlo, Rhi, Ihi
 			real scalar m, EM, B, delta
 			real scalar r, u, h_u, shift, MR, elast, A
+			real scalar bd_zdag, bd_zddag, bd_lb, bd_extrap
 
 			real rowvector ibeta, igamma
 			real scalar idelta, iBraw
@@ -5787,6 +6057,25 @@ cap program drop bunch_saez
 					if (dograd) G[oB, iBraw] = 1
 				}
 				b[1,oB] = B
+
+				// Goff assumption-light lower bound on the buncher ATE --
+				// see buncher_ate_lb0's own header comment. Independent of
+				// dograd/the b,G output vector by design.
+				buncher_ate_lb0(beta, gamma, B, cutoff_est, zH_excl_est, zL_excl_est, bw_est, K,
+					bd_zdag, bd_zddag, bd_lb, bd_extrap)
+				// buncher_ate_lb0 works entirely in the normalized (EST)
+				// coordinate system beta/gamma are expressed in -- bd_zdag/
+				// bd_zddag are positions there, bd_lb a difference of two
+				// such positions. Distances convert to original z units by
+				// a factor of xscale alone (the cutoff_orig/zmid shift
+				// cancels in any difference); positions need the shift
+				// added back via cutoff_orig, since z_orig = zmid +
+				// z_est*xscale = cutoff_orig + (z_est-cutoff_est)*xscale.
+				// Missing propagates through this arithmetic unchanged.
+				st_numscalar("bd_buncher_lb",     bd_lb * xscale)
+				st_numscalar("bd_buncher_z0",     cutoff_orig + (bd_zdag  - cutoff_est) * xscale)
+				st_numscalar("bd_buncher_z1",     cutoff_orig + (bd_zddag - cutoff_est) * xscale)
+				st_numscalar("bd_buncher_extrap", bd_extrap)
 			}
 			else if (estimator == 2) {
 				if (nosplit) {

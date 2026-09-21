@@ -1,4 +1,4 @@
-*! polbunch_permute version date 20260917
+*! polbunch_permute version date 20260918
 * Author: Martin Eckhoff Andresen
 * This program is part of the polbunch package.
 *
@@ -48,23 +48,28 @@
 * (cutoff,bw,limits) and so needs no change -- works unmodified.
 *
 * spectests: permutes whatever specification tests the TARGET model
-* already has posted in e() -- Wald/minimum-distance/Hausman chi2
-* (from its own test() choice) and the reference-region deviance /
-* below-cutoff-only deviance (posted by every polbunch fit that isn't
-* vce(none)/multinomial|bayesian-boot, i.e. free -- see polbunch_estat).
-* Nothing new is computed; each detected field gets its own placebo
-* distribution and a one-sided permutation p-value (chi2/deviance are
-* non-negative, larger = more extreme, so "onesided" doesn't apply
-* here). The chi2 tests are NOT free: test() triggers an internal
-* restricted-vs-unrestricted refit inside every placebo's polbunch
-* call, roughly doubling its cost; deviance is free (already posted on
-* every conventional-vce fit). The target model's own null-imposed
-* bootstrap CDF (test(..., boot)) is never re-run per placebo -- a
-* bootstrap inside a permutation loop defeats the point of both.
+* already has posted in e() -- its own omnibus (wald for estimator 1/4,
+* minimumdistance for 2/3, e(chi2_omnibus)) / Hausman chi2 (from its own
+* test() choice) and the reference-region deviance / below-cutoff-only
+* deviance (posted by every polbunch fit that isn't vce(none)/
+* multinomial|bayesian-boot, i.e. free -- see polbunch_estat). A target
+* fit with an off-label test(wald) on estimator 2/3 (a secondary shape
+* diagnostic, NOT that estimator's own omnibus test -- see polbunch's
+* test() docs) is detected and permuted separately, under its own
+* e(chi2_wald), never folded into the omnibus slot. Nothing new is
+* computed; each detected field gets its own placebo distribution and a
+* one-sided permutation p-value (chi2/deviance are non-negative, larger
+* = more extreme, so "onesided" doesn't apply here). The chi2 tests are
+* NOT free: test() triggers an internal restricted-vs-unrestricted refit
+* inside every placebo's polbunch call, roughly doubling its cost;
+* deviance is free (already posted on every conventional-vce fit). The
+* target model's own null-imposed bootstrap CDF (test(..., boot)) is
+* never re-run per placebo -- a bootstrap inside a permutation loop
+* defeats the point of both.
 *
 *   polbunch_permute [name] [if] [in] [, target(bunching:excess_mass) step(#) ///
 *                               maxcutoffs(100) deltamax(1) onesided ///
-*                               clean spectests level(#) nodots ]
+*                               clean spectests avoid(numlist) level(#) nodots ]
 *
 * if/in: restricts which of the CURRENTLY LOADED data may be used when
 * building the placebo-cutoff grid and fitting each placebo -- ANDed onto
@@ -74,10 +79,40 @@
 * must keep using exactly inrange(zvar,e(zlo),e(zhi)) to verify the loaded
 * data reproduces the target's histogram bin-for-bin -- if this if/in would
 * itself change that histogram (e.g. it restricts away part of the sample
-* the target was fitted on), pass clean to skip that check.
+* the target was fitted on), pass clean to skip that check. If if/in empties
+* one or more CONTIGUOUS stretches of the raw data outright (e.g.
+* !inrange(zvar,lo,hi) carving out another kink), those stretches are
+* auto-detected (one cheap data scan on sorted z -- "gap spells," exact and
+* independent of this model's own bw-phased bin grid, not a bw-width bin
+* scan -- see the code for why phase independence matters when two kinks
+* don't share the same bin phase) and folded into the SAME pre-fit
+* window-overlap filter as avoid() -- a candidate whose window merely
+* touches the hole is excluded before ever being fit, not just when the
+* hole happens to break that candidate's specific fit. This matters: a
+* candidate whose window touches the hole but still converges on its
+* surviving data is NOT the same as a clean placebo location -- see avoid()
+* below for why. Only genuinely if/in-created gaps trigger this (data
+* already absent regardless of if/in is left alone); anything else that
+* still fails to fit falls back to the reactive candif classification
+* described further down.
+*
+* avoid(#1 #2 ...): extra kink locations (e.g. OTHER real kinks in the same
+* z-distribution) that must not enter the candidate grid or any placebo's
+* reference window -- the whole point of if/in-excluding them from the data
+* in the first place. Each point is given the SAME excluded-region
+* half-widths as the target model's own donut ((cutoff-lower_limit),
+* (upper_limit-cutoff)) recentred at that point -- i.e. "a kink shaped like
+* mine, just centred elsewhere" -- not a caller-specified radius; pass if/in
+* instead for a differently-shaped exclusion (its own gap is then
+* auto-detected and filtered exactly the same way, see above). Filtered at
+* grid construction, exactly like the true cutoff's own excluded region --
+* never fit, never counted as attempted/used/failed, tallied in
+* r(cutoffs_avoid) instead (r(avoid_user)/r(avoid_auto) split the count by
+* explicit avoid() points vs. auto-detected if/in gaps).
 *
 * Returns r(p), r(observed), r(observed_se), r(observed_t), r(n_placebo),
 * r(n_placebo_tried), r(cutoffs_skipped), r(cutoffs_overlap),
+* r(cutoffs_avoid), r(avoid_user), r(avoid_auto), r(cutoffs_candif),
 * r(placebo_mean/_sd/_min/_max/_lb/_ub) (raw scale),
 * r(placebo_t_mean/_sd/_lb/_ub) (studentized scale), r(step), r(bw),
 * r(cutoff_true), r(onesided), r(clean), r(spectests), r(level),
@@ -90,11 +125,22 @@
 * count both already exclude them, so there is no -1/overlap status value
 * to see here (status -1 remains theoretically possible only in the
 * window_recentered==0 fallback, where overlap can only be discovered
-* after fitting). With spectests: for each of wald/md/hausman/deviance/
+* after fitting). Candidates that fail to fit ONLY because of the
+* caller's own if/in (e.g. carving out ANOTHER real kink's excluded
+* region) are diagnosed by a cheap refit of the same window without that
+* if/in; if that refit converges, the candidate is dropped from
+* placebo_draws entirely (never counted as attempted, used, or failed)
+* and tallied in r(cutoffs_candif) instead -- so a wide if/in-driven data
+* gap elsewhere in the sample is never misreported as non-convergence.
+* With spectests: for each of omnibus/wald/hausman/deviance/
 * deviance_below present on the target, r(observed_<name>) and
 * r(p_<name>_perm), plus matrix r(spectest_draws) (named columns cutoff,
-* chi2_wald, chi2_md, chi2_hausman, deviance, deviance_below, polynomial;
-* same row order as placebo_draws -- missing where not applicable).
+* chi2_omnibus, chi2_wald, chi2_hausman, deviance, deviance_below,
+* polynomial; same row order as placebo_draws -- missing where not
+* applicable). chi2_omnibus is the target's own nested-restriction test
+* (wald for estimator 1/4, minimumdistance for 2/3); chi2_wald here is
+* ONLY the off-label diagnostic case (test(wald) explicitly requested on
+* estimator 2/3), never the same thing as chi2_omnibus for the same fit.
 
 cap program drop polbunch_permute
 program define polbunch_permute, rclass
@@ -108,6 +154,7 @@ program define polbunch_permute, rclass
 		ONESided ///
 		CLEAN ///
 		SPECtests ///
+		AVOID(numlist) ///
 		Level(cilevel) ///
 		NODOTS ]
 
@@ -205,22 +252,28 @@ program define polbunch_permute, rclass
 	 *  nothing new requested, just "what's there." Read before anything  *
 	 *  else touches e().                                                  *
 	 * ------------------------------------------------------------------ */
+	/* hadomni/hadwald are mutually exclusive for the same target fit: a
+	   normal fit's own nested-restriction test posts e(chi2_omnibus)
+	   (whichever of wald/minimumdistance mechanically applies); only an
+	   explicit off-label test(wald) on estimator 2/3 posts e(chi2_wald)
+	   instead, and it never runs alongside hausman (see polbunch's
+	   test() option) -- so hadwald & hadhaus never co-occur either. */
+	local hadomni = 0
 	local hadwald = 0
-	local hadmd   = 0
 	local hadhaus = 0
 	local haddev  = 0
 	local haddevb = 0
 	if "`spectests'" != "" {
+		local hadomni = !missing(e(chi2_omnibus))
 		local hadwald = !missing(e(chi2_wald))
-		local hadmd   = !missing(e(chi2_minimumdistance))
 		local hadhaus = !missing(e(chi2_hausman))
 		local haddev  = !missing(e(deviance))
 		local haddevb = !missing(e(deviance_below))
 	}
-	local nchi2types = `hadwald' + `hadmd' + `hadhaus'
-	if `nchi2types' > 1 local spectestopt "test(all)"
+	local nchi2types = `hadomni' + `hadwald' + `hadhaus'
+	if `hadomni' & `hadhaus' local spectestopt "test(all)"
+	else if `hadomni' local spectestopt "test(omnibus)"
 	else if `hadwald' local spectestopt "test(wald)"
-	else if `hadmd'   local spectestopt "test(minimumdistance)"
 	else if `hadhaus' local spectestopt "test(hausman)"
 	else local spectestopt "test(none)"
 
@@ -267,6 +320,27 @@ program define polbunch_permute, rclass
 		di as error "from this estimate."
 		exit 198
 	}
+
+	/* avoid(): extra kink locations to keep out of the candidate grid,     *
+	 * beyond the target's own (lo0,hi0]. Each point gets the SAME excluded- *
+	 * region half-widths as the target's own donut -- i.e. it is treated   *
+	 * as "a kink shaped like mine, just centred elsewhere" -- not a         *
+	 * caller-specified radius. That is a real assumption: if another kink's *
+	 * own excluded region is a different width, use if/in on this command  *
+	 * instead (see the note on candif-classified candidates below), which  *
+	 * accepts an arbitrary caller-defined exclusion instead of this shape-  *
+	 * copying shortcut.                                                     */
+	local navoid = 0
+	if `"`avoid'"' != "" {
+		local donutlo0 = `cut0' - `lo0'
+		local donuthi0 = `hi0' - `cut0'
+		foreach p of numlist `avoid' {
+			local ++navoid
+			local avoidlo`navoid' = `p' - `donutlo0'
+			local avoidhi`navoid' = `p' + `donuthi0'
+		}
+	}
+	local navoiduser = `navoid'
 
 	/* recover limits(L H) in bin units from the stored window edges,      *
 	 * exactly mirroring polbunch_contrast's edge-vs-crossbin detection.   */
@@ -371,8 +445,8 @@ program define polbunch_permute, rclass
 	 *                                                                      *
 	 * test(): `spectestopt' is test(none) unless spectests found chi2      *
 	 * fields on the target, in which case it reproduces exactly the       *
-	 * union of what's there (test(all) covers >1 type; the single         *
-	 * wald/minimumdistance/hausman type otherwise) -- deviance/           *
+	 * union of what's there (test(all) covers omnibus+hausman; the        *
+	 * single omnibus/wald/hausman type otherwise) -- deviance/            *
 	 * deviance_below need no test() at all, vce(conventional) alone       *
 	 * already posts them.                                                 */
 	local basespec estimator(`estimator0') polynomial(`k0') `bwopt' ///
@@ -459,14 +533,14 @@ program define polbunch_permute, rclass
 
 	/* spectests: pull the observed chi2/deviance values from this same   *
 	 * true-cutoff refit -- e() still holds it at this point.             */
+	local obs_omni  = .
 	local obs_wald  = .
-	local obs_md    = .
 	local obs_haus  = .
 	local obs_dev   = .
 	local obs_devb  = .
 	if "`spectests'" != "" {
+		if `hadomni' local obs_omni = e(chi2_omnibus)
 		if `hadwald' local obs_wald = e(chi2_wald)
-		if `hadmd'   local obs_md   = e(chi2_minimumdistance)
 		if `hadhaus' local obs_haus = e(chi2_hausman)
 		if `haddev'  local obs_dev  = e(deviance)
 		if `haddevb' local obs_devb = e(deviance_below)
@@ -495,6 +569,59 @@ program define polbunch_permute, rclass
 	local zdlo = r(min)
 	local zdhi = r(max)
 
+	/* Auto-detect candif/candin-induced data gaps and fold them into the     *
+	 * SAME avoid()-style pre-filter as any explicit avoid() point, instead   *
+	 * of only catching them reactively after a failed fit (see the candif   *
+	 * classification in the fit loop below). Built on the RAW sorted data,  *
+	 * not a bw0-phased bin grid: a "gap spell" is a maximal run of           *
+	 * consecutive (in sorted z order) observations that all fail the        *
+	 * caller's if/in, and its edges are the midpoints to the nearest         *
+	 * surviving observations on each side -- exact and phase-independent,   *
+	 * unlike binning at bw0, which would under-detect by up to a full bin    *
+	 * width whenever the caller's excluded region (e.g. another kink) isn't  *
+	 * phased the same as this model's own bin grid (a real case: two kinks   *
+	 * in the same distribution need not sit on the same bw-spaced phase).    *
+	 * A gap spell where NO observations ever existed on one side (grid      *
+	 * edge) just uses its own boundary. Extra (lo,hi) pairs are appended     *
+	 * after any explicit avoid() pairs, so a candidate whose window merely   *
+	 * touches the hole is excluded before ever being fit -- exactly          *
+	 * mirroring avoid()'s behaviour, just derived from the data instead of   *
+	 * typed by the caller. Purely a data scan (preserve/restore, one sort,   *
+	 * no model fits) -- a forvalues loop over SPELLS, not observations, so   *
+	 * it stays cheap regardless of sample size. Only meaningful when a       *
+	 * caller if/in was actually given, and only in the (common) recentered-  *
+	 * window mode.                                                           */
+	local navoidauto = 0
+	if `recenter' & (`"`candifexpr'"' != "" | `"`candin'"' != "") {
+		preserve
+		quietly {
+			keep if inrange(`zvar', `zdlo', `zdhi')
+			tempvar ghascf gspell gzlo gzhi ghcnt
+			gen byte `ghascf' = 0
+			local gcfif ""
+			if `"`candifexpr'"' != "" local gcfif "if (`candifexpr')"
+			replace `ghascf' = 1 `gcfif' `candin'
+			sort `zvar'
+			gen long `gspell' = sum(`ghascf' != `ghascf'[_n-1])
+			collapse (min) `gzlo'=`zvar' (max) `gzhi'=`zvar' (max) `ghcnt'=`ghascf', by(`gspell')
+			sort `gspell'
+			local ngs = _N
+			forvalues i = 1/`ngs' {
+				if `ghcnt'[`i'] == 0 {
+					local glo = `gzlo'[`i']
+					local ghi = `gzhi'[`i']
+					if `i' > 1 local glo = (`gzhi'[`=`i'-1'] + `glo')/2
+					if `i' < `ngs' local ghi = (`ghi' + `gzlo'[`=`i'+1'])/2
+					local ++navoid
+					local ++navoidauto
+					local avoidlo`navoid' = `glo'
+					local avoidhi`navoid' = `ghi'
+				}
+			}
+		}
+		restore
+	}
+
 	local maxperside = .
 	if `maxcutoffs' != 0 local maxperside = floor(`maxcutoffs'/2)
 
@@ -519,16 +646,27 @@ program define polbunch_permute, rclass
 	local upcands ""
 	local nup = 0
 	local noverlap = 0
+	local navoidoverlap = 0
 	local k = 1
 	while (`cut0' + `k'*`step' + `rmargin' <= `zdhi') & (`maxperside'>=. | `nup'<`maxperside') {
 		local cand_k = `cut0' + `k'*`step'
 		local iswoverlap = 0
+		local isavoid = 0
 		if `recenter' {
 			local hi_k = `cand_k' + `rightdist0'
 			local lo_k = `cand_k' - `leftdist0'
 			local iswoverlap = !(`hi_k' <= `lo0' | `lo_k' > `hi0')
+			if !`iswoverlap' & `navoid' > 0 {
+				forvalues j = 1/`navoid' {
+					if !(`hi_k' <= `avoidlo`j'' | `lo_k' > `avoidhi`j'') {
+						local isavoid = 1
+						continue, break
+					}
+				}
+			}
 		}
 		if `iswoverlap' local ++noverlap
+		else if `isavoid' local ++navoidoverlap
 		else {
 			local upcands "`upcands' `cand_k'"
 			local ++nup
@@ -541,12 +679,22 @@ program define polbunch_permute, rclass
 	while (`cut0' - `k'*`step' - `lmargin' >= `zdlo') & (`maxperside'>=. | `ndown'<`maxperside') {
 		local cand_k = `cut0' - `k'*`step'
 		local iswoverlap = 0
+		local isavoid = 0
 		if `recenter' {
 			local hi_k = `cand_k' + `rightdist0'
 			local lo_k = `cand_k' - `leftdist0'
 			local iswoverlap = !(`hi_k' <= `lo0' | `lo_k' > `hi0')
+			if !`iswoverlap' & `navoid' > 0 {
+				forvalues j = 1/`navoid' {
+					if !(`hi_k' <= `avoidlo`j'' | `lo_k' > `avoidhi`j'') {
+						local isavoid = 1
+						continue, break
+					}
+				}
+			}
 		}
 		if `iswoverlap' local ++noverlap
+		else if `isavoid' local ++navoidoverlap
 		else {
 			local downcands "`downcands' `cand_k'"
 			local ++ndown
@@ -556,7 +704,8 @@ program define polbunch_permute, rclass
 	local ncand = `nup' + `ndown'
 	if `ncand' == 0 {
 		di as error "no placebo cutoffs fit within the data range at step(`step')"
-		di as error "without overlapping the true excluded region (`noverlap' candidate(s) excluded on that basis)."
+		di as error "without overlapping the true excluded region (`noverlap' candidate(s)) or an"
+		di as error "avoid() region (`navoidoverlap' candidate(s))."
 		exit 498
 	}
 
@@ -593,6 +742,7 @@ program define polbunch_permute, rclass
 	 * ------------------------------------------------------------------ */
 	local nused = 0
 	local nfailed = 0
+	local ncandif = 0
 	/* noverlap NOT reset here -- it already holds the grid-construction    *
 	 * count (candidates excluded before ever reaching this loop); the      *
 	 * fit loop below only ADDS to it, for the window_recentered==0         *
@@ -605,8 +755,8 @@ program define polbunch_permute, rclass
 		local se_i = .
 		local lok = .
 		local hik = .
+		local pl_omni = .
 		local pl_wald = .
-		local pl_md   = .
 		local pl_haus = .
 		local pl_dev  = .
 		local pl_devb = .
@@ -656,7 +806,17 @@ program define polbunch_permute, rclass
 		 * window starting AT hi0 must count as overlapping, hence lo_i>hi0   *
 		 * (strict), not lo_i>=hi0.                                           */
 		local windowoverlap = 0
-		if `recenter' local windowoverlap = !(`hi_i' <= `lo0' | `lo_i' > `hi0')
+		if `recenter' {
+			local windowoverlap = !(`hi_i' <= `lo0' | `lo_i' > `hi0')
+			if !`windowoverlap' & `navoid' > 0 {
+				forvalues j = 1/`navoid' {
+					if !(`hi_i' <= `avoidlo`j'' | `lo_i' > `avoidhi`j'') {
+						local windowoverlap = 1
+						continue, break
+					}
+				}
+			}
+		}
 		if `windowoverlap' {
 			matrix `draws'[`i',4] = -1
 			local ++noverlap
@@ -675,8 +835,8 @@ program define polbunch_permute, rclass
 					local hik = e(zH_excl_orig)
 				}
 				if "`spectests'" != "" {
+					if `hadomni' local pl_omni = e(chi2_omnibus)
 					if `hadwald' local pl_wald = e(chi2_wald)
-					if `hadmd'   local pl_md   = e(chi2_minimumdistance)
 					if `hadhaus' local pl_haus = e(chi2_hausman)
 					if `haddev'  local pl_dev  = e(deviance)
 					if `haddevb' local pl_devb = e(deviance_below)
@@ -685,14 +845,68 @@ program define polbunch_permute, rclass
 			}
 		}
 		if `rc_i' | missing(`val') | missing(`se_i') | `se_i'<=0 | missing(`lok') | missing(`hik') {
-			matrix `draws'[`i',4] = 0
-			local ++nfailed
+			/* Before counting this as a genuine non-convergence: if the      *
+			 * caller passed its own if/in (candifexpr/candin) to this        *
+			 * command -- e.g. to carve out ANOTHER real kink's excluded      *
+			 * region -- a candidate whose window straddles that hole has no  *
+			 * data to identify one side of the fit, and fails for a reason   *
+			 * that has nothing to do with whether there's bunching at this   *
+			 * placebo. Re-run the identical window WITHOUT the caller's      *
+			 * if/in: if that succeeds, the original failure was caused       *
+			 * purely by the caller's own intentional restriction, not by     *
+			 * this being a bad placebo location -- drop it from the grid     *
+			 * entirely (see the Mata filter below) rather than reporting it  *
+			 * as a failed draw. This is a classification probe only; its     *
+			 * fitted value is discarded either way, since it would still be  *
+			 * contaminated by whatever the caller's if/in was excluding.     */
+			local iscandif = 0
+			if `"`candifexpr'"' != "" | `"`candin'"' != "" {
+				local rc_i2  = 1
+				local val2   = .
+				local se_i2  = .
+				local lok2   = .
+				local hik2   = .
+				local windowif_i2 "`zif' `zin'"
+				if `recenter' local windowif_i2 "if inrange(`zvar', `lo_i', `hi_i')"
+				else if `"`zifexpr'"' != "" local windowif_i2 "if `zifexpr' `zin'"
+				quietly {
+					capture polbunch `zvarlist' `windowif_i2', cutoff(`cand') `basespec'
+					local rc_i2 = _rc
+					if !`rc_i2' {
+						capture local val2 = _b[`target']
+						capture local se_i2 = _se[`target']
+						local lok2 = e(lower_limit)
+						local hik2 = e(upper_limit)
+						if missing(`lok2') | missing(`hik2') {
+							local lok2 = e(zL_excl_orig)
+							local hik2 = e(zH_excl_orig)
+						}
+					}
+				}
+				local iscandif = !`rc_i2' & !missing(`val2') & !missing(`se_i2') & `se_i2'>0 & !missing(`lok2') & !missing(`hik2')
+			}
+			if `iscandif' {
+				matrix `draws'[`i',4] = -2
+				local ++ncandif
+			}
+			else {
+				matrix `draws'[`i',4] = 0
+				local ++nfailed
+			}
 		}
 		else {
 			/* same right-closed/left-open asymmetry as the window-overlap    *
 			 * check above: hik<=lo0 (weak) is correct, lok>hi0 must be       *
 			 * strict, since hi0 itself belongs to the excluded bin.          */
 			local overlaps = !(`hik' <= `lo0' | `lok' > `hi0')
+			if !`overlaps' & `navoid' > 0 {
+				forvalues j = 1/`navoid' {
+					if !(`hik' <= `avoidlo`j'' | `lok' > `avoidhi`j'') {
+						local overlaps = 1
+						continue, break
+					}
+				}
+			}
 			if `overlaps' {
 				matrix `draws'[`i',4] = -1
 				local ++noverlap
@@ -703,8 +917,8 @@ program define polbunch_permute, rclass
 				matrix `draws'[`i',4] = 1
 				local ++nused
 				if "`spectests'" != "" {
-					matrix `stdraws'[`i',2] = `pl_wald'
-					matrix `stdraws'[`i',3] = `pl_md'
+					matrix `stdraws'[`i',2] = `pl_omni'
+					matrix `stdraws'[`i',3] = `pl_wald'
 					matrix `stdraws'[`i',4] = `pl_haus'
 					matrix `stdraws'[`i',5] = `pl_dev'
 					matrix `stdraws'[`i',6] = `pl_devb'
@@ -716,6 +930,20 @@ program define polbunch_permute, rclass
 		if "`nodots'" == "" nois _dots `i' 0
 	}
 
+	/* Drop candidates whose only failure was the caller's own if/in         *
+	 * (status -2, set above) -- these never belonged on the grid, they      *
+	 * just couldn't be recognised as such until after an attempted fit.     *
+	 * Removed from placebo_draws (and spectest_draws, same row selection)   *
+	 * entirely, not merely relabelled, so they don't inflate "attempted"/   *
+	 * "failed" counts in the report below; ncand is refreshed to match.     */
+	if `ncandif' > 0 {
+		mata: _pbx_keep = st_matrix("`draws'")[.,4] :!= -2
+		mata: st_matrix("`draws'", select(st_matrix("`draws'"), _pbx_keep))
+		if "`spectests'" != "" mata: st_matrix("`stdraws'", select(st_matrix("`stdraws'"), _pbx_keep))
+		mata: mata drop _pbx_keep
+		local ncand = rowsof(`draws')
+	}
+
 	/* sort ascending by cutoff (column 1) -- rows were filled up-candidates  *
 	 * first (increasing), then down-candidates (decreasing), so the raw     *
 	 * fill order is not monotonic. Apply the SAME row permutation to        *
@@ -725,7 +953,7 @@ program define polbunch_permute, rclass
 	if "`spectests'" != "" mata: st_matrix("`stdraws'", st_matrix("`stdraws'")[st_matrix("_pbx_sortorder"), .])
 
 	matrix colnames `draws' = cutoff value se status
-	if "`spectests'" != "" matrix colnames `stdraws' = cutoff chi2_wald chi2_md chi2_hausman deviance deviance_below polynomial
+	if "`spectests'" != "" matrix colnames `stdraws' = cutoff chi2_omnibus chi2_wald chi2_hausman deviance deviance_below polynomial
 
 	/* ------------------------------------------------------------------ *
 	 *  Aggregate: exact permutation p-value ("+1" correction) on the     *
@@ -793,32 +1021,32 @@ program define polbunch_permute, rclass
 	 *  but whose OWN test computation came back missing is dropped only  *
 	 *  from that specific test's count, not from the others.             *
 	 * ------------------------------------------------------------------ */
+	local p_omni_perm  = .
 	local p_wald_perm  = .
-	local p_md_perm    = .
 	local p_hausman_perm = .
 	local p_deviance_perm = .
 	local p_deviance_below_perm = .
+	local n_omni  = 0
 	local n_wald  = 0
-	local n_md    = 0
 	local n_haus  = 0
 	local n_dev   = 0
 	local n_devb  = 0
 	local degree_drift = 0
 	if "`spectests'" != "" {
+		local cnt_omni = 0
 		local cnt_wald = 0
-		local cnt_md   = 0
 		local cnt_haus = 0
 		local cnt_dev  = 0
 		local cnt_devb = 0
 		forvalues i = 1/`ncand' {
 			if `draws'[`i',4] == 1 {
-				if `hadwald' & !missing(`stdraws'[`i',2]) {
-					local ++n_wald
-					if `stdraws'[`i',2] >= `obs_wald' local ++cnt_wald
+				if `hadomni' & !missing(`stdraws'[`i',2]) {
+					local ++n_omni
+					if `stdraws'[`i',2] >= `obs_omni' local ++cnt_omni
 				}
-				if `hadmd' & !missing(`stdraws'[`i',3]) {
-					local ++n_md
-					if `stdraws'[`i',3] >= `obs_md' local ++cnt_md
+				if `hadwald' & !missing(`stdraws'[`i',3]) {
+					local ++n_wald
+					if `stdraws'[`i',3] >= `obs_wald' local ++cnt_wald
 				}
 				if `hadhaus' & !missing(`stdraws'[`i',4]) {
 					local ++n_haus
@@ -834,8 +1062,8 @@ program define polbunch_permute, rclass
 				}
 			}
 		}
+		if `hadomni' & `n_omni' > 0 local p_omni_perm = (1 + `cnt_omni') / (1 + `n_omni')
 		if `hadwald' & `n_wald' > 0 local p_wald_perm = (1 + `cnt_wald') / (1 + `n_wald')
-		if `hadmd'   & `n_md'   > 0 local p_md_perm   = (1 + `cnt_md')   / (1 + `n_md')
 		if `hadhaus' & `n_haus' > 0 local p_hausman_perm = (1 + `cnt_haus') / (1 + `n_haus')
 		if `haddev'  & `n_dev'  > 0 local p_deviance_perm = (1 + `cnt_dev') / (1 + `n_dev')
 		if `haddevb' & `n_devb' > 0 local p_deviance_below_perm = (1 + `cnt_devb') / (1 + `n_devb')
@@ -871,6 +1099,12 @@ program define polbunch_permute, rclass
 	di as text %-40s "observed `tlab', studentized" _col(66) as res %10.4f `observed_t'
 	di as text "{hline 74}"
 	di as text %-40s "excluded before fitting (window would overlap true region)" _col(66) as res %10.0f `noverlap'
+	if `navoid' > 0 {
+		di as text %-40s "excluded before fitting (window overlaps avoid()/if-in gap)" _col(66) as res %10.0f `navoidoverlap'
+	}
+	if `ncandif' > 0 {
+		di as text %-40s "excluded (window overlaps your own if/in restriction)" _col(66) as res %10.0f `ncandif'
+	}
 	di as text %-40s "placebo cutoffs attempted (remaining)" _col(66) as res %10.0f `ncand'
 	di as text %-40s "  used (converged)" _col(66) as res %10.0f `nused'
 	di as text %-40s "  failed to converge / no usable SE" _col(66) as res %10.0f `nfailed'
@@ -887,12 +1121,12 @@ program define polbunch_permute, rclass
 	else {
 		di as text "No placebo cutoff produced a usable draw -- p-value not computed."
 	}
-	if "`spectests'" != "" & (`hadwald' | `hadmd' | `hadhaus' | `haddev' | `haddevb') {
+	if "`spectests'" != "" & (`hadomni' | `hadwald' | `hadhaus' | `haddev' | `haddevb') {
 		di as text "{hline 74}"
 		di as text "spectests: permutation p-values for the target's own tests (one-sided," ///
 			" larger = more extreme)"
-		if `hadwald'  di as text %-40s "Wald chi2 = " %8.3f `obs_wald'  _col(66) as res %10.4f `p_wald_perm'
-		if `hadmd'    di as text %-40s "Minimum-distance chi2 = " %8.3f `obs_md'    _col(66) as res %10.4f `p_md_perm'
+		if `hadomni'  di as text %-40s "Omnibus chi2 = " %8.3f `obs_omni'  _col(66) as res %10.4f `p_omni_perm'
+		if `hadwald'  di as text %-40s "Wald chi2 (off-label diagnostic) = " %8.3f `obs_wald'  _col(66) as res %10.4f `p_wald_perm'
 		if `hadhaus'  di as text %-40s "Hausman chi2 = " %8.3f `obs_haus'  _col(66) as res %10.4f `p_hausman_perm'
 		if `haddev'   di as text %-40s "Deviance = " %8.3f `obs_dev'   _col(66) as res %10.4f `p_deviance_perm'
 		if `haddevb'  di as text %-40s "Deviance, below cutoff only = " %8.3f `obs_devb'  _col(66) as res %10.4f `p_deviance_below_perm'
@@ -914,6 +1148,14 @@ program define polbunch_permute, rclass
 	if `"`candif'"' != "" | `"`candin'"' != "" {
 		di as text "note: candidate data further restricted by " as res "`candif' `candin'" ///
 			as text " (candidate grid and placebo windows only, not the true-cutoff refit)."
+	}
+	if `navoiduser' > 0 {
+		di as text "note: avoid() kept " as res `navoiduser' as text " extra location(s) out of the candidate" ///
+			" grid, using the target's own excluded-region half-widths recentred at each."
+	}
+	if `navoidauto' > 0 {
+		di as text "note: your if/in emptied " as res `navoidauto' as text " contiguous data gap(s) -- candidates" ///
+			" whose window overlaps any of them were excluded before fitting, same as avoid()."
 	}
 
 	/* ------------------------------------------------------------------ *
@@ -946,6 +1188,10 @@ program define polbunch_permute, rclass
 	return scalar n_placebo_tried = `ncand'
 	return scalar cutoffs_skipped = `nfailed'
 	return scalar cutoffs_overlap = `noverlap'
+	return scalar cutoffs_avoid   = `navoidoverlap'
+	return scalar avoid_user      = `navoiduser'
+	return scalar avoid_auto      = `navoidauto'
+	return scalar cutoffs_candif  = `ncandif'
 	return scalar step            = `step'
 	return scalar bw              = `bw0'
 	return scalar cutoff_true     = `cut0'
@@ -959,13 +1205,13 @@ program define polbunch_permute, rclass
 	if "`spectests'" != "" {
 		return matrix spectest_draws = `stdraws'
 		return scalar spectest_degree_drift = `degree_drift'
+		if `hadomni' {
+			return scalar observed_omnibus = `obs_omni'
+			return scalar p_omnibus_perm   = `p_omni_perm'
+		}
 		if `hadwald' {
 			return scalar observed_wald = `obs_wald'
 			return scalar p_wald_perm   = `p_wald_perm'
-		}
-		if `hadmd' {
-			return scalar observed_minimumdistance = `obs_md'
-			return scalar p_minimumdistance_perm   = `p_md_perm'
 		}
 		if `hadhaus' {
 			return scalar observed_hausman = `obs_haus'

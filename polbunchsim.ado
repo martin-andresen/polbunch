@@ -1,17 +1,66 @@
 capture program drop polbunchsim
 program polbunchsim, eclass
-    syntax [, zmin(string) zmax(string) log reps(integer 1) ///
+    syntax [, log reps(integer 1) ///
         obs(integer 5000) cutoff(real 1) ELasticity(string) ///
         t0(real 0.2) t1(real 0.6) bw(real 0.01) ///
         INCOMEeffect(string) buncherror(string) ///
-        bootreps(integer 500) POLynomial(integer 1) ///
+        bootreps(integer 500) POLynomial(numlist integer >=0) ///
         distribution(string) opts(string) ///
         estimator(numlist integer) btype(numlist integer) ///
-        clist(string) sample(string)  ///
+        clist(string) sample(string) sample4(string)  ///
         est4limits(numlist) limits(numlist) report(string) SCALARsonly DEBUG ///
         PANel(numlist min=3 max=4) B0(real -999) E0(real -999) ///
         HEAP(numlist min=2 max=3) INATTention(real 0) WELfriction(real 0) ///
-        PERMStep(real 0) PERMMaxcutoffs(integer 60)]
+        PERMStep(real 0) PERMMaxcutoffs(integer 60) NSAMple(integer 0) ///
+        FOCAL(numlist min=1 max=3) EXTensive(real 0) TESTBoot(integer 0) TESTBOOTK(numlist integer >=0)]
+
+    /*
+        testboot(#) -- default 0 (off).  With # > 1, every estimator 1-4 fit
+        is run with polbunch's test(omnibus, boot reps(#)), i.e. an extra
+        null-imposed bootstrap of the omnibus test statistic (see polbunch.ado,
+        pbx_mdt_bootstat / pbx_wald_bootstat), alongside the usual asymptotic
+        chi2 test.  The bootstrap type is polbunch's default, PARAMETRIC
+        (fresh multinomial draws around the model's own fitted mean; see
+        _pb_parse_testsub); wild/residual are opt-in there and are not
+        reachable through testboot().  Its p-value comes back as
+        e(sim_p_omnibus_boot) (single fit) or e(<model>_p_omnibus_boot)
+        (multi-fit), next to the asymptotic e(sim_p_omnibus)/e(<model>_p_omnibus).
+        testbootk(numlist) restricts the bootstrap to those polynomial degrees
+        of a polynomial() sweep (implies testboot(199) if testboot() is not
+        given); the other degrees still get
+        the asymptotic test, from the SAME draw -- so one call gives
+        bootstrap and asymptotic p-values on identical data, with no need
+        to align random streams across two calls.
+        Estimator 0 has no omnibus test and is skipped.  Do not also pass
+        test() in opts().  Costs # extra refits per replication.
+    */
+
+    /*
+        focal(share [width [both]]) / extensive(eps_p) -- passed straight to
+        polbunchgendata (see its docstring): excess mass at the cutoff
+        without an upstream response, and a participation response above
+        the kink.  extensive() drops non-participants, so the raw draw shrinks
+        (nsample() is unaffected: it counts rows after sample()).  Neither
+        is allowed with panel() where polbunchgendata forbids it.
+    */
+
+    /*
+        nsample(#) -- default 0 (off).  Requires sample(lo,hi).  Makes the
+        number of rows left in the sample() window EXACTLY #, not merely
+        obs()*P(window): draw obs() individuals, drop rows outside
+        sample(), then keep a uniformly random subset of exactly # of the
+        rest (-sample #, count-).  Individuals are iid, so given at least
+        # in the window this is an iid draw of # from the observed density
+        truncated to the window -- the same distribution as before, with
+        the window count fixed rather than binomial.  obs() is then only
+        the size of the raw draw: if fewer than # rows land in the window
+        the draw is repeated with a larger obs() (see below), and
+        e(obs) reports the draw size finally used.  Not with panel().  (Retries:
+        obs() grows by 1.25-4x per redraw, at most 8 draws / obs() < 5e7,
+        else the replication fails with genrc 459.)
+        Without b0(), the realised-bunchers fallback for the coverage
+        target is scaled by #/(rows in window before subsampling).
+    */
 
     /*
         panel(n T rho)  -- pooled-panel DGP, passed straight to
@@ -30,6 +79,32 @@ program polbunchsim, eclass
         polbunch_permute's step()/maxcutoffs() for btype 12 (see below).
         permstep(0) (the default) resolves to polbunch_permute's own
         default, the fitted model's bw.
+    */
+
+    /*
+        sample(lo,hi) drops rows of the generated data outright (before
+        any model is fit), so it applies to every estimator/btype/clist
+        combination in the call and shrinks what bootstrap resamples
+        from. sample4(lo,hi) mirrors it but only as an `if inrange(z,
+        lo,hi)' qualifier on the estimator-4 (Saez) polbunch call --
+        the underlying dataset (and every other estimator) is
+        untouched. Use sample() to change what all estimators see;
+        use sample4() on top of it to additionally narrow (or widen)
+        just the Saez window, since Saez's linear-restriction estimator
+        is typically fit on a narrower symmetric window than the
+        polynomial estimators.
+    */
+
+    /*
+        polynomial() takes a numlist, same as btype()/estimator(): every
+        requested degree is fit SEPARATELY on the one draw generated for
+        this replication (like sweeping btype()/estimator()/clist(), not
+        like sample()'s once-only restriction), and the model tag gets a
+        "k<degree>" component (e.g. "e3k2") whenever more than one degree
+        is requested -- a single value adds no tag, same as every other
+        dimension. Estimator 4 (Saez) ignores its own polynomial() value
+        internally (polbunch always fits a two-point flat counterfactual
+        there), so sweeping k for estimator 4 alone is a harmless no-op.
     */
 
     /*
@@ -63,16 +138,29 @@ program polbunchsim, eclass
     local dbgpfx = cond("`debug'" != "", "noisily", "")
 
     quietly {
-        if "`zmin'" == "" local zmin "-."
-        if "`zmax'" == "" local zmax "."
         if "`btype'" == "" local btype 1
         if "`estimator'" == "" local estimator 3
+        if "`polynomial'" == "" local polynomial 1
         if "`elasticity'" == "" local elasticity 0.4
         local elnum = real("`elasticity'")
 
         if "`clist'" == "" local clist `"noconstant"'
 
         local misscode = -1e300
+
+        if `nsample' < 0 {
+            noi di as error "nsample() must be a positive integer"
+            exit 198
+        }
+        if `nsample' > 0 & "`sample'" == "" {
+            noi di as error "nsample() requires sample(lo,hi)"
+            exit 198
+        }
+        if "`testbootk'" != "" & `testboot' <= 1 local testboot 199
+        if `nsample' > 0 & "`panel'" != "" {
+            noi di as error "nsample() is not allowed with panel()"
+            exit 198
+        }
 
         // panel: obs is n*T
         local panelopt ""
@@ -90,10 +178,10 @@ program polbunchsim, eclass
             list has 11, so membership is checked with strpos() against a
             padded, space-delimited list instead.
         */
-        local _scalarnames " chi2_wald p_wald chi2_hausman p_hausman chi2_minimumdistance p_minimumdistance delta_md time se p rc "
+        local _scalarnames " chi2_wald p_wald chi2_hausman p_hausman chi2_minimumdistance p_minimumdistance chi2_omnibus p_omnibus delta_md p_gof deviance p_gof_below polyused time se p rc "
         if "`report'" != "" {
             foreach _item of local report {
-                if inlist("`_item'", "hausman", "wald", "minimumdistance") {
+                if inlist("`_item'", "hausman", "wald", "minimumdistance", "omnibus") {
                     local _report_scals `_report_scals' chi2_`_item' p_`_item'
                 }
                 else if strpos("`_scalarnames'", " `_item' ") > 0 {
@@ -122,18 +210,21 @@ program polbunchsim, eclass
         local numb : word count `btype'
         local nume : word count `estimator'
         local numc : word count `clist'
-        local numest = `numb' * `nume' * `numc'
+        local numk : word count `polynomial'
+        local numest = `numb' * `nume' * `numc' * `numk'
 
         /*
             Only stamp a dimension into the model tag when it actually
             varies in this call, so e.g. a run that only sweeps
             estimator()/clist() gets tags like "e3c0" instead of the
             noisier "b1e3c0" -- and a run that only sweeps btype() gets
-            "b1", "b2", etc.
+            "b1", "b2", etc. Same for polynomial(): a numlist sweep tags
+            "k2", "k3", ...; a single value (the common case) adds no tag.
         */
         local vary_bt = (`numb' > 1)
         local vary_e  = (`nume' > 1)
         local vary_c  = (`numc' > 1)
+        local vary_k  = (`numk' > 1)
 
         tempname sim_b sim_V sim_extra sim_oldb sim_oldV sim_newb sim_newV
         tempname esthold
@@ -157,18 +248,50 @@ program polbunchsim, eclass
 
         local heapopt ""
         if "`heap'" != "" local heapopt heap(`heap')
+        if "`focal'" != "" local heapopt `heapopt' focal(`focal')
+        if `extensive' > 0 local heapopt `heapopt' extensive(`extensive')
 
-        capture noisily polbunchgendata z, obs(`obs') cutoff(`cutoff') ///
-            elasticity(`elasticity') t0(`t0') t1(`t1') `log' distribution(`distribution') ///
-            incomeeffect(`incomeeffect') buncherror(`buncherror') `panelopt' `heapopt' ///
-            inattention(`inattention') welfriction(`welfriction')
+        // draw; with nsample(), redraw larger until >= nsample rows fall in sample()
+        local _try  = 0
+        local _done = 0
+        local _nwin = .
+        while !`_done' {
+            local ++_try
+            local _done = 1
+            clear
+            capture noisily polbunchgendata z, obs(`obs') cutoff(`cutoff') ///
+                elasticity(`elasticity') t0(`t0') t1(`t1') `log' distribution(`distribution') ///
+                incomeeffect(`incomeeffect') buncherror(`buncherror') `panelopt' `heapopt' ///
+                inattention(`inattention') welfriction(`welfriction')
 
-        local genrc = _rc
+            local genrc = _rc
+            if `genrc' == 0 {
+                local _r_el = r(el_mean)
+                local _r_ie = r(incomeeffect)
+                local _r_nb = r(n_bunchers)
+                if `nsample' > 0 {
+                    count if inrange(z, `sample')
+                    local _nwin = r(N)
+                    if `_nwin' < `nsample' {
+                        if `_try' < 8 & `obs' < 5e7 {
+                            local obs = ceil(`obs' * min(4, max(1.25, 1.1*`nsample'/max(`_nwin',1))))
+                            local _done = 0
+                        }
+                        else {
+                            noi di as error "nsample(`nsample'): only `_nwin' rows in sample() after `_try' draws (obs=`obs')"
+                            local genrc = 459
+                        }
+                    }
+                }
+            }
+        }
+
         local btrue_realized = .
         if `genrc' == 0 {
-            local eltrue = cond(`e0' >= 0, `e0', r(el_mean))
-            local ietrue = r(incomeeffect)
-            local btrue_realized = r(n_bunchers)
+            local eltrue = cond(`e0' >= 0, `e0', `_r_el')
+            local ietrue = `_r_ie'
+            local btrue_realized = `_r_nb'
+            if `nsample' > 0 local btrue_realized = `_r_nb' * `nsample' / `_nwin'
         }
         if "`eltrue'" == "" local eltrue = cond(`e0' >= 0, `e0', `elnum')
         if "`eltrue'" == "" local eltrue = .
@@ -180,11 +303,13 @@ program polbunchsim, eclass
         if `genrc' == 0 {
             if "`sample'" != "" {
                 drop if !inrange(z, `sample')
+                if `nsample' > 0 sample `nsample', count
             }
 
             foreach bt of numlist `btype' {
                 foreach e of numlist `estimator' {
                     foreach c in `clist' {
+                        foreach k of numlist `polynomial' {
 
                         if "`c'" == "constant" local cval = 1
                         else local cval = 0
@@ -193,11 +318,12 @@ program polbunchsim, eclass
                         if `vary_bt' local modelname "`modelname'b`bt'"
                         if `vary_e'  local modelname "`modelname'e`e'"
                         if `vary_c'  local modelname "`modelname'c`cval'"
+                        if `vary_k'  local modelname "`modelname'k`k'"
 
                         timer clear
                         timer on 1
 
-                        if `e' == 4 local iff `"if inrange(z, `zmin', `zmax')"'
+                        if `e' == 4 & "`sample4'" != "" local iff `"if inrange(z, `sample4')"'
                         else local iff
 
                         if `e' == 4 & "`est4limits'" != "" {
@@ -205,6 +331,13 @@ program polbunchsim, eclass
                         }
                         else {
                             local uselimits limits(`limits')
+                        }
+
+                        local optsx `opts'
+                        if `testboot' > 1 & `e' != 0 {
+                            local _doboot 1
+                            if "`testbootk'" != "" local _doboot : list k in testbootk
+                            if `_doboot' local optsx `opts' test(omnibus, boot reps(`testboot'))
                         }
 
                         local rc = 0
@@ -221,76 +354,15 @@ program polbunchsim, eclass
 
                         if `bt' == 0 {
                             capture `dbgpfx' polbunch z `iff', cutoff(`cutoff') ///
-                                pol(`polynomial') bw(`bw') t0(`t0') t1(`t1') ///
+                                pol(`k') bw(`bw') t0(`t0') t1(`t1') ///
                                 `log' estimator(`e') vce(none) `c' ///
-                                 `uselimits' `opts'
+                                 `uselimits' `optsx'
                         }
                         else if `bt' == 1 {
                             capture `dbgpfx' polbunch z `iff', cutoff(`cutoff') ///
-                                pol(`polynomial') bw(`bw') t0(`t0') t1(`t1') ///
+                                pol(`k') bw(`bw') t0(`t0') t1(`t1') ///
                                 `log' estimator(`e') vce(analytic) `c' ///
-                                `opts' `uselimits'
-                            /*
-                                polbunch silently LOWERS the polynomial order
-                                (by 1, possibly repeatedly) when the two
-                                one-sided polynomials are rank-deficient at
-                                the requested order (its own "Note: Polynomial
-                                order lowered..." -- see polbunch.ado). e(),
-                                not the requested `polynomial' local, is the
-                                only place the ACTUAL fitted degree survives,
-                                so it's captured here every rep -- otherwise a
-                                sweep over polynomial() (e.g. sim_assumption_
-                                tests.do's Panel B) can silently re-fit a
-                                lower K than requested with no way to tell.
-                            */
-                            if _rc == 0 {
-                                capture confirm scalar e(polynomial)
-                                if !_rc local sim_polyused = e(polynomial)
-                            }
-                            /*
-                                Reference-region GoF/deviance is captured for
-                                EVERY estimator, not just 0. For estimator 0
-                                (unrestricted: h0, h1 fit separately, no
-                                nested restriction to run a Wald/Hausman/MD
-                                test against) this is the ONLY assumption
-                                test available, and A3 alone at that (see
-                                test.tex's "below only" paragraph). For
-                                estimators 1/2/3, this is POOLED deviance on
-                                the RESTRICTED fit -- the same overall null as
-                                the omnibus Wald/MD test (that estimator's
-                                cross-kink restriction, given A2/A3), just
-                                viewed through the many-bin reference-region
-                                fit rather than the few-parameter structural
-                                contrast; the two are complementary (weak vs.
-                                strong against smooth vs. localized
-                                departures respectively -- confirmed by
-                                direct simulation, sim_assumption_tests.do's
-                                panels B/C). Captured here, immediately after
-                                the fit, so no later diagnostic call
-                                (Hausman, bootstrap, ...) can overwrite e()
-                                first.
-                            */
-                            if _rc == 0 {
-                                capture estat gof
-                                if _rc == 0 {
-                                    local sim_gof_p        = e(deviance_p)
-                                    local sim_gof_deviance = e(deviance)
-                                    /*
-                                        below-cutoff-only deviance p-value: a
-                                        PURE A3 test (h0's own fit against
-                                        clean reference data, untouched by any
-                                        behavioral response) -- unlike the
-                                        pooled deviance_p above, which mixes
-                                        in h1's fit (A3 + A1/A2). Exposed
-                                        separately since a DGP that only
-                                        violates A3 (e.g. sim_assumption_
-                                        tests.do's panel B) should show more
-                                        power here than in the pooled version.
-                                    */
-                                    capture confirm scalar e(deviance_below_p)
-                                    if !_rc local sim_gof_p_below = e(deviance_below_p)
-                                }
-                            }
+                                `optsx' `uselimits'
                         }
                         else if `bt' == 2 {
                             /* individual (person-year) nonparametric bootstrap,
@@ -300,54 +372,54 @@ program polbunchsim, eclass
                                 _bs_nb = _b[bunching:number_bunchers], ///
                                 reps(`bootreps') nodots: ///
                                 polbunch z `iff', cutoff(`cutoff') ///
-                                pol(`polynomial') bw(`bw') t0(`t0') t1(`t1') ///
+                                pol(`k') bw(`bw') t0(`t0') t1(`t1') ///
                                 `log' estimator(`e') vce(none) `c' ///
-                                `opts' `uselimits'
+                                `optsx' `uselimits'
                         }
                         else if `bt' == 3 {
                             capture `dbgpfx' polbunch z `iff', cutoff(`cutoff') ///
-                                pol(`polynomial') bw(`bw') t0(`t0') t1(`t1') ///
+                                pol(`k') bw(`bw') t0(`t0') t1(`t1') ///
                                 `log' estimator(`e') bootreps(`bootreps') vce(bootstrap) ///
-                                 `c' `opts' `uselimits'
+                                 `c' `optsx' `uselimits'
                         }
                         else if `bt' == 4 {
                             capture `dbgpfx' polbunch z `iff', cutoff(`cutoff') ///
-                                pol(`polynomial') bw(`bw') t0(`t0') t1(`t1') ///
+                                pol(`k') bw(`bw') t0(`t0') t1(`t1') ///
                                 `log' estimator(`e') bootreps(`bootreps') vce(bayes) ///
-                                 `c' `opts' `uselimits'
+                                 `c' `optsx' `uselimits'
                         }
                         else if `bt' == 5 {
                             capture `dbgpfx' polbunch z `iff', cutoff(`cutoff') ///
-                                pol(`polynomial') bw(`bw') t0(`t0') t1(`t1') ///
+                                pol(`k') bw(`bw') t0(`t0') t1(`t1') ///
                                 `log' estimator(`e') bootreps(`bootreps') vce(bootstrap) ///
-                                `c' `opts' `uselimits' nozero
+                                `c' `optsx' `uselimits' nozero
                         }
                         else if `bt' == 6 {
                             capture `dbgpfx' polbunch z `iff', cutoff(`cutoff') ///
-                                pol(`polynomial') bw(`bw') t0(`t0') t1(`t1') ///
+                                pol(`k') bw(`bw') t0(`t0') t1(`t1') ///
                                 `log' estimator(`e') bootreps(`bootreps') vce(bayes) ///
-                                nozero `c' `opts' `uselimits'
+                                nozero `c' `optsx' `uselimits'
                         }
                         else if `bt' == 7 {
                             /* analytic Eicker-White sandwich */
                             capture `dbgpfx' polbunch z `iff', cutoff(`cutoff') ///
-                                pol(`polynomial') bw(`bw') t0(`t0') t1(`t1') ///
+                                pol(`k') bw(`bw') t0(`t0') t1(`t1') ///
                                 `log' estimator(`e') vce(robust) `c' ///
-                                `opts' `uselimits'
+                                `optsx' `uselimits'
                         }
                         else if `bt' == 8 {
                             /* analytic cluster-robust (needs panel -> pid) */
                             capture `dbgpfx' polbunch z `iff', cutoff(`cutoff') ///
-                                pol(`polynomial') bw(`bw') t0(`t0') t1(`t1') ///
+                                pol(`k') bw(`bw') t0(`t0') t1(`t1') ///
                                 `log' estimator(`e') vce(cluster pid) `c' ///
-                                `opts' `uselimits'
+                                `optsx' `uselimits'
                         }
                         else if `bt' == 9 {
                             /* Chetty/CFOP residual bootstrap over bins */
                             capture `dbgpfx' polbunch z `iff', cutoff(`cutoff') ///
-                                pol(`polynomial') bw(`bw') t0(`t0') t1(`t1') ///
+                                pol(`k') bw(`bw') t0(`t0') t1(`t1') ///
                                 `log' estimator(`e') bootreps(`bootreps') ///
-                                vce(bootstrap, residual) `c' `opts' `uselimits'
+                                vce(bootstrap, residual) `c' `optsx' `uselimits'
                         }
                         else if `bt' == 10 {
                             /* person-clustered nonparametric bootstrap (benchmark
@@ -357,9 +429,9 @@ program polbunchsim, eclass
                                 _bs_nb = _b[bunching:number_bunchers], ///
                                 reps(`bootreps') cluster(pid) nodots: ///
                                 polbunch z `iff', cutoff(`cutoff') ///
-                                pol(`polynomial') bw(`bw') t0(`t0') t1(`t1') ///
+                                pol(`k') bw(`bw') t0(`t0') t1(`t1') ///
                                 `log' estimator(`e') vce(none) `c' ///
-                                `opts' `uselimits'
+                                `optsx' `uselimits'
                         }
                         else if `bt' == 11 {
                             /* quasi-multinomial: conventional V scaled by the
@@ -367,9 +439,9 @@ program polbunchsim, eclass
                                / Kish design-effect fallback when M is
                                unavailable -- histogram-only) */
                             capture `dbgpfx' polbunch z `iff', cutoff(`cutoff') ///
-                                pol(`polynomial') bw(`bw') t0(`t0') t1(`t1') ///
+                                pol(`k') bw(`bw') t0(`t0') t1(`t1') ///
                                 `log' estimator(`e') vce(conventional) scale(x2) `c' ///
-                                `opts' `uselimits'
+                                `optsx' `uselimits'
                         }
                         else if `bt' == 12 {
                             /* polbunch_permute: placebo-cutoff permutation
@@ -384,9 +456,9 @@ program polbunchsim, eclass
                                output is captured into sim_perm_* below,
                                not folded into sim_b/sim_se_b. */
                             capture `dbgpfx' polbunch z `iff', cutoff(`cutoff') ///
-                                pol(`polynomial') bw(`bw') t0(`t0') t1(`t1') ///
+                                pol(`k') bw(`bw') t0(`t0') t1(`t1') ///
                                 `log' estimator(`e') vce(analytic) `c' ///
-                                `opts' `uselimits'
+                                `optsx' `uselimits'
                             /* the base fit's own rc drives elast/b_bunch
                                extraction below (via `rc', set from this
                                local right after the branch) -- kept
@@ -440,6 +512,8 @@ program polbunchsim, eclass
                         local se_bunch = .
                         local p_bunch  = .
                         local delta_md = .
+                        local p_omnibus_boot = .
+                        local omnibus_boot_n = .
                         local novar = 1
                         foreach _tt in wald minimumdistance hausman {
                             local chi2_`_tt' = .
@@ -489,6 +563,87 @@ program polbunchsim, eclass
                             }
                             capture local delta_md = e(delta_md)
                             if _rc local delta_md = .
+
+                            /*
+                                Omnibus test: polbunch itself now reports
+                                its one default nested-restriction test per
+                                estimator (wald for 1/4, minimumdistance for
+                                2/3) under e(chi2_omnibus)/e(p_omnibus), so
+                                just read it straight off -- no need to
+                                pick between chi2_wald/chi2_minimumdistance
+                                by estimator number here any more. Missing
+                                for estimator 0 (no nested restriction to
+                                test) and for an off-label diagnostic test
+                                requested via opts(test(wald)) on estimator
+                                2/3 (which polbunch deliberately keeps under
+                                its own chi2_wald/p_wald, not omnibus, since
+                                it is NOT that estimator's own default test
+                                -- see polbunch.ado's test() docs).
+                            */
+                            capture local chi2_omnibus = e(chi2_omnibus)
+                            if _rc local chi2_omnibus = .
+                            capture local p_omnibus = e(p_omnibus)
+                            if _rc local p_omnibus = .
+                            capture local p_omnibus_boot = e(p_omnibus_boot)
+                            if _rc local p_omnibus_boot = .
+                            capture local omnibus_boot_n = e(omnibus_boot_n)
+                            if _rc local omnibus_boot_n = .
+
+                            /*
+                                Backfill the legacy chi2_wald/p_wald and
+                                chi2_minimumdistance/p_minimumdistance
+                                locals from the new e(chi2_omnibus) for the
+                                NORMAL (non-off-label) case, so existing
+                                callers reading polbunchsim's own
+                                sim_chi2_wald/sim_p_wald (estimator 1/4) or
+                                sim_chi2_minimumdistance/sim_p_minimumdistance
+                                (estimator 2/3) -- e.g. sim_spectest.do,
+                                spworker.do -- keep working unchanged. Only
+                                fills in when the raw local came back
+                                missing (i.e. NOT the off-label case, where
+                                polbunch itself still populates chi2_wald
+                                directly and that real value must win).
+                            */
+                            if inlist(`e', 1, 4) & missing(`chi2_wald') {
+                                local chi2_wald = `chi2_omnibus'
+                                local p_wald    = `p_omnibus'
+                            }
+                            if inlist(`e', 2, 3) & missing(`chi2_minimumdistance') {
+                                local chi2_minimumdistance = `chi2_omnibus'
+                                local p_minimumdistance    = `p_omnibus'
+                            }
+
+                            /*
+                                Reference-region GoF/deviance and the
+                                actually-fitted polynomial order (polbunch
+                                silently lowers it by 1+ on rank
+                                deficiency -- see its own "Note: Polynomial
+                                order lowered..."). These are set by
+                                polbunch's MAIN fit itself (ereturn scalar
+                                deviance_p / polynomial / ...) regardless
+                                of vce()/btype, so no `estat gof' call is
+                                needed -- read them directly off e().
+                                Computed for EVERY estimator, not just 0:
+                                for estimator 0 (no nested restriction to
+                                run an omnibus test against) this is the
+                                ONLY assumption test available; for
+                                estimators 1-3 it's the pooled-deviance
+                                view of the same overall null the omnibus
+                                test targets, via the many-bin reference
+                                fit rather than the structural contrast.
+                                Not populated after a bootstrap-PREFIX
+                                btype (2, 10): the wrapping `bootstrap'
+                                command's own ereturn post does not retain
+                                the wrapped command's extra scalars.
+                            */
+                            capture local sim_polyused = e(polynomial)
+                            if _rc local sim_polyused = .
+                            capture local sim_gof_p = e(deviance_p)
+                            if _rc local sim_gof_p = .
+                            capture local sim_gof_deviance = e(deviance)
+                            if _rc local sim_gof_deviance = .
+                            capture local sim_gof_p_below = e(deviance_below_p)
+                            if _rc local sim_gof_p_below = .
                         }
 
                         /*
@@ -540,11 +695,32 @@ program polbunchsim, eclass
                         local delta_md_post = `delta_md'
                         if missing(`delta_md_post') local delta_md_post = `misscode'
 
+                        /*
+                            chi2_omnibus/p_omnibus follow the same
+                            "genuine missing == not applicable" convention
+                            as chi2_wald/p_wald above (estimator 0 has no
+                            omnibus test). GoF/polyused are genuinely
+                            missing only on failure to compute, never
+                            "not applicable" (GoF is defined for every
+                            estimator) -- same convention either way,
+                            since the report()-scalar matrix-column loop
+                            below substitutes misscode at the point of
+                            use regardless.
+                        */
+                        local chi2_omnibus_post = `chi2_omnibus'
+                        local p_omnibus_post    = `p_omnibus'
+                        local p_omnibus_boot_post = `p_omnibus_boot'
+                        local omnibus_boot_n_post = `omnibus_boot_n'
+                        local p_gof_post        = `sim_gof_p'
+                        local deviance_post     = `sim_gof_deviance'
+                        local p_gof_below_post  = `sim_gof_p_below'
+                        local polyused_post     = `sim_polyused'
+
                         if `rc' == 0 {
                             if `numest' == 1 {
                                 estimates store `esthold'
                             }
-                            else {
+                            else if "`scalarsonly'" == "" {
                                 /*
                                     Real polbunch coefficients (filtered to
                                     report()'s coefficient names when given,
@@ -695,20 +871,27 @@ program polbunchsim, eclass
                         */
                         local scalar_names `scalar_names' ///
                             `modelname'_time `modelname'_se `modelname'_p ///
-                            `modelname'_chi2_wald `modelname'_p_wald ///
-                            `modelname'_chi2_minimumdistance `modelname'_p_minimumdistance ///
+                            `modelname'_chi2_omnibus `modelname'_p_omnibus ///
+                            `modelname'_p_omnibus_boot ///
+                            `modelname'_omnibus_boot_n ///
                             `modelname'_chi2_hausman `modelname'_p_hausman ///
+                            `modelname'_p_gof `modelname'_deviance ///
+                            `modelname'_p_gof_below `modelname'_polyused ///
                             `modelname'_rc
 
                         local `modelname'_time                 = `time_post'
                         local `modelname'_se                   = `se_post'
                         local `modelname'_p                    = `p_post'
-                        local `modelname'_chi2_wald            = `chi2_wald_post'
-                        local `modelname'_p_wald               = `p_wald_post'
-                        local `modelname'_chi2_minimumdistance = `chi2_minimumdistance_post'
-                        local `modelname'_p_minimumdistance    = `p_minimumdistance_post'
+                        local `modelname'_chi2_omnibus         = `chi2_omnibus_post'
+                        local `modelname'_p_omnibus            = `p_omnibus_post'
+                        local `modelname'_p_omnibus_boot       = `p_omnibus_boot_post'
+                        local `modelname'_omnibus_boot_n       = `omnibus_boot_n_post'
                         local `modelname'_chi2_hausman         = `chi2_hausman_post'
                         local `modelname'_p_hausman            = `p_hausman_post'
+                        local `modelname'_p_gof                = `p_gof_post'
+                        local `modelname'_deviance             = `deviance_post'
+                        local `modelname'_p_gof_below          = `p_gof_below_post'
+                        local `modelname'_polyused             = `polyused_post'
                         local `modelname'_rc                   = `rc_post'
 
                         if `rc' local anyfail = 1
@@ -716,8 +899,10 @@ program polbunchsim, eclass
                         local final_bt   `bt'
                         local final_e    `e'
                         local final_cval `cval'
+                        local final_k    `k'
                         local final_rc   `rc'
                         local final_time `time'
+                        }
                     }
                 }
             }
@@ -736,6 +921,44 @@ program polbunchsim, eclass
         }
 
         if `numest' > 1 {
+            if "`scalarsonly'" != "" {
+                /*
+                    Fixed-structure, e(b)-free return, same spirit as the
+                    numest==1 scalarsonly branch below: no coefficient
+                    matrix is built at all (so one model's failure never
+                    shrinks e(b)'s column count and breaks -simulate-'s
+                    per-replication structure), just the per-model
+                    e(<model>_*) scalars set above, always present with
+                    the same names whether or not each model's fit
+                    succeeded.
+                */
+                ereturn clear
+                foreach s of local scalar_names {
+                    ereturn scalar `s' = ``s''
+                }
+                ereturn scalar failed  = `anyfail'
+                ereturn scalar misscode = `misscode'
+                ereturn scalar numest  = `numest'
+                ereturn scalar obs     = `obs'
+                ereturn scalar cutoff  = `cutoff'
+                if `elnum' < .  ereturn scalar el = `elnum'
+                else            ereturn local  el "`elasticity'"
+                if "`eltrue'" != "" ereturn scalar eltrue = `eltrue'
+                if "`ietrue'" != "" ereturn scalar ietrue = `ietrue'
+                ereturn local incomeeffect "`incomeeffect'"
+                ereturn local buncherror   "`buncherror'"
+                ereturn scalar t0     = `t0'
+                ereturn scalar t1     = `t1'
+                ereturn scalar bw     = `bw'
+                ereturn local polynomial "`polynomial'"
+                ereturn scalar bootreps   = `bootreps'
+                ereturn local btype "`btype'"
+                ereturn local estimator "`estimator'"
+                ereturn local clist "`clist'"
+                ereturn local cmd "polbunchsim"
+                exit
+            }
+
             capture confirm matrix `sim_b'
             if _rc {
                 ereturn scalar failed  = 1
@@ -794,7 +1017,7 @@ program polbunchsim, eclass
             ereturn scalar t0     = `t0'
             ereturn scalar t1     = `t1'
             ereturn scalar bw     = `bw'
-            ereturn scalar polynomial = `polynomial'
+            ereturn local polynomial "`polynomial'"
             ereturn scalar bootreps   = `bootreps'
 
             ereturn local btype "`btype'"
@@ -828,6 +1051,10 @@ program polbunchsim, eclass
                 ereturn scalar sim_p_wald                = `p_wald'
                 ereturn scalar sim_chi2_minimumdistance  = `chi2_minimumdistance'
                 ereturn scalar sim_p_minimumdistance     = `p_minimumdistance'
+                ereturn scalar sim_chi2_omnibus          = `chi2_omnibus'
+                ereturn scalar sim_p_omnibus             = `p_omnibus'
+                ereturn scalar sim_p_omnibus_boot        = `p_omnibus_boot'
+                ereturn scalar sim_omnibus_boot_n        = `omnibus_boot_n'
                 ereturn scalar sim_chi2_hausman          = `chi2_hausman'
                 ereturn scalar sim_p_hausman             = `p_hausman'
                 ereturn scalar sim_delta_md              = `delta_md'
@@ -874,7 +1101,7 @@ program polbunchsim, eclass
                 ereturn scalar t0      = `t0'
                 ereturn scalar t1      = `t1'
                 ereturn scalar bw      = `bw'
-                ereturn scalar polynomial = `polynomial'
+                ereturn local polynomial "`polynomial'"
                 ereturn scalar bootreps   = `bootreps'
 
                 ereturn local btype "`btype'"
@@ -964,8 +1191,16 @@ program polbunchsim, eclass
             ereturn scalar sim_p_wald          = `p_wald_post'
             ereturn scalar sim_chi2_minimumdistance = `chi2_minimumdistance_post'
             ereturn scalar sim_p_minimumdistance    = `p_minimumdistance_post'
+            ereturn scalar sim_chi2_omnibus    = `chi2_omnibus_post'
+            ereturn scalar sim_p_omnibus       = `p_omnibus_post'
+            ereturn scalar sim_p_omnibus_boot  = `p_omnibus_boot_post'
+            ereturn scalar sim_omnibus_boot_n   = `omnibus_boot_n_post'
             ereturn scalar sim_chi2_hausman    = `chi2_hausman_post'
             ereturn scalar sim_p_hausman       = `p_hausman_post'
+            ereturn scalar sim_p_gof           = `p_gof_post'
+            ereturn scalar sim_gof_deviance    = `deviance_post'
+            ereturn scalar sim_p_gof_below     = `p_gof_below_post'
+            ereturn scalar sim_polyused        = `polyused_post'
             ereturn scalar sim_rc              = `rc_post'
 
             ereturn scalar obs    = `obs'

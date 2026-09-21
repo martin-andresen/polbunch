@@ -2,7 +2,41 @@ program polbunchgendata, rclass
 	syntax newvarname [, obs(integer 5000) cutoff(real 1) ELasticity(string) ///
 		t0(real 0.2) t1(real 0.6) distribution(string) log buncherror(string) ///
 		INCOMEeffect(string) PANel(numlist min=3 max=4) ///
-		HEAP(numlist min=2 max=3) INATTention(real 0) WELfriction(real 0) ]
+		HEAP(numlist min=2 max=3) INATTention(real 0) WELfriction(real 0) ///
+		FOCAL(numlist min=1 max=3) EXTensive(real 0) ]
+
+	/*
+		focal(share [width [both]]) : excess mass at the cutoff WITHOUT a
+			matching response above it -- evasion / under-reporting, or
+			threshold targeting or round-number heaping at a round-number
+			cutoff.  After the behavioural response, a random `share' of the
+			non-bunchers whose OBSERVED earnings lie in (cutoff, cutoff*(1+
+			width)] (log: cutoff+width) report exactly the cutoff instead;
+			with both=1 the same is done for non-bunchers in [cutoff*(1-
+			width), cutoff) too.  width defaults to 0.1, both to 0.  Nothing
+			upstream is compressed to compensate, so the observed excess
+			mass overstates what the density shift above the kink implies
+			(the mirror image of inattention(), where it understates it).
+			The movers are drawn from a band around the cutoff, so if width
+			exceeds the excluded region the fitting region is thinned by
+			`share' inside the band.  r(n_focal) reports how many moved.
+
+		extensive(eps_p) : participation (extensive-margin) response.
+			eps_p >= 0 is the participation elasticity w.r.t. the net-of-
+			participation-tax rate.  An individual working above the
+			cutoff (observed earnings z > cutoff, after the intensive
+			response) stays in the sample with probability
+			  theta(z) = [ ((1-t0)*cutoff + (1-t1)*(z-cutoff)) / ((1-t0)*z) ]^eps_p
+			i.e. the ratio of net income under the kinked schedule to net
+			income at the same earnings taxed at t0 throughout, raised to
+			eps_p (theta=1 at the cutoff, falling towards ((1-t1)/(1-t0))^
+			eps_p far above it); otherwise they exit and are DROPPED from
+			the data (non-participants have no earnings observation).
+			Bunchers (z=cutoff) never exit.  The result is a smooth,
+			non-polynomial thinning of the density above the kink.  r(n_exit)
+			reports how many were dropped; r(obs) is the initial draw.
+			Levels only; not with log or panel().
+	*/
 
 	/*
 		panel(n T rho [mode]) : generate a pooled panel of n individuals
@@ -196,6 +230,33 @@ program polbunchgendata, rclass
 		if "`log'"=="log" & (`iec'>=. | `iec'!=0) {
 			noi di as error "incomeeffect() is not supported with log earnings."
 			exit 198
+		}
+		if `extensive' < 0 {
+			noi di as error "extensive() must be nonnegative."
+			exit 198
+		}
+		if `extensive' > 0 & ("`log'"=="log" | `ispanel') {
+			noi di as error "extensive() is levels only and not supported with panel()."
+			exit 198
+		}
+		if "`focal'" != "" {
+			tokenize `focal'
+			if `1' < 0 | `1' > 1 {
+				noi di as error "focal(share ...): share must be in [0,1]."
+				exit 198
+			}
+			if "`2'" != "" {
+				if `2' <= 0 {
+					noi di as error "focal(share width ...): width must be positive."
+					exit 198
+				}
+			}
+			if "`3'" != "" {
+				if !inlist(`3', 0, 1) {
+					noi di as error "focal(share width both): both must be 0 or 1."
+					exit 198
+				}
+			}
 		}
 		if `inattention'<0 | `inattention'>1 {
 			noi di as error "inattention() must be in [0,1]."
@@ -418,6 +479,40 @@ program polbunchgendata, rclass
 			replace `varlist' = `cutoff' `buncherror' if `bunch'
 		}
 
+		// -------- extensive margin: participation exit above the kink -----
+		tempvar exitv
+		gen byte `exitv' = 0
+		if `extensive' > 0 {
+			replace `exitv' = runiform() > (((1-`t0')*`cutoff' + (1-`t1')*(`varlist'-`cutoff')) ///
+				/ ((1-`t0')*`varlist')) ^ `extensive' if `varlist' > `cutoff'
+		}
+
+		// -------- focal point: mass moved to the cutoff, no upstream response --
+		local n_focal = 0
+		if "`focal'" != "" {
+			tokenize `focal'
+			local _fs `1'
+			local _fw 0.1
+			if "`2'" != "" local _fw `2'
+			local _fb 0
+			if "`3'" != "" local _fb `3'
+			if "`log'"=="log" {
+				local _fhi = `cutoff' + `_fw'
+				local _flo = `cutoff' - `_fw'
+			}
+			else {
+				local _fhi = `cutoff' * (1 + `_fw')
+				local _flo = `cutoff' * (1 - `_fw')
+			}
+			tempvar _fpick
+			gen byte `_fpick' = !`bunch' & !`exitv' & runiform() < `_fs' ///
+				& ((`varlist' > `cutoff' & `varlist' <= `_fhi') ///
+				 | (`_fb' == 1 & `varlist' < `cutoff' & `varlist' >= `_flo'))
+			replace `varlist' = `cutoff' if `_fpick'
+			count if `_fpick'
+			local n_focal = r(N)
+		}
+
 		// -------- round-number heaping among NON-bunchers -----------------
 		//  heap(share grid): a random `share' of non-bunchers report the
 		//  nearest multiple of `grid'.  Deterministic mean shift (spikes in
@@ -447,10 +542,16 @@ program polbunchgendata, rclass
 			local heap_n = r(N)
 		}
 
+		count if `exitv'
+		local n_exit = r(N)
+		drop if `exitv'
+
 		count if `bunch'
 		return scalar n_bunchers     = r(N)
-		return scalar share_bunching = r(N)/`obs'
+		return scalar share_bunching = r(N)/_N
 		return scalar n_heaped       = `heap_n'
+		return scalar n_focal        = `n_focal'
+		return scalar n_exit         = `n_exit'
 		local n_frictionfail = 0
 		if "`log'" != "log" {
 			// `frictionfail' only exists on the levels branch (frictions

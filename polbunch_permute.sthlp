@@ -1,5 +1,5 @@
 {smcl}
-{* *! version date 20260917}{...}
+{* *! version date 20260918}{...}
 {vieweralsosee "polbunch" "help polbunch"}{...}
 {vieweralsosee "polbunch_contrast" "help polbunch_contrast"}{...}
 {vieweralsosee "polbunchbias" "help polbunchbias"}{...}
@@ -32,6 +32,7 @@
 {synopt:{opt onesided}}one-sided permutation p-value (default is two-sided on {cmd:|excess_mass|}){p_end}
 {synopt:{opt clean}}cross-sample mode: skip the same-data verification, for testing the specification against a different, presumed kink-free sample{p_end}
 {synopt:{opt spectests}}also permute whatever Wald/minimum-distance/Hausman/deviance tests the target model already has{p_end}
+{synopt:{opt avoid(numlist)}}extra kink locations to keep out of the candidate grid entirely{p_end}
 {synopt:{opt level(#)}}percentile spread of the placebo distribution to display; default {cmd:level(95)}{p_end}
 {synopt:{opt nodots}}suppress the placebo-refit progress dots{p_end}
 {synoptline}
@@ -78,7 +79,10 @@ Every draw -- the true cutoff's and every placebo's -- is {bf:studentized} by it
 {opt clean} switches to cross-sample mode: the same-data verification (see {help polbunch_permute##remarks:Remarks}) is skipped, and the specification stored in {it:name} is applied to whatever dataset is currently loaded -- typically a different, presumed kink-free sample, e.g. a pre-policy year or a comparison group with the same variable names.  {cmd:r(observed)} then answers "does spurious bunching show up at this same threshold value in a sample where it shouldn't," a standard placebo check in the kink/bunching literature.  The excluded-window logic still works unchanged (it depends only on {cmd:cutoff}/{cmd:bw}/{cmd:limits}, not on the data), so the nominal cutoff's own donut is still excluded from its placebo comparison set.
 
 {phang}
-{opt spectests} permutes whatever specification tests are already sitting in the target model's {cmd:e()} -- nothing new is requested. For each of Wald ({cmd:e(chi2_wald)}), minimum-distance ({cmd:e(chi2_minimumdistance)}), Hausman ({cmd:e(chi2_hausman)}), reference-region deviance ({cmd:e(deviance)}), and below-cutoff-only deviance ({cmd:e(deviance_below)}) that is nonmissing on the target, every placebo (and the true-cutoff refit) recomputes that same statistic, and a one-sided permutation p-value ({cmd:r(p_*_perm)}) is reported alongside the target's own asymptotic one. See {help polbunch_permute##remarks:Remarks} for the cost and {cmd:norankcheck} caveats.
+{opt spectests} permutes whatever specification tests are already sitting in the target model's {cmd:e()} -- nothing new is requested. For each of the omnibus nested-restriction test ({cmd:e(chi2_omnibus)} -- wald for estimator 1/4, minimumdistance for 2/3), Hausman ({cmd:e(chi2_hausman)}), reference-region deviance ({cmd:e(deviance)}), and below-cutoff-only deviance ({cmd:e(deviance_below)}) that is nonmissing on the target, every placebo (and the true-cutoff refit) recomputes that same statistic, and a one-sided permutation p-value ({cmd:r(p_*_perm)}) is reported alongside the target's own asymptotic one. A target fit with an off-label {cmd:test(wald)} on estimator 2/3 (a secondary shape diagnostic, not that estimator's own omnibus test) is permuted separately under {cmd:e(chi2_wald)}/{cmd:r(observed_wald)}/{cmd:r(p_wald_perm)}. See {help polbunch_permute##remarks:Remarks} for the cost and {cmd:norankcheck} caveats.
+
+{phang}
+{opt avoid(numlist)} lists extra kink locations -- typically OTHER real kinks elsewhere in the same z-distribution -- that must never enter the candidate grid or any placebo's reference window.  Each point is given the {it:same} excluded-region half-widths as the target model's own donut ({cmd:(cutoff - e(lower_limit))} below, {cmd:(e(upper_limit) - cutoff)} above), recentred at that point -- i.e. "a kink shaped like mine, just centred elsewhere," not a caller-chosen radius.  Filtered at grid construction exactly like the true cutoff's own excluded region: never fit, never counted as attempted/used/failed, tallied instead in {cmd:r(cutoffs_avoid)}.  If a kink's excluded region has a different shape than the target's own, restrict the data directly with this command's own {cmd:if}/{cmd:in} instead (see {help polbunch_permute##remarks:Remarks}).
 
 {phang}
 {opt level(#)} sets the percentile spread of the placebo distribution shown in the display and returned in {cmd:r(placebo_lb)}/{cmd:r(placebo_ub)}.
@@ -98,6 +102,9 @@ Every draw -- the true cutoff's and every placebo's -- is {bf:studentized} by it
 
 {pstd}
 {bf:Placebo grid and overlap exclusion.}  Candidate cutoffs step outward from the true cutoff in both directions by {cmd:step()}.  Each candidate is re-fit with the {it:same} number of excluded bins on each side of the cutoff ({cmd:limits(L H)}, recovered from the stored model) and the {it:same} {cmd:allownegative} delta search as the true-cutoff refit.  A candidate is excluded from the reported distribution -- but still counted in {cmd:r(cutoffs_overlap)} -- whenever its own excluded window would overlap the true model's excluded region {cmd:[e(lower_limit), e(upper_limit)]}, so placebo estimates are never contaminated by observations near the real kink.  A candidate that fails to converge, or for which {cmd:target()} is missing, is counted in {cmd:r(cutoffs_skipped)} instead.
+
+{pstd}
+{bf:Other real kinks: avoid() vs. if/in.}  If a neighbouring kink's excluded region is shaped like the target's own (same donut half-widths), just list its location in {opt avoid()} -- candidates near it are filtered out cheaply, before ever being fit, and counted in {cmd:r(cutoffs_avoid)} ({cmd:r(avoid_user)}).  If it isn't the same shape, exclude its data directly with this command's own {cmd:if}/{cmd:in} instead.  Either way, a candidate whose window merely {it:touches} the resulting hole is excluded outright, {it:not} just when the hole happens to break that specific candidate's fit: before the candidate grid is built, {cmd:polbunch_permute} scans the sorted loaded data (one cheap pass, no model fits) for any maximal run of CONSECUTIVE observations that all fail your {cmd:if}/{cmd:in} -- exact edges, independent of this model's own bin width or phase (deliberately not a bin-count scan: two kinks need not sit on the same bw-spaced phase, and a phased bin scan would under-detect the hole by up to a full bin width right at the boundary when they don't) -- and folds each such run into the identical pre-fit window-overlap filter {cmd:avoid()} uses -- counted in {cmd:r(cutoffs_avoid)} ({cmd:r(avoid_auto)}), never fit, never counted as attempted/used/failed.  This matters because a candidate whose window straddles the hole but still converges on whatever data survives outside it is {it:not} a clean placebo location -- its own reference-region fit is missing a real chunk of data, exactly the contamination the excluded-region logic exists to rule out (see the overlap exclusion above), even though it didn't happen to crash.  Data that was already absent regardless of your {cmd:if}/{cmd:in} is left alone (ordinary sparse-data tolerance is unaffected).  Anything that still fails to fit and isn't explained by an auto-detected gap falls back to a cheaper diagnostic: the candidate is re-fit once more on the identical window with your {cmd:if}/{cmd:in} lifted, and if that refit converges, the original failure is attributed to your restriction rather than to the placebo location -- dropped from {cmd:r(placebo_draws)} entirely and tallied in {cmd:r(cutoffs_candif)} instead (its fitted value is discarded either way, since it would still be contaminated by whatever your {cmd:if}/{cmd:in} was excluding).  A candidate that fails even without your restriction is a genuine non-convergence and is still counted in {cmd:r(cutoffs_skipped)}.
 
 {pstd}
 {bf:allownegative.}  The true-cutoff specification is re-fit once too (to produce {cmd:r(observed)}), with {cmd:allownegative} forced on just like every placebo -- a placebo location has no structural reason for the delta &gt;= 0 constraint that {cmd:polbunch} otherwise imposes by default, so imposing it only at the true cutoff would make {cmd:r(observed)} incomparable to the placebo draws.
@@ -144,7 +151,7 @@ Every draw -- the true cutoff's and every placebo's -- is {bf:studentized} by it
 
 {pstd}Also permute the target's own specification tests:{p_end}
 
-{phang2}{cmd:. polbunch z, cutoff(50000) bw(500) polynomial(7) estimator(3) exact splitmass vce(conventional) test(minimumdistance)}{p_end}
+{phang2}{cmd:. polbunch z, cutoff(50000) bw(500) polynomial(7) estimator(3) exact splitmass vce(conventional) test(omnibus)}{p_end}
 {phang2}{cmd:. estimates store main}{p_end}
 {phang2}{cmd:. polbunch_permute main, spectests}{p_end}
 
@@ -168,8 +175,12 @@ Every draw -- the true cutoff's and every placebo's -- is {bf:studentized} by it
 {synopt:{cmd:r(placebo_t_lb)}, {cmd:r(placebo_t_ub)}}{cmd:level()}% percentile range of the used placebo draws, studentized{p_end}
 {synopt:{cmd:r(n_placebo)}}number of placebo cutoffs used (converged, usable SE, no overlap){p_end}
 {synopt:{cmd:r(n_placebo_tried)}}total number of candidate placebo cutoffs attempted{p_end}
-{synopt:{cmd:r(cutoffs_skipped)}}candidates that failed to converge or lacked {cmd:target()}/a usable SE{p_end}
+{synopt:{cmd:r(cutoffs_skipped)}}candidates that genuinely failed to converge or lacked {cmd:target()}/a usable SE{p_end}
 {synopt:{cmd:r(cutoffs_overlap)}}candidates excluded for overlapping the true excluded region{p_end}
+{synopt:{cmd:r(cutoffs_avoid)}}candidates excluded for overlapping an {cmd:avoid()} region or an auto-detected {cmd:if}/{cmd:in} gap{p_end}
+{synopt:{cmd:r(avoid_user)}}number of explicit {cmd:avoid()} points{p_end}
+{synopt:{cmd:r(avoid_auto)}}number of contiguous data gaps auto-detected from the caller's {cmd:if}/{cmd:in}{p_end}
+{synopt:{cmd:r(cutoffs_candif)}}candidates excluded because their window only failed to fit inside the caller's own {cmd:if}/{cmd:in} (not explained by an auto-detected gap){p_end}
 {synopt:{cmd:r(step)}}the cutoff-grid increment actually used{p_end}
 {synopt:{cmd:r(bw)}}the stored model's bin width{p_end}
 {synopt:{cmd:r(cutoff_true)}}the true cutoff{p_end}
@@ -177,8 +188,8 @@ Every draw -- the true cutoff's and every placebo's -- is {bf:studentized} by it
 {synopt:{cmd:r(clean)}}1 if {cmd:clean} was specified (same-data verification skipped){p_end}
 {synopt:{cmd:r(level)}}the {cmd:level()} used{p_end}
 {synopt:{cmd:r(spectests)}}1 if {cmd:spectests} was specified{p_end}
-{synopt:{cmd:r(observed_wald)}, {cmd:r(p_wald_perm)}}Wald chi2 at the true cutoff and its permutation p-value; only when {cmd:e(chi2_wald)} was present on the target{p_end}
-{synopt:{cmd:r(observed_minimumdistance)}, {cmd:r(p_minimumdistance_perm)}}minimum-distance chi2 and its permutation p-value; only when {cmd:e(chi2_minimumdistance)} was present{p_end}
+{synopt:{cmd:r(observed_omnibus)}, {cmd:r(p_omnibus_perm)}}the target's own omnibus (nested-restriction) chi2 at the true cutoff and its permutation p-value; only when {cmd:e(chi2_omnibus)} was present on the target{p_end}
+{synopt:{cmd:r(observed_wald)}, {cmd:r(p_wald_perm)}}Wald chi2 and its permutation p-value; only when the target used an off-label {cmd:test(wald)} on estimator 2/3, so {cmd:e(chi2_wald)} was present (never both this and {cmd:r(observed_omnibus)} for the same target){p_end}
 {synopt:{cmd:r(observed_hausman)}, {cmd:r(p_hausman_perm)}}Hausman chi2 and its permutation p-value; only when {cmd:e(chi2_hausman)} was present{p_end}
 {synopt:{cmd:r(observed_deviance)}, {cmd:r(p_deviance_perm)}}reference-region deviance and its permutation p-value; only when {cmd:e(deviance)} was present{p_end}
 {synopt:{cmd:r(observed_deviance_below)}, {cmd:r(p_deviance_below_perm)}}below-cutoff-only deviance and its permutation p-value; only when {cmd:e(deviance_below)} was present{p_end}
@@ -190,7 +201,7 @@ Every draw -- the true cutoff's and every placebo's -- is {bf:studentized} by it
 
 {p2col 5 20 24 2: Matrices}{p_end}
 {synopt:{cmd:r(placebo_draws)}}one row per candidate cutoff: cutoff, {cmd:target()} value (missing if unused), SE (missing if unused), status (1 = used, 0 = failed, -1 = overlap-filtered){p_end}
-{synopt:{cmd:r(spectest_draws)}}with {cmd:spectests}: one row per candidate cutoff -- cutoff, chi2_wald, chi2_minimumdistance, chi2_hausman, deviance, deviance_below, polynomial degree used (missing where not applicable or not used){p_end}
+{synopt:{cmd:r(spectest_draws)}}with {cmd:spectests}: one row per candidate cutoff -- cutoff, chi2_omnibus, chi2_wald, chi2_hausman, deviance, deviance_below, polynomial degree used (missing where not applicable or not used){p_end}
 
 
 {title:Author}
