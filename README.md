@@ -14,7 +14,7 @@ Conventional polynomial bunching estimators (Saez 2010; Chetty et al. 2011) igno
 - **Bias characterization.** `polbunchbias` computes the asymptotic bias of a conventional estimator for a given true elasticity, tax change and counterfactual density, without simulation. With already biased inputs, iterate the procedure for a fixed point.
 - **Analytic standard errors.** Closed-form `vce(analytic)` (conventional and robust) works with pre-binned data, so no micro data are needed. Binned bootstrap variants (multinomial, residual, wild, Bayesian) also available.
 - **Specification tests.** Compare the restrictions your estimator imposes against an unrestricted two-sided fit (minimum-distance, omnibus, Hausman). `estat gof` gives reference-region goodness of fit, including separate fit below and above the cutoff.
-- **Permutation inference.** `polbunch_permute` runs a placebo-cutoff permutation test on the studentized excess mass, with valid inference without relying on the polynomial being right.
+- **Permutation inference.** `polbunch_permute` runs a placebo-cutoff permutation test on the studentized excess mass.
 - **Plotting tools.** `polbunchplot` draws the observed and counterfactual densities for one or multiple polbunch estimateds, or a rootogram to show where the fit fails.
 
 ## Quick start
