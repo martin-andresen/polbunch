@@ -83,7 +83,7 @@ program define polbunch_contrast, rclass
 			di as error "`sname' is not a polbunch estimate."
 			exit 198
 		}
-		if !inlist(e(estimator),0,1,2,3,4) {
+		if !inlist(e(estimator),0,1,3,4,5) {
 			di as error "`sname' has an unrecognised e(estimator)."
 			exit 198
 		}

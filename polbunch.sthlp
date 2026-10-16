@@ -50,6 +50,7 @@ from the bin spacing and {opt bw()} may not be specified.
 {synopt:{opt nodrop}}do not drop endpoint bins that appear to be cut by sample selection{p_end}
 {synopt:{opt norankred}}do not reduce the polynomial degree when the unrestricted regression is rank-deficient; by default {cmd:polbunch} reduces the degree automatically. When {cmd:norankred} actually keeps a rank-deficient order the specification tests are disabled (they compare against the degenerate unrestricted fit){p_end}
 {synopt:{opt norankcheck}}skip the separate-sides rank check entirely and estimate at the requested polynomial degree; also disables specification tests (the analytical bias is still reported){p_end}
+{synopt:{opt wls}}efficient (minimum-chi-square) weighting of the stacked normal equations by 1/Var({it:y}), currently {cmd:estimator(3)} with level (non-log) earnings only -- see {help polbunch##wls:Efficient (WLS) weighting}{p_end}
 
 {syntab:Inference}
 {synopt:{opt vce(vcetype)}}{it:vcetype} is {cmd:conventional} (default; synonym {cmd:analytic}), {cmd:robust}, {cmd:hc2}, {cmd:hc3}, {cmd:cluster} {it:clustvar} (or {cmd:cluster} {it:stub}{cmd:, nclusters(}{it:#}{cmd:)} for pre-binned data), {cmd:bootstrap}{cmd:[, }{it:subopts}{cmd:]}, or {cmd:none}{p_end}
@@ -61,8 +62,8 @@ from the bin spacing and {opt bw()} may not be specified.
 {synopt:{opt savebins(file[, replace])}}with {cmd:vce(cluster} {it:clustvar}{cmd:)} on individual data: write the histogram + raw co-visitation matrix for later {cmd:vce(cluster} {it:stub}{cmd:)} use{p_end}
 
 {syntab:Model-restriction test}
-{synopt:{opt test(string)}}which model-restriction test to report: {cmd:all} (default for estimators 1--3), {cmd:omnibus} (this estimator's own nested-restriction test -- {cmd:wald} for 1/4, {cmd:minimumdistance} for 2/3, chi2 K+1; default for estimator 4), {cmd:hausman} (focused on the elasticity, chi2 1), {cmd:wald}/{cmd:minimumdistance} (name the mechanics directly; {cmd:wald} on estimator 2/3 is an off-label diagnostic, not that estimator's own omnibus test), or {cmd:none}{p_end}
-{synopt:{opt contrast}}paired-bootstrap test of this estimator's elasticity against the model-consistent efficient reference ({cmd:estimator(3)}, {cmd:exact}, {cmd:splitmass}), refit on every resample; requires {cmd:vce(bootstrap)}, {cmd:t0()}/{cmd:t1()} and {cmd:estimator(1/2/3)}. See {help polbunch##contrast:Elasticity contrast}{p_end}
+{synopt:{opt test(string)}}which model-restriction test to report: {cmd:all} (default for estimators 1--3), {cmd:omnibus} (this estimator's own nested-restriction test -- {cmd:wald} for 1/4, {cmd:minimumdistance} for 2/3, chi2 K+1; default for estimator 4), {cmd:hausman} (focused on excess mass, chi2 1), {cmd:wald}/{cmd:minimumdistance} (name the mechanics directly; {cmd:wald} on estimator 2/3 is an off-label diagnostic, not that estimator's own omnibus test), or {cmd:none}{p_end}
+{synopt:{opt contrast}}paired-bootstrap test of this estimator's elasticity against the model-consistent efficient reference ({cmd:estimator(3)}, {cmd:exact}, {cmd:splitmass}), refit on every resample; requires {cmd:vce(bootstrap)}, {cmd:t0()}/{cmd:t1()} and {cmd:estimator(1)} or {cmd:(3)}. See {help polbunch##contrast:Elasticity contrast}{p_end}
 {synoptline}
 {p2colreset}{...}
 
@@ -111,7 +112,15 @@ bins are classified as left or right according to the edges of the excluded regi
 {cmd:estimator(1)} is the naive bunching estimator that does not correct for the distortions above the threshold. It sets the right-side counterfactual polynomial equal to the left-side polynomial. This estimator is generally biased under the isoelastic labor supply model.
 
 {phang}
-{cmd:estimator(2)} implements a Chetty et al. style adjustment. The right-side polynomial is proportional to the left-side polynomial and the bunching mass is tied to the implied missing area under the left-side counterfactual.
+{cmd:estimator(2)} is a faithful replication of the procedure Chetty et al. (2011) actually publish. It fits a single, unrestricted
+polynomial to the left data as-is and to the right data grossed up by {cmd:(1+delta)}, and pins {cmd:delta} by an exact accounting identity
+(the fitted polynomial's own predicted mass from the start of the excluded window out to the upper support of the data must equal the actual
+observed mass over that same range) rather than by minimizing a joint criterion. {cmd:h0}/{cmd:h1} are displayed under Chetty's maintained
+relationship {cmd:h1 = h0/(1+delta)}, but that relationship is not imposed while fitting: the shape fit has no mass-balance term.
+{cmd:vce(analytic)} (conventional and robust/hc0/hc1 only -- hc2, hc3, and {cmd:vce(cluster)} are not yet derived) and {cmd:vce(bootstrap)} are both
+supported, as are {cmd:test(minimumdistance)}/{cmd:test(omnibus)}; {cmd:test(hausman)} is not yet (it needs a stacked design matrix,
+{cmd:e(G_stack)}, that the closed-form variance does not build). Goodness-of-fit ({cmd:estat gof}) is not yet supported for {cmd:estimator(2)}.
+As with any polynomial counterfactual, check the fitted {cmd:h0}/{cmd:h1} curve ({cmd:polbunchplot}) before trusting a fit obtained under {cmd:norankcheck}.
 
 {phang}
 {cmd:estimator(3)} is the default model-restricted polynomial bunching estimator. It imposes the density transformation implied by an isoelastic labor supply model. For level earnings, the right-side restriction is proportional in earnings;
@@ -122,7 +131,7 @@ for log earnings, it is additive in log earnings. Because {cmd:polbunch} handles
 not run the model-restriction test. With {opt notransform}, it reports {cmd:h0:_cons}, {cmd:h1:_cons}, and {cmd:bunching:B}. With the default transformation, it reports the reference heights, the number of bunchers, excess mass, and, when the trapezoid response equation can be solved, the shift, marginal response, and elasticity.
 
 {pstd}
-For estimators 2 and 3, {cmd:polbunch} uses a profile implementation of the corresponding nonlinear least-squares estimator. For any candidate value of the structural shift parameter, the remaining polynomial coefficients enter the model linearly
+For estimator 3, {cmd:polbunch} uses a profile implementation of the corresponding nonlinear least-squares estimator. For any candidate value of the structural shift parameter, the remaining polynomial coefficients enter the model linearly
 and are therefore estimated by least squares. The command then minimizes the resulting profiled sum of squared residuals over the structural parameter only. This recovers the same minimum and the same parameter estimates as the full nonlinear
 least-squares problem, but avoids repeatedly optimizing over all polynomial coefficients jointly.
 {p_end}
@@ -169,7 +178,7 @@ For estimators 1--4, {cmd:polbunch} tests the restrictions the selected estimato
 {cmd:test(omnibus)} -- the {bf:omnibus} test: this estimator's own nested-restriction test, whichever mechanics apply -- {cmd:wald} for estimators 1 and 4 (default there), {cmd:minimumdistance} for estimators 2 and 3 (a minimum-distance / overidentification statistic on the whole cross-kink coefficient vector -- the {it:K}+1 polynomial-coefficient jumps plus the excess mass -- profiling out the estimator's structural nuisance parameter). Distributed chi-squared with {it:K}+1 degrees of freedom, reported under {cmd:e(chi2_omnibus)}/{cmd:e(p_omnibus)}/{cmd:e(df_omnibus)} regardless of which mechanics ran. {cmd:test(wald)} and {cmd:test(minimumdistance)} name the mechanics directly if you need to be explicit (for the naive estimator these coincide -- there is no nuisance parameter -- so {cmd:minimumdistance} is not offered separately there); {cmd:test(wald)} can also be requested on estimator 2 or 3 as an off-label shape diagnostic (see below), in which case it is {it:not} the omnibus test and is reported under its own {cmd:e(chi2_wald)}/{cmd:e(p_wald)} instead.
 
 {phang}
-{cmd:test(hausman)} -- the {bf:focused} test. A generalised (Wooldridge-form) Hausman statistic on the single parameter of interest: it contrasts the restricted elasticity with the elasticity implied by the unrestricted fit, standardised by the variance of the {it:difference} -- built from the joint influence functions of the two estimators on the shared bin counts, so their covariance is accounted for and no efficiency assumption on the restricted estimator is required. Distributed chi-squared with 1 degree of freedom. Requires an analytic {cmd:vce()} ({cmd:analytic}, {cmd:robust}, {cmd:hc2}, {cmd:hc3} or {cmd:cluster}); the meat matrix carries through. Available for estimators 1, 2 and 3. {cmd:polbunch} also reports the unrestricted elasticity and its standard error ({cmd:e(elast_unrestricted)}, {cmd:e(se_elast_unrestricted)}): a large standard error there -- wild extrapolation of the counterfactual into the excluded region -- means the test has little power in that application and the omnibus statistic is the one to read. {it:e_U} is always computed on the {cmd:exact} + {cmd:splitmass} axes -- the consistent combination -- regardless of the reported estimate's axes. So for the model-consistent estimator the contrast isolates the cross-kink density restriction; for the naive and Chetty estimators it additionally reflects their own {cmd:constant}/{cmd:poolmass} approximations, which is appropriate, since those are part of the estimator's bias. When the exact inversion has no real root on the extrapolated unrestricted counterfactual -- common with a high {opt polynomial()} and a wide excluded region -- {it:e_U} cannot be formed and the Hausman test is not reported; lower the degree, narrow {opt window()}, or use {cmd:omnibus}, which needs no inversion.
+{cmd:test(hausman)} -- the {bf:focused} test. A generalised (Wooldridge-form) Hausman statistic on excess mass: it contrasts the restricted estimator's excess mass with the excess mass implied by the unrestricted fit, standardised by the variance of the {it:difference} -- built from the joint influence functions of the two estimators on the shared bin counts, so their covariance is accounted for and no efficiency assumption on the restricted estimator is required. Excess mass, not elasticity, is contrasted deliberately: converting excess mass to an elasticity applies the same tax-rate-dependent inversion to both fits regardless of whether the restriction holds, so it cancels out of the comparison without adding discriminating power while adding a Wald statistic's known sensitivity to nonlinear reparametrization and numerical fragility near a small/zero response. Distributed chi-squared with 1 degree of freedom. Requires an analytic {cmd:vce()} ({cmd:analytic}, {cmd:robust}, {cmd:hc2}, {cmd:hc3} or {cmd:cluster}); the meat matrix carries through. Available for estimators 1, 2 and 3. {cmd:polbunch} also reports the unrestricted excess mass and its standard error ({cmd:e(excess_mass_unrestricted)}, {cmd:e(se_excess_mass_unrestricted)}): a large standard error there -- wild extrapolation of the counterfactual into the excluded region -- means the test has little power in that application and the omnibus statistic is the one to read. The unrestricted excess mass is always computed on the {cmd:exact} + {cmd:splitmass} axes -- the consistent combination -- regardless of the reported estimate's axes. So for the model-consistent estimator the contrast isolates the cross-kink density restriction; for the naive and Chetty estimators it additionally reflects their own {cmd:constant}/{cmd:poolmass} approximations, which is appropriate, since those are part of the estimator's bias. Unlike the elasticity, excess mass needs no root-finding inversion, so it is available whenever the unrestricted {cmd:bunch_transform} step itself succeeds.
 
 {phang}
 {cmd:test(wald)}/{cmd:test(minimumdistance)} name the omnibus test's underlying mechanics directly instead of using the estimator-agnostic {cmd:omnibus} alias -- {cmd:wald} on estimators 1/4 and {cmd:minimumdistance} on estimators 2/3 are exactly {cmd:test(omnibus)} there. {cmd:wald} can additionally be requested on estimators 2 or 3, where it plugs in a mass-implied value of the structural parameter rather than profiling it -- an off-label shape diagnostic, {it:not} that estimator's own omnibus test (reported under its own {cmd:e(chi2_wald)}, not {cmd:e(chi2_omnibus)}); {cmd:polbunch} prints a note pointing to {cmd:omnibus} or {cmd:hausman} as the formal test in that case.
@@ -181,14 +190,14 @@ For estimators 1--4, {cmd:polbunch} tests the restrictions the selected estimato
 {cmd:test(none)} suppresses all model-restriction testing.
 
 {pstd}
-{bf:What a rejection means.} Both tests check whether the density prediction of the estimator's structural model (assumption A1) holds, given the polynomial counterfactual (A3). They do {it:not} test the part of A1 both estimators share -- the marginal-buncher inversion that maps excess mass to an elasticity -- which cannot be tested from a single kink. A non-rejection therefore means "the assumed response is consistent with the shape of the density," not "the elasticity is correct." Where the omnibus and focused statistics agree, the detected misspecification loads on the elasticity; where they diverge (omnibus rejects, Hausman does not), the lack of fit is in a direction the elasticity is insensitive to.
+{bf:What a rejection means.} Both tests check whether the density prediction of the estimator's structural model (assumption A1) holds, given the polynomial counterfactual (A3). Neither touches the marginal-buncher inversion that maps excess mass to an elasticity -- {cmd:omnibus} works directly on the polynomial-coefficient jumps and excess mass, and {cmd:hausman} targets excess mass rather than elasticity for the same reason -- so neither test can speak to whether that inversion (which cannot be tested from a single kink) is correct. A non-rejection therefore means "the assumed response is consistent with the shape of the density," not "the elasticity is correct." Where the omnibus and focused statistics agree, the detected misspecification loads broadly across the fitted coefficients; where they diverge (omnibus rejects, Hausman does not), the lack of fit is concentrated in a direction excess mass alone is insensitive to.
 
 
 {marker contrast}{...}
 {title:Elasticity contrast}
 
 {pstd}
-{opt contrast} adds a paired-bootstrap comparison of the {it:reported} estimator's elasticity with the elasticity from the {bf:model-consistent efficient reference} -- {cmd:estimator(3)} with {cmd:exact} inversion and {cmd:splitmass} -- fitted on the {bf:same reference bins and window}. It is available for {cmd:estimator(1)}, {cmd:(2)} and {cmd:(3)} (with {cmd:constant} or {cmd:poolmass}), requires {cmd:vce(bootstrap[, ...])} and {opt t0()}/{opt t1()}, and errors when the reported estimate already {it:is} the reference.
+{opt contrast} adds a paired-bootstrap comparison of the {it:reported} estimator's elasticity with the elasticity from the {bf:model-consistent efficient reference} -- {cmd:estimator(3)} with {cmd:exact} inversion and {cmd:splitmass} -- fitted on the {bf:same reference bins and window}. It is available for {cmd:estimator(1)} and {cmd:(3)} (with {cmd:constant} or {cmd:poolmass}), requires {cmd:vce(bootstrap[, ...])} and {opt t0()}/{opt t1()}, and errors when the reported estimate already {it:is} the reference.
 
 {pstd}
 On every bootstrap replication {cmd:polbunch} refits the reference on the {it:same} resampled histogram the reported estimator saw, so the two elasticity draws are paired. The bootstrap SD of the difference {it:d* = e_reported* - e_reference*} is its standard error {bf:with the two estimators' dependence built in} -- there is no efficiency assumption and no analytic covariance to derive, and it works for every {cmd:vce(bootstrap)} flavour ({cmd:multinomial}, {cmd:residual}, {cmd:wild}, {cmd:bayesian}). A replication on which the reference profile is weakly identified or the exact inversion has no real root contributes a missing value and is dropped pairwise; the count of usable pairs is reported.
@@ -204,6 +213,55 @@ Results are stored in {cmd:e(contrast_diff)}, {cmd:e(contrast_se)}, {cmd:e(contr
 
 {pstd}
 For a contrast between {it:any} two {cmd:polbunch} specifications -- a different estimator, polynomial order, inversion or mass axis, or window, and estimands other than the elasticity -- fit and {helpb estimates store} both, then use the postestimation command {helpb polbunch_contrast}, which resamples the shared histogram (read from {cmd:e(bins)}) and re-fits both specifications on every replication.
+
+
+{marker wls}{...}
+{title:Efficient (WLS) weighting}
+
+{pstd}
+By default {cmd:polbunch} fits every estimator by plain unweighted least
+squares on the stacked normal equations, which is consistent under A1-A3 but
+not efficient: the bins are counts with approximately multinomial/Poisson
+variance (Var({it:y}) ~ E[{it:y}]), so the efficient (minimum-chi-square)
+fit weights each bin's residual by the inverse of its variance.
+{opt wls} implements this for {cmd:estimator(3)} with level (non-log)
+earnings; other estimators and log mode are not yet supported and {opt wls}
+is refused (not silently ignored) outside this scope.
+
+{pstd}
+The weight is diagonal and {bf:fixed}, built once from a separate,
+unweighted {cmd:estimator(0)} pilot fit (the most flexible model available)
+-- never from {cmd:estimator(3)}'s own fit, which would let an estimator
+weight itself by its own implied variance. Each reference bin's weight is
+1/(the pilot's own fitted value there); the pooled mass row's weight is
+1/(Hstar(1-Hstar/{it:N})), the same multinomial "adding-up" variance already
+used for that row's diagonal in the analytic sandwich. If the pilot fit
+itself is degenerate (a non-positive fitted reference density, or a
+degenerate window mass share) {cmd:wls} falls back to the ordinary unweighted
+fit with a note, rather than build a weight from a bad pilot.
+
+{pstd}
+{opt test()}'s minimum-distance/omnibus statistic also uses these same fixed
+weights: the unrestricted {cmd:estimator(0)} comparison model is refit
+one-step-efficient with the pilot's own weights, so the restricted
+({cmd:estimator(3)}) and unrestricted fits being compared are weighted the
+same way. {opt test(hausman)} is not yet supported together with {opt wls}
+(its sandwich needs {cmd:e(G_stack)}, which stays unweighted) -- use
+{opt test(minimumdistance)} or {opt test(omnibus)} instead.
+
+{pstd}
+{opt vce(analytic)} (the default) under {opt wls} reports the general GMM
+sandwich for the weight actually used, {cmd:(D'WD)^-1 (D'WVmWD) (D'WD)^-1},
+{it:not} just the weighted design's bread -- the bread-only shortcut is only
+valid when the diagonal weight equals the true multinomial covariance's
+inverse as a matrix, and it does not (the true multinomial covariance carries
+an adding-up covariance across bins that a diagonal Poisson-style weight
+cannot invert). No correction for {opt wls}'s weights coming from a separate
+pilot fit is needed on top of this -- that is the standard feasible-GLS
+result that a weight from a separately estimated, correctly specified
+first-stage regression needs no further adjustment. {opt vce(robust)}/
+{cmd:hc2}/{cmd:hc3}/{cmd:cluster} and {opt vce(bootstrap)} are not yet
+supported together with {opt wls} and are refused.
 
 
 {marker bias}{...}
@@ -336,7 +394,7 @@ Estimate on the original running-variable scale rather than the normalized scale
 {phang2}{cmd:. polbunch z, cutoff(1) bw(0.01) polynomial(1) nonormalize}{p_end}
 
 {pstd}
-Compare with the Chetty-style adjustment estimator:{p_end}
+Compare with the Chetty et al. (2011) estimator:{p_end}
 
 {phang2}{cmd:. polbunch z, cutoff(1) bw(0.01) polynomial(1) estimator(2)}{p_end}
 
@@ -372,9 +430,9 @@ Reproduce the Chetty/CFOP residual bootstrap, or its heteroskedasticity-robust (
 {phang2}{cmd:. polbunch z, cutoff(1) bw(0.01) polynomial(7) t0(0.2) t1(0.6) vce(bootstrap, wild percentile) reps(999)}{p_end}
 
 {pstd}
-Test whether the Chetty estimate's elasticity differs significantly from the model-consistent efficient estimator, accounting for the two being estimated on the same data:{p_end}
+Test whether the naive estimate's elasticity differs significantly from the model-consistent efficient estimator, accounting for the two being estimated on the same data:{p_end}
 
-{phang2}{cmd:. polbunch z, cutoff(1) bw(0.01) polynomial(7) t0(0.2) t1(0.6) estimator(2) vce(bootstrap) reps(999) contrast}{p_end}
+{phang2}{cmd:. polbunch z, cutoff(1) bw(0.01) polynomial(7) t0(0.2) t1(0.6) estimator(1) vce(bootstrap) reps(999) contrast}{p_end}
 
 {pstd}
 Suppress internal variance estimation, for example when using Stata's bootstrap prefix:{p_end}
@@ -382,7 +440,7 @@ Suppress internal variance estimation, for example when using Stata's bootstrap 
 {phang2}{cmd:. bootstrap, reps(200): polbunch z, cutoff(1) bw(0.01) polynomial(1) vce(none)}{p_end}
 
 {pstd}
-Report only the focused Hausman test on the elasticity:{p_end}
+Report only the focused Hausman test on excess mass:{p_end}
 
 {phang2}{cmd:. polbunch z, cutoff(1) bw(0.01) polynomial(1) test(hausman)}{p_end}
 
@@ -433,10 +491,10 @@ Collapse to binned data and use polbunch with bin counts {cmd:freq} and bin midp
 {synopt:{cmd:e(chi2_wald)}}Wald test chi-squared statistic, only when {cmd:test(wald)} was explicitly requested off-label on estimator 2/3 (a shape diagnostic, not that estimator's own omnibus test -- see {help polbunch##tests:Model-restriction tests}){p_end}
 {synopt:{cmd:e(p_wald)}}Wald test p-value (off-label case only, as above){p_end}
 {synopt:{cmd:e(df_wald)}}Wald test degrees of freedom (off-label case only, as above){p_end}
-{synopt:{cmd:e(chi2_hausman)}}focused Hausman test chi-squared statistic (elasticity contrast, 1 df), when computed{p_end}
+{synopt:{cmd:e(chi2_hausman)}}focused Hausman test chi-squared statistic (excess-mass contrast, 1 df), when computed{p_end}
 {synopt:{cmd:e(p_hausman)}}focused Hausman test p-value, when computed{p_end}
 {synopt:{cmd:e(df_hausman)}}focused Hausman test degrees of freedom (1), when computed{p_end}
-{synopt:{cmd:e(elast_unrestricted)}, {cmd:e(se_elast_unrestricted)}}elasticity implied by the unrestricted two-sided fit and its standard error (reported with the Hausman test; a large standard error flags weak power){p_end}
+{synopt:{cmd:e(excess_mass_unrestricted)}, {cmd:e(se_excess_mass_unrestricted)}}excess mass implied by the unrestricted two-sided fit and its standard error (reported with the Hausman test; a large standard error flags weak power){p_end}
 {synopt:{cmd:e(delta_md)}}structural shift estimate from the minimum-distance test, when computed{p_end}
 {synopt:{cmd:e(dispersion)}}Pearson overdispersion {it:phi}-hat from the reference bins, for analytic {cmd:vce()}{p_end}
 {synopt:{cmd:e(deviance)}}Poisson deviance of the counterfactual on the reference bins ({cmd:e(deviance_p)} its {it:chi-squared} p-value); {cmd:e(deviance_null)} for the intercept-only fit. See {help polbunch##gof:Goodness of fit}{p_end}

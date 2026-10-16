@@ -1,5 +1,35 @@
 *! polbunchbias -- analytical bias of polynomial bunching estimators
-*! version 2.8.0  17sep2026
+*! version 2.10.0  09oct2026
+*!
+*! 2.10.0: estimator numbers 2 and 5 SWAPPED (pure relabelling, no numerical change):
+*!         estimator(2) is now the faithful Chetty (2011) replication (formerly 5),
+*!         estimator(5) is the former Chetty-style NLS recast (formerly 2), kept
+*!         undocumented for backward compatibility.  Every entry below was
+*!         relabelled consistently by the swap, so the numbers in older entries
+*!         refer to the numbering in force from 2.10.0.  Mata helpers
+*!         pbx_bias_e2_* are now pbx_bias_e5_* (they implement the NLS recast).
+*!
+*! 2.9.0: estimator(2) (Chetty faithful replication) added to pbx_bias_core_ws.
+*!        Population analog of chetty_run(): beta(delta) solves the plain
+*!        pooled normal equations over [lo,L] u [H,hi] (no mass-balance row,
+*!        identical Gram matrix to estimator 1's), delta is pinned separately
+*!        by the population version of chetty_delta_solve()'s accounting
+*!        identity over [L,hi] (window + right reference, not just the
+*!        window). Both are affine in delta, so this is closed-form -- no
+*!        Gauss-Newton fixed point needed (simpler than estimator 5's
+*!        branch). Validated against a noiseless-population oracle (poolmass
+*!        and splitmass) to <0.1% relative on shift/elasticity. Also added
+*!        estimator 2 to the polynomial-order-fallback and iterate-
+*!        divergence lower-order promotion machinery (previously estimator
+*!        1/2 only): the damped `iterate' loop can fail to converge for
+*!        estimator 2 at high K on real data (found on the Chetty fig-20a
+*!        self-employed application, poly(7): diverged, promoted to a
+*!        converged degree-2 fit, L2 change 0.11) exactly like estimator 5's
+*!        known non-contraction failure mode -- the fallback machinery is
+*!        estimator-agnostic (just retries pbx_bias_solve_ws at lower K), so
+*!        this is a mechanical extension, not a new derivation; the RMSE
+*!        benefit of promotion itself has only been MC-validated for
+*!        estimators 1/5, not independently re-validated for estimator 5.
 *!
 *! 2.8.0: r(iterate_diverged) renamed r(bias_iterate_diverged), matching the
 *!        name polbunch's own inline bias block already used for the same
@@ -22,7 +52,7 @@
 *!        range). Also: e()-mode now reads e(binname) instead of the now-
 *!        removed e(zname) (polbunch stopped returning that duplicate).
 *!
-*! 2.6.0: fixed a genuine unit-dependence bug in estimator 2 (Chetty): the
+*! 2.6.0: fixed a genuine unit-dependence bug in estimator 5 (Chetty): the
 *!        SAME physical model -- cutoff, window, relslope() all expressed
 *!        consistently in raw SEK vs. rescaled to units of 1000 SEK --
 *!        produced different, at times sign-flipped, bias_h/bias_e/bias_shift
@@ -33,7 +63,7 @@
 *!        polbunch's own well-scaled normalised coordinate), so a cutoff far
 *!        from 0 or a wide window in raw units forced every downstream Gram/
 *!        moment integral to span many orders of magnitude purely from the
-*!        user's choice of units.  For estimator 2 this is more than a
+*!        user's choice of units.  For estimator 5 this is more than a
 *!        conditioning inconvenience: the (K+2)-square system sums a Gram
 *!        (shape-fit) block that grows with the raw window scale against a
 *!        bw-normalised mass-constraint rank-1 update that does not, so at
@@ -46,7 +76,7 @@
 *!        own characteristic scale before doing any bias arithmetic, exactly
 *!        mirroring how e()-mode already avoids this by construction -- a
 *!        transparent internal relabelling, the user-facing raw-z-units
-*!        interface of relslope()/h0poly() is unchanged; (b) the estimator-2
+*!        interface of relslope()/h0poly() is unchanged; (b) the estimator-5
 *!        delta preconditioner ddel (1/sqrt(qff)) gained an extra sqrt(sc)
 *!        factor so the beta-beta, beta-delta and delta-delta blocks of the
 *!        BASE (K+2)-square system share one scale even when (a) still
@@ -68,9 +98,9 @@
 *!        to this change, confirmed present and identical before any of this
 *!        session's edits via a reverted-copy diff).  Also fixed, same
 *!        session: an unassigned Mata function-call statement inside
-*!        pbx_bias_e2_solve() (pbx_bias_e2_objQ()'s return value) was
+*!        pbx_bias_e5_solve() (pbx_bias_e5_objQ()'s return value) was
 *!        auto-echoing a stray SSR value to the results window on every
-*!        estimator-2 call.
+*!        estimator-5 call.
 *!
 *! 2.5.0: estimator(4) + constant is now refused.  Saez with a
 *!        constant-density inversion applies a FLAT counterfactual in both
@@ -89,7 +119,7 @@
 *!        measured against that estimator's own counterfactual and is not
 *!        comparable across estimators.
 *!
-*! 2.4.0: estimator-2 + splitmass bias_B HARMONISED with polbunch.  polbunch
+*! 2.4.0: estimator-5 + splitmass bias_B HARMONISED with polbunch.  polbunch
 *!        forms the splitmass Bhat as Hstar - int_{zL}^{z*} h0hat -
 *!        int_{z*}^{zH} h0hat/(1+deltahat) -- it deltahat-deflates the
 *!        FITTED h0hat above the kink (the Chetty h1 = h0/(1+delta)
@@ -104,11 +134,11 @@
 *!        any degree.  Oracle splitmass gap 0.03 -> 0.002.  polbunchbias_legacy.do
 *!        (K=1 test reference) and test_pbx_est2.do B1 updated to match.
 *!
-*! 2.4.0: `iterate' now solves the estimator-1 and estimator-2
+*! 2.4.0: `iterate' now solves the estimator-1 and estimator-5
 *!        self-consistency fixed point with a single-start Newton
 *!        (finite-difference Jacobian + backtracking line search;
 *!        pbx_bias_newton_ws / pbx_bias_scres_ws), started from the fitted
-*!        h0 shape and the naive elasticity.  For estimator 2 the damped
+*!        h0 shape and the naive elasticity.  For estimator 5 the damped
 *!        fixed-point substitution is not a contraction and ran away in
 *!        ~100% of degree->=5 draws (forcing the un-iterated /
 *!        lower-order-promotion fallbacks to carry the correction); for
@@ -123,12 +153,12 @@
 *!        (estimator 3's damped `iterate' already reaches the truth -- it
 *!        has no fitting-stage circularity).  Bit-identical to 2.3.0
 *!        whenever `iterate' is not requested or the estimator is 0/3/4.
-*!        KNOWN RESIDUAL: estimator 2 + log mode on a low-order
+*!        KNOWN RESIDUAL: estimator 5 + log mode on a low-order
 *!        counterfactual leaves a ~0.04 elasticity bias (pre-existing in
 *!        the poolmass path, still far better than the old ~naive
 *!        fallback); estimator 1 + log and estimator 3 + log are clean.
 *!
-*! 2.3.0: also -- the estimator-2 (K+2)-square solve's diagonal
+*! 2.3.0: also -- the estimator-5 (K+2)-square solve's diagonal
 *!        preconditioner now scales its delta index by 1/sqrt(qff) instead
 *!        of 1.  The delta row/column scales with the overall HEIGHT of h0
 *!        (Mhi linear in the coefficients, qff = b*Ghi*b' quadratic) while
@@ -141,8 +171,8 @@
 *!        keeps qff in range), only unblocks large-magnitude standalone
 *!        h0poly() calls.
 *!
-*! 2.3.0: estimator 2's delta-solve is now multi-start (pbx_bias_e2_solve /
-*!        pbx_bias_e2_fixedpoint), replacing the single Gauss-Newton path
+*! 2.3.0: estimator 5's delta-solve is now multi-start (pbx_bias_e5_solve /
+*!        pbx_bias_e5_fixedpoint), replacing the single Gauss-Newton path
 *!        started at delc=Delta that 2.2.0 flagged as needing this fix --
 *!        the window-width sweep that motivated it showed wild, sign-
 *!        flipping bias_e swings across neighbouring window widths, all
@@ -154,7 +184,7 @@
 *!        post-loop conditioning re-check) -- only the starting value is
 *!        now a grid of ~10 points instead of one, with ties among multiple
 *!        converged roots broken by a concentrated-SSR merit function
-*!        (pbx_bias_e2_objQ).  An earlier draft of this fix instead
+*!        (pbx_bias_e5_objQ).  An earlier draft of this fix instead
 *!        reformulated the equation itself (profiling beta out and globally
 *!        minimizing that same concentrated SSR via golden section, with no
 *!        multi-start at all) -- mathematically a well-posed problem, but
@@ -203,7 +233,7 @@
 *!        pbn_* Mata namespace) before being promoted here, specifically so
 *!        it could be tested side-by-side against this file with zero risk
 *!        of the two colliding.  Validated: all 5 estimators bit-identical
-*!        (level mode) to the pre-2.2.0 engine except estimator 2's own NLS
+*!        (level mode) to the pre-2.2.0 engine except estimator 5's own NLS
 *!        delta-solve, which agrees to ~4e-6 relative (a different but
 *!        equally valid floating-point path through an iterative solve, not
 *!        a formula difference); log mode validated bit-identical for
@@ -220,12 +250,12 @@
 *!        having already been mitigated by the iterate-loop preconditioner
 *!        added earlier); preferred anyway since it is a strict correctness
 *!        improvement with no measured downside.  Does NOT address the
-*!        separate estimator-2 NLS chaotic-sensitivity issue (wild swings
+*!        separate estimator-5 NLS chaotic-sensitivity issue (wild swings
 *!        in the bias across neighbouring window widths) -- that is
 *!        intrinsic to the Gauss-Newton delta-solve, present identically in
 *!        both coordinate systems, and needs its own (multi-start-style) fix.
 *!
-*! 2.1.0: estimators 1/2 -- plausibility guard on the fitting-stage bias
+*! 2.1.0: estimators 1/5 -- plausibility guard on the fitting-stage bias
 *!        (a coefficient bias exceeding the counterfactual it corrects is a
 *!        near-collinear-design artifact, not an economic bias) and an
 *!        automatic polynomial-order fallback: on a wide / off-centre window
@@ -247,7 +277,7 @@
 *!        0.3): only promote if the L2 shape change to reach convergence is
 *!        below this -- MC validation (known-truth simulation) found that
 *!        forcing convergence can require collapsing h0 almost entirely
-*!        (e.g. estimator 2 often only converges at K=1), which is a WORSE
+*!        (e.g. estimator 5 often only converges at K=1), which is a WORSE
 *!        bias correction than the un-iterated fit, not a better one; a
 *!        modest L2 change (as typical for estimator 1) IS an improvement.
 *!
@@ -290,7 +320,7 @@
 *!   explicit -- 9 primary options plus relslope() (degree 1) or h0poly()
 *!               (the centred, height-first coefficient list, any degree).
 *!
-*! The model-implied-B option (bmodel) has been removed: estimator 2 always
+*! The model-implied-B option (bmodel) has been removed: estimator 5 always
 *! reports the reduced-form bunching mass, governed by poolmass/splitmass.
 *!
 *! Implementation: pbx_bias_core() is the arbitrary-degree bias engine;
@@ -383,7 +413,7 @@ program define polbunchbias, rclass
     // window in raw units (e.g. z* = 311,000 SEK, window +/-75,000) would
     // otherwise force every downstream Gram/moment integral to span many
     // orders of magnitude purely from the user's choice of units, which is
-    // not just a preconditioning inconvenience: estimator 2's (K+2)-square
+    // not just a preconditioning inconvenience: estimator 5's (K+2)-square
     // system sums a Gram (shape-fit) block that grows with this raw window
     // scale against a bw-normalised mass-constraint block that does not,
     // so at large raw scale the mass constraint's contribution can be lost
@@ -545,8 +575,8 @@ program define polbunchbias, rclass
         exit 198
     }
 
-    if !inlist(`estimator', 0, 1, 2, 3, 4) {
-        di as error "polbunchbias: estimator must be 0, 1, 2, 3 or 4"
+    if !inlist(`estimator', 0, 1, 2, 3, 4, 5) {
+        di as error "polbunchbias: estimator must be 0, 1, 2, 3, 4 or 5"
         exit 198
     }
 
@@ -571,12 +601,12 @@ program define polbunchbias, rclass
     if "`constant'" != ""         local useconstant = 1
     else if "`exact'" != ""       local useconstant = 0
     else if "`_e_constant'" != "" local useconstant = `_e_constant'
-    else                          local useconstant = inlist(`estimator',1,2)
+    else                          local useconstant = inlist(`estimator',1,2,5)
 
     if "`poolmass'" != ""         local nosplit = 1
     else if "`splitmass'" != ""   local nosplit = 0
     else if "`_e_nosplit'" != ""  local nosplit = `_e_nosplit'
-    else                          local nosplit = inlist(`estimator',1,2)
+    else                          local nosplit = inlist(`estimator',1,2,5)
     if `estimator' == 1 local nosplit = 1
 
     if inlist(`estimator',0,3) & !`useconstant' & !`nosplit' {
@@ -635,7 +665,7 @@ program define polbunchbias, rclass
     local _bw_w   = `bw'/`_xscale'
 
     // ---- run (optionally iterated), with polynomial-order fallback ------
-    // The fitting-stage bias (estimators 1, 2) inverts a degree-K monomial
+    // The fitting-stage bias (estimators 1, 5) inverts a degree-K monomial
     // Gram on the fitting window.  On a wide / off-centre window at a high
     // order that design can be near-collinear enough that pbx_bias_core
     // returns a missing bias (its own ill-conditioning / plausibility
@@ -664,7 +694,7 @@ program define polbunchbias, rclass
             `_lo_w', `_hi_w', `_L_w', `_H_w', `_bw_w', `_xscale', `_doiter', ///
             `tolerance', `maxiter', `underrelax', `_allowneg', `_checkh0', "_pbxs")
         local _Kused = `_kk'
-        if !inlist(`estimator',1,2)          continue, break
+        if !inlist(`estimator',1,2,5)        continue, break
         if "`nofallback'" != ""              continue, break
         // accept this order only if it yields a usable bias: the fitting
         // design inverted (bias_h, col 20) AND the response inversion
@@ -702,7 +732,7 @@ program define polbunchbias, rclass
     // bias_iter_*); `nofallback' disables this search entirely.
     local _iterK = .
     local _iterl2 = .
-    if `_doiter' & inlist(`estimator',1,2) & "`nofallback'" == "" & ///
+    if `_doiter' & inlist(`estimator',1,2,5) & "`nofallback'" == "" & ///
             "`_bdiv0'" == "1" & `_Kused' > 1 {
         tempname _bciter _iterout _iterbbeta _iterbcur
         forvalues _kk2 = `=`_Kused'-1'(-1)1 {
@@ -741,7 +771,7 @@ program define polbunchbias, rclass
     // convergence (large L2 change), the "self-consistent" fit is really a
     // different, over-simplified model, not a refinement of the original --
     // promoting it can make the correction WORSE, not better (confirmed by
-    // MC: estimator 2's convergence criterion is harder to satisfy than
+    // MC: estimator 5's convergence criterion is harder to satisfy than
     // estimator 1's and often only converges after collapsing to K=1,
     // L2~0.6-0.7, which is a materially worse bias correction than the
     // un-iterated full-order fit; estimator 1 typically converges after a
@@ -764,9 +794,9 @@ program define polbunchbias, rclass
 
     // fitting estimators always carry a fitting-stage bias; a missing bias_h
     // (or elasticity bias) means the design was singular / ill-conditioned on
-    // the fitted window at every order down to 1 (estimator 2: or the right
+    // the fitted window at every order down to 1 (estimator 5: or the right
     // window [`zh',`zhi'] alone is too short to identify Chetty's delta)
-    if inlist(`estimator',1,2) & (missing(el(`out',1,20)) | missing(el(`out',1,24))) {
+    if inlist(`estimator',1,2,5) & (missing(el(`out',1,20)) | missing(el(`out',1,24))) {
         di as error "polbunchbias: the counterfactual polynomial is not identified on the fitted window [`zlo',`zl'] u [`zh',`zhi'] at any order down to 1 -- window too short, or too collinear, for a bias estimate. Change the estimation window."
         // the fallback failed: report the full order, all-missing, so nothing
         // downstream shows a partial (degree-1) number
@@ -777,7 +807,7 @@ program define polbunchbias, rclass
         matrix `bbeta' = J(1, `_Kfull' + 1, .)
         matrix `bcur'  = J(1, `_Kfull' + 1, .)
     }
-    else if inlist(`estimator',1,2) & cond(`_promoted',`_uKused',`_Kused') < `_Kfull' {
+    else if inlist(`estimator',1,2,5) & cond(`_promoted',`_uKused',`_Kused') < `_Kfull' {
         // this is the CONDITIONING-driven reduction (before any promotion);
         // report it against the order that survived it, `_uKused' if promoted
         di as text "Note: the degree-`_Kfull' fitting design is too ill-conditioned on this window for a"
@@ -1714,9 +1744,9 @@ capture mata: mata drop pbx_bias_core_ws()
 capture mata: mata drop pbx_bias_solve_ws()
 capture mata: mata drop pbx_bias_scres_ws()
 capture mata: mata drop pbx_bias_newton_ws()
-capture mata: mata drop pbx_bias_e2_objQ()
-capture mata: mata drop pbx_bias_e2_fixedpoint()
-capture mata: mata drop pbx_bias_e2_solve()
+capture mata: mata drop pbx_bias_e5_objQ()
+capture mata: mata drop pbx_bias_e5_fixedpoint()
+capture mata: mata drop pbx_bias_e5_solve()
 
 mata:
 
@@ -1833,7 +1863,7 @@ real rowvector pbx_bias_core(
 // multi-start search treats these exactly like a bad grid point, never a
 // crash.
 // -------------------------------------------------------------------
-real scalar pbx_bias_e2_objQ(real scalar delc, real scalar nosplit,
+real scalar pbx_bias_e5_objQ(real scalar delc, real scalar nosplit,
     real matrix Glo, real matrix Ghi, real rowvector Rlo, real rowvector Rhi,
     real rowvector Rbar, real scalar trueMass, real rowvector betat,
     real rowvector h1coef, real scalar H, real scalar hi,
@@ -1895,10 +1925,10 @@ real scalar pbx_bias_e2_objQ(real scalar delc, real scalar nosplit,
 // a DIFFERENT one: validating it against test_pbx_est2.do's independent
 // K=1 reference (pb_fobias_core) showed differences up to 0.10, i.e. it
 // silently changed the estimand, not just its robustness.  This function
-// restores the original equation; only pbx_bias_e2_solve() below is new,
+// restores the original equation; only pbx_bias_e5_solve() below is new,
 // calling this from many starting points instead of one.
 // -------------------------------------------------------------------
-void pbx_bias_e2_fixedpoint(real scalar delc0, real scalar nosplit,
+void pbx_bias_e5_fixedpoint(real scalar delc0, real scalar nosplit,
     real matrix Glo, real matrix Ghi, real matrix Mhi, real scalar qff,
     real rowvector Rlo, real rowvector Rhi, real rowvector Rbar,
     real scalar Sbar, real scalar Sright, real scalar trueMass,
@@ -1980,7 +2010,7 @@ void pbx_bias_e2_fixedpoint(real scalar delc0, real scalar nosplit,
 }
 
 // -------------------------------------------------------------------
-// Estimator-2 multi-start delta-solve: runs pbx_bias_e2_fixedpoint() from
+// Estimator-2 multi-start delta-solve: runs pbx_bias_e5_fixedpoint() from
 // several starting values instead of the old single start at delc=Delta,
 // mirroring polbunch.ado's own prof_delta_solve for the point-estimate
 // profile.  A single starting point is exactly the failure mode
@@ -1990,15 +2020,15 @@ void pbx_bias_e2_fixedpoint(real scalar delc0, real scalar nosplit,
 // moves away from its start and settle on a wrong-but-smooth root as the
 // window widens.  Other starting points often avoid that path entirely.
 //
-// When pbx_bias_e2_fixedpoint() converges from >1 starting value to
-// DIFFERENT roots, pbx_bias_e2_objQ()'s concentrated sum-of-squared
+// When pbx_bias_e5_fixedpoint() converges from >1 starting value to
+// DIFFERENT roots, pbx_bias_e5_objQ()'s concentrated sum-of-squared
 // residuals (a well-defined merit function even though it is not itself
 // what the Gauss-Newton Jacobian's fixed point solves for) breaks the
 // tie by preferring the root that fits the data best.  Delta itself is
 // always among the starting values, so whenever the fixed point is
 // unique, this reduces to exactly the old single-start answer.
 // -------------------------------------------------------------------
-void pbx_bias_e2_solve(real scalar nosplit,
+void pbx_bias_e5_solve(real scalar nosplit,
     real matrix Glo, real matrix Ghi, real matrix Mhi, real scalar qff,
     real rowvector Rlo, real rowvector Rhi, real rowvector Rbar,
     real scalar Sbar, real scalar Sright, real scalar trueMass,
@@ -2017,7 +2047,7 @@ void pbx_bias_e2_solve(real scalar nosplit,
     Qs    = J(0, 1, .)
 
     for (i = 1; i <= ns; i++) {
-        pbx_bias_e2_fixedpoint(starts[i], nosplit, Glo, Ghi, Mhi, qff, Rlo, Rhi, Rbar,
+        pbx_bias_e5_fixedpoint(starts[i], nosplit, Glo, Ghi, Mhi, qff, Rlo, Rhi, Rbar,
             Sbar, Sright, trueMass, betat, h1coef, H, hi, dsc2, K, K1, np,
             delc, biaspar, converged)
         if (!converged | missing(delc)) continue
@@ -2031,7 +2061,7 @@ void pbx_bias_e2_solve(real scalar nosplit,
         }
         if (dupe) continue
 
-        Q = pbx_bias_e2_objQ(delc, nosplit, Glo, Ghi, Rlo, Rhi, Rbar, trueMass, betat,
+        Q = pbx_bias_e5_objQ(delc, nosplit, Glo, Ghi, Rlo, Rhi, Rbar, trueMass, betat,
                 h1coef, H, hi, dsc, bestbeta_k1)
         roots = roots \ delc
         Qs    = Qs \ Q
@@ -2069,7 +2099,7 @@ void pbx_bias_e2_solve(real scalar nosplit,
     // auto-echoes its result to the results window, which otherwise leaked
     // this SSR value (twice, whenever pbx_bias_core_ws retries with the
     // same inputs after a missing first attempt) as a stray bare number.
-    bestQ = pbx_bias_e2_objQ(bestdelc, nosplit, Glo, Ghi, Rlo, Rhi, Rbar, trueMass, betat,
+    bestQ = pbx_bias_e5_objQ(bestdelc, nosplit, Glo, Ghi, Rlo, Rhi, Rbar, trueMass, betat,
         h1coef, H, hi, dsc, bestbeta)
 }
 
@@ -2100,9 +2130,11 @@ real rowvector pbx_bias_core_ws(
     real scalar atilde, mtilde, Btilde, rtilde, rr, guess
     real scalar edge_ovh, overhang
     real scalar zstar_out, lo_out, hi_out, L_out, H_out
-    real matrix M, GtG, Glo, Ghi
+    real matrix M, GtG, Glo, Ghi, Minv
     real colvector Gtu, Rvec, biaspar, Mhi, dsc, dsc2, bbias
-    real rowvector ucoef, bhat, h1coef, betat, ures, Rlo, Rhi, Rbar, Jm
+    real colvector beta0, beta1, betafull, biasparvec
+    real rowvector ucoef, bhat, h1coef, betat, ures, Rlo, Rhi, Rbar, Jm, Rext
+    real scalar trueRefMass, TrueMassExt
     real scalar hminus, hplus, Hstar, Bsaez, sleft, sright
     real scalar sright0, hright0, m_saez, a_saez
     real scalar Asaez, qsaez, disc, xhat, dlogzhat
@@ -2176,9 +2208,9 @@ real rowvector pbx_bias_core_ws(
         // additive iso-elastic shift) and is byte-exact vs a brute-force
         // grid.  Oracle plim checks with the true h0 reproduce the plim
         // naive elasticity to ~1e-3 in BOTH level and log, both `constant'
-        // and `exact' inversion, for estimators 1 and 2 -- i.e. the
+        // and `exact' inversion, for estimators 1 and 5 -- i.e. the
         // log-mode bias formula is CORRECT.  Remaining minor item: the
-        // estimator-2 Newton `iterate' shape-solve is a little less robust
+        // estimator-5 Newton `iterate' shape-solve is a little less robust
         // to polynomial OVER-fitting in log mode than in level (a degree-5
         // fit of a degree-3 counterfactual leaves ~0.04 in log vs ~0.001
         // in level); at matched degree log mode lands on the truth.
@@ -2255,7 +2287,7 @@ real rowvector pbx_bias_core_ws(
         }
     }
 
-    if (estimator == 2) {
+    if (estimator == 5) {
         // Chetty-style estimator: fits h0hat = P'beta on the left, and
         // h1hat = q*(P'beta) with q = 1/(1+delta) on the right, plus the
         // Chetty mass-row constraint
@@ -2369,14 +2401,14 @@ real rowvector pbx_bias_core_ws(
         // one from what this Jacobian's fixed point solves for --
         // validating against test_pbx_est2.do's independent K=1 reference
         // showed differences up to 0.10, i.e. it silently changed the
-        // estimand.  See pbx_bias_e2_fixedpoint()'s header.)  Delta is
+        // estimand.  See pbx_bias_e5_fixedpoint()'s header.)  Delta is
         // always among the starting values, so a unique fixed point
         // reproduces the old single-start answer exactly.  bestQ2/
         // nbasin2/gapQ2 are computed (weak-ID / competing-basin
         // diagnostics, as in prof_delta_solve) but not yet surfaced to
         // r()/e() -- a deliberate first-pass scope limit, not an
         // oversight.
-        pbx_bias_e2_solve(nosplit, Glo, Ghi, Mhi, qff, Rlo, Rhi, Rbar, Sbar, Sright,
+        pbx_bias_e5_solve(nosplit, Glo, Ghi, Mhi, qff, Rlo, Rhi, Rbar, Sbar, Sright,
             trueMass, betat, h1coef, H, hi, dsc, dsc2, K, K1, np, Delta,
             delc, bbias, bestQ2, nbasin2, gapQ2)
         if (missing(delc)) {
@@ -2406,7 +2438,7 @@ real rowvector pbx_bias_core_ws(
 
         // The bmodel(1) command option was removed, so `bmodel' is always 0
         // from polbunchbias itself and the reduced-form Bhat branch below is
-        // what estimator 2 always uses (governed by poolmass / splitmass).
+        // what estimator 5 always uses (governed by poolmass / splitmass).
         // The bmodel==1 branch is retained for direct Mata callers / the
         // regression fixtures only.
         if (bmodel == 1 & !islog) {
@@ -2506,6 +2538,156 @@ real rowvector pbx_bias_core_ws(
                 bias_shift = rtilde/zstarw - Delta
                 bias_e     = ln(1 + rtilde/zstarw)/Ltau - elast
             }
+        }
+    }
+
+    if (estimator == 2) {
+        // Estimator 5 (Chetty faithful replication) -- population analog
+        // of chetty_run()/chetty_vcov() (see polbunch.ado's header note
+        // above chetty_vcov()). UNLIKE estimator 5, there is no mass-
+        // balance row folded into the shape fit: beta(delta) solves the
+        // PLAIN pooled normal equations over [lo,L] u [H,hi] with the
+        // right side grossed by (1+delta), and delta is pinned SEPARATELY
+        // by chetty_delta_solve()'s exact accounting identity. Both
+        // pieces are AFFINE in delta (delta multiplies the right-side
+        // OUTCOME, never beta), exactly mirroring the finite-sample
+        // estimator -- so this solves in closed form, no Gauss-Newton
+        // fixed point needed (simpler than estimator 5's branch).
+        //
+        // At delta=0 the pooled system is IDENTICAL to estimator 1's own
+        // (h1=h0, no grossing), so beta(0) is exactly estimator 1's plim
+        // -- computed the same way (M, dsc, ucoef/Gtu) and reused as
+        // "beta0" below.  beta1 isolates the extra right-side moment one
+        // unit of delta adds.  delta itself is then pinned by requiring
+        // the fitted beta(delta), extrapolated over the window [L,H] AND
+        // the right reference region [H,hi] (not just the window -- see
+        // chetty_run()'s header note on why this identity reaches all
+        // the way to the data's upper support), to reproduce the TRUE
+        // mass over that same combined range.
+        dsc = pbx_monoscale(lo, hi, L, H, K)
+        M   = (dsc * dsc') :* (pbx_polgram(lo, L, K) + pbx_polgram(H, hi, K))
+        if (pbx_illcond(M)) {
+            return((estimator, bmodel, islog, zstar_out, t0, t1, tau, lambda_rep,
+                elast, x, rho, Delta, lo_out, hi_out, L_out, H_out, dL, dR, B,
+                J(1, 7, .), J(1, K+1, .)))
+        }
+
+        betat = bcoef
+        if (islog) h1coef = pbx_polshift(betat, rhow)
+        else       h1coef = pbx_polaffine(betat, x, r)
+
+        Minv  = invsym(M)
+        beta0 = dsc :* (Minv * (dsc :* (pbx_polmoment(betat, lo, L, K) + pbx_polmoment(h1coef, H, hi, K))))
+        beta1 = dsc :* (Minv * (dsc :* pbx_polmoment(h1coef, H, hi, K)))
+
+        // true window mass [L,H] -- identical construction to estimator 5
+        // (a property of the assumed TRUE model, not of the fitting
+        // procedure).
+        Rlo = J(1, K+1, 0)
+        if (L < 0) {
+            hlo = H
+            if (H > 0) hlo = 0
+            Rlo = pbx_polmoment((1), L, hlo, K)' / bw
+        }
+        Rhi = J(1, K+1, 0)
+        if (H > 0) {
+            llo = L
+            if (L < 0) llo = 0
+            Rhi = pbx_polmoment((1), llo, H, K)' / bw
+        }
+        if (islog) {
+            trueMass = pbx_polint(betat, L, H + rhow)/bw
+        }
+        else {
+            lo_right = 0
+            if (L > 0) lo_right = L
+            trueRightMass = 0
+            if (H > lo_right) {
+                trueRightMass = pbx_polint(betat, x*lo_right + r, x*H + r)/bw
+            }
+            trueMass = (Rlo * betat') + trueRightMass
+            if (L < 0 & H > 0) trueMass = trueMass + B
+        }
+
+        // true right-REFERENCE mass [H,hi] -- outside the window, so no
+        // overhang/compression term is needed; h1coef already IS the
+        // observed (post-response) density there.
+        trueRefMass = pbx_polint(h1coef, H, hi)/bw
+        TrueMassExt = trueMass + trueRefMass
+
+        Rext = pbx_polmoment((1), L, hi, K)' / bw
+
+        if (abs(Rext * beta1) < 1e-14) {
+            return((estimator, bmodel, islog, zstar_out, t0, t1, tau, lambda_rep,
+                elast, x, rho, Delta, lo_out, hi_out, L_out, H_out, dL, dR, B,
+                J(1, 7, .), J(1, K+1, .)))
+        }
+
+        delc = (TrueMassExt - Rext * beta0) / (Rext * beta1)
+
+        if (missing(delc) | 1 + delc <= 1e-6) {
+            return((estimator, bmodel, islog, zstar_out, t0, t1, tau, lambda_rep,
+                elast, x, rho, Delta, lo_out, hi_out, L_out, H_out, dL, dR, B,
+                J(1, 7, .), J(1, K+1, .)))
+        }
+
+        betafull   = beta0 + delc :* beta1
+        biasparvec = betafull - betat'
+
+        // plausibility guard (see the estimator-1 branch): a coefficient
+        // bias that dwarfs the counterfactual it corrects is a numerical
+        // artifact of a near-collinear design, not an economic bias.
+        if (abs(a0) <= 1e-14 | abs(biasparvec[1]) > abs(a0)) {
+            return((estimator, bmodel, islog, zstar_out, t0, t1, tau, lambda_rep,
+                elast, x, rho, Delta, lo_out, hi_out, L_out, H_out, dL, dR, B,
+                J(1, 7, .), J(1, K+1, .)))
+        }
+
+        biasbeta = biasparvec'
+        bias_h = biasparvec[1]
+        if (K >= 1) bias_slope = biasparvec[2]
+        if (K >= 1 & abs(a0) > 1e-14) {
+            pref = zstarw
+            if (islog) pref = 1/xscale
+            bias_lambda = pref * (bias_slope/a0 - (m0/a0)*(bias_h/a0))
+        }
+
+        // reduced-form Bhat -- IDENTICAL formula to estimator 5's (same
+        // h1=h0/(1+delta) DISPLAY model, see bunch_transform's estimator
+        // 2/5 branch in polbunch.ado): Hstar - int_E h0hat, plus the
+        // splitmass deltahat-deflate term over the excluded region.
+        Rvec   = pbx_polmoment((1), L, H, K)
+        bias_B = -(Rvec' * biasparvec) / bw
+        bhat   = betat + biasparvec'
+
+        if (L < 0 & H > 0) {
+            if (islog) edge_ovh = H + rhow
+            else       edge_ovh = x*H + r
+            overhang = pbx_polint(betat, H, edge_ovh)/bw - B
+            bias_B = bias_B + overhang
+            if (!nosplit)
+                bias_B = bias_B ///
+                    + (delc/(1 + delc))*pbx_polint(bhat, 0, H)/bw
+        }
+
+        atilde = bhat[1]
+        Btilde = B + bias_B
+
+        rtilde = .
+        if (abs(atilde) > 1e-14) rtilde = Btilde*bw/atilde
+        if (!useconstant) {
+            rr = pbx_polroot(bhat, Btilde*bw, rtilde)
+            if (!missing(rr)) rtilde = rr
+        }
+
+        bias_resp = rtilde - r
+        if (islog) {
+            bias_shift = .
+            bias_e     = bias_resp*xscale/Ltau
+        }
+        else {
+            bias_shift = rtilde/zstarw - Delta
+            bias_e     = ln(1 + rtilde/zstarw)/Ltau - elast
         }
     }
 
@@ -2794,14 +2976,14 @@ void pbx_bias_solve_ws(
         newtok = 0
         // Estimators 1 and 2: solve the self-consistency fixed point with a
         // single-start Newton (finite-difference Jacobian + line search)
-        // rather than the damped substitution.  For estimator 2 the damped
+        // rather than the damped substitution.  For estimator 5 the damped
         // map is not a contraction and runs away (~100% at poly>=5); for
         // estimator 1 it converges only slowly.  The fixed point is unique
-        // and sits at the truth (oracle plim checks; for est-2 splitmass
+        // and sits at the truth (oracle plim checks; for est-5 splitmass
         // this needed the Chetty-deltahat harmonisation of bias_B first).
         // The damped loop stays as the fallback when Newton fails, and is
         // the only path for estimators 0/3/4.
-        if (estimator == 1 | estimator == 2) {
+        if (estimator == 1 | estimator == 5) {
             newtok = pbx_bias_newton_ws(estimator, bmodel, islog, useconstant,
                 nosplit, zstarw, t0, t1, bhat, ehat, lo, hi, L, H, bw, xscale,
                 dsc, allowneg, checkh0, EBOUND, bnewt, enewt, nnewt)

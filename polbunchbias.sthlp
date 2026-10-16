@@ -181,9 +181,14 @@ regions and reads bunching mass as observed excluded-region mass minus the
 fitted counterfactual.
 
 {pmore}
-{cmd:2} -- Chetty-style estimator restricting h1 = h0/(1+delta) and adding
-the Chetty mass row.  Bunching mass is the reduced-form observed excess,
-governed by {cmd:poolmass} / {cmd:splitmass}.
+{cmd:2} -- Chetty (2011) faithful replication.  Population analog of
+{cmd:chetty_run()}: the counterfactual polynomial solves the plain pooled
+normal equations over the reference regions (no mass-balance row), and
+{cmd:delta} is pinned separately by the population version of the exact
+accounting identity over the window plus the right reference region.
+{cmd:h0}/{cmd:h1} are displayed under the h1 = h0/(1+delta) convention.
+Bunching mass is the reduced-form observed excess, governed by
+{cmd:poolmass} / {cmd:splitmass}.
 
 {pmore}
 {cmd:4} -- Saez three-region trapezoid.  Intrinsically a two-point method,
@@ -355,14 +360,14 @@ order.  A Monte Carlo validation against a known true bias (degree-5
 counterfactual, fit two degrees over-parameterised) found that promotion
 materially improves the RMSE of the corrected elasticity for estimator 1,
 where convergence typically needs only a modest step down (L2 ~ 0.15-0.20)
--- but for estimator 2, whose self-consistency condition is harder to
-satisfy, an UNGUARDED search sometimes only converges after collapsing
+-- but for the Chetty-style NLS recast (undocumented estimator 5), whose
+self-consistency condition is harder to satisfy, an UNGUARDED search sometimes only converges after collapsing
 {cmd:h0} almost entirely (as far as a linear counterfactual, L2 ~ 0.6-0.7),
 which is a WORSE correction than the un-iterated fit, not a better one.
 {cmd:promotetol()} rejects those collapses (falling back to the
 {cmd:nopromote} behaviour for that cell, with a note) while still accepting
-the estimator-1-style modest reductions; with the guard in place estimator
-2's promotion is a significant RMSE improvement too, matching estimator 1.
+the estimator-1-style modest reductions; with the guard in place the NLS
+recast's promotion is a significant RMSE improvement too, matching estimator 1.
 Lower {cmd:promotetol()} to be more conservative about promoting; raise it
 (up to 1, unbounded acceptance) to promote even a drastic reduction.
 
@@ -458,8 +463,8 @@ Iterated (self-consistent) bias correction:
 {synopt :{cmd:r(bias_iter_h)} / {cmd:r(bias_iter_B)} / {cmd:r(bias_iter_response)} / {cmd:r(bias_iter_shift)} / {cmd:r(bias_iter_elasticity)}}with {cmd:nopromote}: the converged-lower-order bias estimands, alongside (not replacing) {cmd:r(bias_h)} etc.{p_end}
 
 {pstd}
-For estimators 1 and 2 a missing {cmd:r(bias_h)} means the fitting window was
-too short to identify a degree-K polynomial; lower the order or widen the
+For estimators 1 and 2 a missing {cmd:r(bias_h)} means the fitting window
+was too short to identify a degree-K polynomial; lower the order or widen the
 window.  For estimator 2 it can also mean the right fitting window
 [{it:zh},{it:zhi}] on its own is too short to identify the Chetty excess-mass
 ratio {it:delta} (widen it).

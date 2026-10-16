@@ -56,7 +56,7 @@ This is the general-purpose companion to the {cmd:contrast} option inside {helpb
 {opt target(coef)} names the coefficient to contrast.  It must be a column of {cmd:e(b)} in {it:both} stored estimates, e.g. {cmd:bunching:elasticity} (the default), {cmd:bunching:shift}, {cmd:bunching:marginal_response}, {cmd:bunching:number_bunchers}, {cmd:bunching:excess_mass}, {cmd:bunching:delta}.  {cmd:polbunch_contrast} verifies the column exists in both models and errors otherwise (for example {cmd:bunching:delta} is reported by estimator 2 and by estimator 3 under {cmd:constant}/{cmd:poolmass}, but not by estimator 3 on the {cmd:exact}+{cmd:splitmass} axes).
 
 {phang}
-{opt reps(#)} sets the number of bootstrap replications (default 999).  Each replication re-fits both specifications, so for estimators 2 and 3 -- which run a delta profile per fit -- this is the dominant cost.
+{opt reps(#)} sets the number of bootstrap replications (default 999).  Each replication re-fits both specifications, so for estimator 3 -- which runs a delta profile per fit -- this is the dominant cost.
 
 {phang}
 {opt seed(#)} seeds the random-number generator.  With the same seed the resamples match those of {cmd:polbunch}'s own {cmd:vce(bootstrap)} / {cmd:contrast}.
@@ -95,15 +95,15 @@ This is the general-purpose companion to the {cmd:contrast} option inside {helpb
 
 {pstd}Fit two specifications and store them:{p_end}
 
-{phang2}{cmd:. polbunch z, cutoff(1) bw(0.01) polynomial(7) estimator(2) t0(0.2) t1(0.6) vce(none)}{p_end}
-{phang2}{cmd:. estimates store chetty}{p_end}
+{phang2}{cmd:. polbunch z, cutoff(1) bw(0.01) polynomial(7) estimator(1) t0(0.2) t1(0.6) vce(none)}{p_end}
+{phang2}{cmd:. estimates store naive}{p_end}
 {phang2}{cmd:. polbunch z, cutoff(1) bw(0.01) polynomial(7) estimator(3) exact splitmass t0(0.2) t1(0.6) vce(none)}{p_end}
 {phang2}{cmd:. estimates store efficient}{p_end}
 
 {pstd}Test the elasticity difference, then the shift difference:{p_end}
 
-{phang2}{cmd:. polbunch_contrast chetty efficient, reps(999) seed(20260910)}{p_end}
-{phang2}{cmd:. polbunch_contrast chetty efficient, target(bunching:shift)}{p_end}
+{phang2}{cmd:. polbunch_contrast naive efficient, reps(999) seed(20260910)}{p_end}
+{phang2}{cmd:. polbunch_contrast naive efficient, target(bunching:shift)}{p_end}
 
 {pstd}Does the polynomial order matter for the elasticity?{p_end}
 

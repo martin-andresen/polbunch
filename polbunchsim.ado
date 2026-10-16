@@ -12,7 +12,22 @@ program polbunchsim, eclass
         PANel(numlist min=3 max=4) B0(real -999) E0(real -999) ///
         HEAP(numlist min=2 max=3) INATTention(real 0) WELfriction(real 0) ///
         PERMStep(real 0) PERMMaxcutoffs(integer 60) NSAMple(integer 0) ///
-        FOCAL(numlist min=1 max=3) EXTensive(real 0) TESTBoot(integer 0) TESTBOOTK(numlist integer >=0)]
+        FOCAL(numlist min=1 max=3) EXTensive(real 0) TESTBoot(integer 0) TESTBOOTK(numlist integer >=0) ///
+        NULlel(real -999)]
+
+    /*
+        nullel(#) -- default off (sentinel -999).  Adds a SECOND elasticity
+        test, _b[elasticity] = #, alongside the existing test against
+        eltrue (the DGP's own true elasticity, used for coverage).  Its
+        p-value comes back as e(sim_p0) (single-model) / e(<model>_p0)
+        (numest>1 sweep), with e(sim_cover0)/(...)_cover0-equivalent left
+        to the caller (cover0 = p0 >= 0.05). Use this for a size/power
+        table against a FIXED null (e.g. nullel(0), "no bunching") that is
+        the same across rows regardless of each row's own true elasticity
+        -- eltrue's test answers "does the CI cover the truth" (coverage),
+        nullel's answers "does the CI cover a fixed hypothesis" (size when
+        the truth IS that hypothesis, power otherwise).
+    */
 
     /*
         testboot(#) -- default 0 (off).  With # > 1, every estimator 1-4 fit
@@ -301,9 +316,36 @@ program polbunchsim, eclass
         local btrue_use = cond(`b0' >= 0, `b0', `btrue_realized')
 
         if `genrc' == 0 {
+            /*
+                Mark the analysis window with an INDICATOR rather than
+                physically dropping out-of-window rows. Every polbunch/
+                bootstrap call below is qualified `if `insamp'' (see the
+                iff construction just below), so the fitted point/SE are
+                identical to the old drop-then-fit behaviour -- but the
+                full generated dataset stays resident in memory. This
+                matters for btype 12 (polbunch_permute): its placebo-
+                candidate search scans whatever data is CURRENTLY LOADED
+                (not the original fit's `if' condition -- see its own
+                "recenter" summarize, which is unrestricted), while the
+                per-candidate window WIDTH comes from the restricted fit's
+                own e(zlo)/e(zhi). Dropping out-of-window rows left no
+                room for placebo cutoffs whenever sample()/nsample()
+                trimmed the data down to exactly the fitting window's own
+                width; keeping them in memory (unused by every other
+                btype, since they're still excluded via `insamp') gives
+                polbunch_permute room to search without changing what any
+                other estimator/vce sees.
+            */
+            tempvar insamp
+            quietly gen byte `insamp' = 1
             if "`sample'" != "" {
-                drop if !inrange(z, `sample')
-                if `nsample' > 0 sample `nsample', count
+                quietly replace `insamp' = 0 if !inrange(z, `sample')
+                if `nsample' > 0 {
+                    tempvar _pbsim_rnd _pbsim_rnk
+                    quietly gen double `_pbsim_rnd' = runiform() if `insamp'
+                    quietly egen long `_pbsim_rnk' = rank(`_pbsim_rnd') if `insamp'
+                    quietly replace `insamp' = 0 if `insamp' & `_pbsim_rnk' > `nsample'
+                }
             }
 
             foreach bt of numlist `btype' {
@@ -323,8 +365,8 @@ program polbunchsim, eclass
                         timer clear
                         timer on 1
 
-                        if `e' == 4 & "`sample4'" != "" local iff `"if inrange(z, `sample4')"'
-                        else local iff
+                        if `e' == 4 & "`sample4'" != "" local iff `"if inrange(z, `sample4') & `insamp'"'
+                        else local iff `"if `insamp'"'
 
                         if `e' == 4 & "`est4limits'" != "" {
                             local uselimits limits(`est4limits')
@@ -477,6 +519,40 @@ program polbunchsim, eclass
                                    how the permute call itself fares. */
                                 tempname _basehold
                                 quietly estimates store `_basehold'
+                                /*
+                                   NO clean here, deliberately: clean's
+                                   own true-excluded-region overlap filter
+                                   is unconditional either way (verified
+                                   in polbunch_permute.ado -- lo0/hi0 come
+                                   straight from the STORED fit's e(lower_
+                                   limit)/e(upper_limit), untouched by
+                                   clean), so clean itself would not have
+                                   let through an invalid placebo. The
+                                   real reason NOT to use it: when
+                                   nsample() thins the in-window draw down
+                                   to an exact count (a RANDOM SUBSET of
+                                   the rows in the window), the true fit
+                                   uses only that subset (via `insamp'),
+                                   but polbunch_permute's placebo grid
+                                   and its own same-sample verification
+                                   both use inrange(zvar,lo,hi) directly
+                                   over whatever's in memory -- i.e. EVERY
+                                   in-window row, not just the nsample()-
+                                   selected ones. clean would silently
+                                   paper over that mismatch (true cutoff
+                                   fit on a thinned N, placebos fit on the
+                                   full un-thinned window -- an apples-to-
+                                   oranges comparison), not just skip a
+                                   cosmetic check. The actual fix is
+                                   upstream: a row combining btype 12 with
+                                   nsample() must not use nsample()'s
+                                   random thinning at all (plain sample()
+                                   with an inflated obs() instead), so
+                                   `insamp' exactly equals inrange(z,
+                                   sample) and the verification passes
+                                   because it's genuinely the same data,
+                                   not because the check was skipped.
+                                */
                                 capture `dbgpfx' polbunch_permute, ///
                                     target(bunching:excess_mass) ///
                                     step(`permstep') maxcutoffs(`permmaxcutoffs') nodots
@@ -508,6 +584,7 @@ program polbunchsim, eclass
                         local elast    = .
                         local se       = .
                         local p        = .
+                        local p0       = .
                         local b_bunch  = .
                         local se_bunch = .
                         local p_bunch  = .
@@ -546,6 +623,11 @@ program polbunchsim, eclass
                                     capture test _b[`nm_el'] = `eltrue'
                                     if _rc == 0 local p = r(p)
                                     else local p = .
+                                    if `nullel' > -999 {
+                                        capture test _b[`nm_el'] = `nullel'
+                                        if _rc == 0 local p0 = r(p)
+                                        else local p0 = .
+                                    }
                                 }
                                 capture local se_bunch = _se[`nm_nb']
                                 if _rc == 0 & !missing(`se_bunch') & `se_bunch' > 0 & `btrue_use' < . {
@@ -597,7 +679,7 @@ program polbunchsim, eclass
                                 callers reading polbunchsim's own
                                 sim_chi2_wald/sim_p_wald (estimator 1/4) or
                                 sim_chi2_minimumdistance/sim_p_minimumdistance
-                                (estimator 2/3) -- e.g. sim_spectest.do,
+                                (estimator 3/5) -- e.g. sim_spectest.do,
                                 spworker.do -- keep working unchanged. Only
                                 fills in when the raw local came back
                                 missing (i.e. NOT the off-label case, where
@@ -666,12 +748,43 @@ program polbunchsim, eclass
                         */
                         local time_post = `time'
                         local p_post    = `p'
+                        local p0_post   = `p0'
                         local se_post   = `se'
+                        local el_post   = `elast'
                         local rc_post   = `rc'
 
                         if missing(`time_post') local time_post = `misscode'
                         if missing(`p_post')    local p_post    = `misscode'
+                        if missing(`p0_post')   local p0_post   = `misscode'
                         if missing(`se_post')   local se_post   = `misscode'
+                        if missing(`el_post')   local el_post   = `misscode'
+
+                        /*
+                            permute (btype 12) outputs: computed once per
+                            (bt,e,c,k) iteration above (permrc/permp/...),
+                            but previously only ever surfaced via the
+                            numest==1 e(sim_perm_*) scalars -- silently
+                            dropped from a numest>1 btype() sweep. Give
+                            them the same _post/misscode treatment and add
+                            them to scalar_names below so a row that
+                            combines btype 12 with other btypes in one
+                            call (one row = one parallel sim call, per
+                            the inference-table driver) still gets the
+                            actual permutation p-value out, not just its
+                            position relative to eltrue/nullel.
+                        */
+                        local permrc_post         = `permrc'
+                        local permp_post          = `permp'
+                        local permobserved_post   = `permobserved'
+                        local permobservedse_post = `permobservedse'
+                        local permnplacebo_post   = `permnplacebo'
+                        local permntried_post     = `permntried'
+                        if missing(`permrc_post')         local permrc_post         = `misscode'
+                        if missing(`permp_post')          local permp_post          = `misscode'
+                        if missing(`permobserved_post')   local permobserved_post   = `misscode'
+                        if missing(`permobservedse_post') local permobservedse_post = `misscode'
+                        if missing(`permnplacebo_post')   local permnplacebo_post   = `misscode'
+                        if missing(`permntried_post')     local permntried_post     = `misscode'
 
                         foreach _tt in minimumdistance hausman {
                             local chi2_`_tt'_post = `chi2_`_tt''
@@ -684,7 +797,7 @@ program polbunchsim, eclass
                             missing, not the misscode sentinel, when wald
                             wasn't computed. Unlike hausman/minimum-
                             distance -- which polbunch always attempts
-                            for estimator 2/3 -- wald simply isn't part
+                            for estimator 3/5 -- wald simply isn't part
                             of the default test set for those estimators
                             (only estimator 1/4 run it by default), so
                             missing here means "not applicable" rather
@@ -871,17 +984,23 @@ program polbunchsim, eclass
                         */
                         local scalar_names `scalar_names' ///
                             `modelname'_time `modelname'_se `modelname'_p ///
+                            `modelname'_p0 `modelname'_el ///
                             `modelname'_chi2_omnibus `modelname'_p_omnibus ///
                             `modelname'_p_omnibus_boot ///
                             `modelname'_omnibus_boot_n ///
                             `modelname'_chi2_hausman `modelname'_p_hausman ///
                             `modelname'_p_gof `modelname'_deviance ///
                             `modelname'_p_gof_below `modelname'_polyused ///
+                            `modelname'_permrc `modelname'_permp ///
+                            `modelname'_permobserved `modelname'_permobservedse ///
+                            `modelname'_permnplacebo `modelname'_permntried ///
                             `modelname'_rc
 
                         local `modelname'_time                 = `time_post'
                         local `modelname'_se                   = `se_post'
                         local `modelname'_p                    = `p_post'
+                        local `modelname'_p0                   = `p0_post'
+                        local `modelname'_el                   = `el_post'
                         local `modelname'_chi2_omnibus         = `chi2_omnibus_post'
                         local `modelname'_p_omnibus            = `p_omnibus_post'
                         local `modelname'_p_omnibus_boot       = `p_omnibus_boot_post'
@@ -892,6 +1011,12 @@ program polbunchsim, eclass
                         local `modelname'_deviance             = `deviance_post'
                         local `modelname'_p_gof_below          = `p_gof_below_post'
                         local `modelname'_polyused             = `polyused_post'
+                        local `modelname'_permrc               = `permrc_post'
+                        local `modelname'_permp                = `permp_post'
+                        local `modelname'_permobserved         = `permobserved_post'
+                        local `modelname'_permobservedse       = `permobservedse_post'
+                        local `modelname'_permnplacebo         = `permnplacebo_post'
+                        local `modelname'_permntried           = `permntried_post'
                         local `modelname'_rc                   = `rc_post'
 
                         if `rc' local anyfail = 1
@@ -945,6 +1070,7 @@ program polbunchsim, eclass
                 else            ereturn local  el "`elasticity'"
                 if "`eltrue'" != "" ereturn scalar eltrue = `eltrue'
                 if "`ietrue'" != "" ereturn scalar ietrue = `ietrue'
+                if `nullel' > -999 ereturn scalar nullel = `nullel'
                 ereturn local incomeeffect "`incomeeffect'"
                 ereturn local buncherror   "`buncherror'"
                 ereturn scalar t0     = `t0'
@@ -1012,6 +1138,7 @@ program polbunchsim, eclass
             else            ereturn local  el "`elasticity'"
             if "`eltrue'" != "" ereturn scalar eltrue = `eltrue'
             if "`ietrue'" != "" ereturn scalar ietrue = `ietrue'
+            if `nullel' > -999 ereturn scalar nullel = `nullel'
             ereturn local incomeeffect "`incomeeffect'"
             ereturn local buncherror   "`buncherror'"
             ereturn scalar t0     = `t0'
@@ -1039,6 +1166,8 @@ program polbunchsim, eclass
                 ereturn scalar sim_rc                    = `final_rc'
                 ereturn scalar sim_time                  = `final_time'
                 ereturn scalar sim_p                     = `p'
+                ereturn scalar sim_p0                    = `p0'
+                ereturn scalar sim_cover0                = cond(missing(`p0'), ., `p0' >= 0.05)
                 ereturn scalar sim_se                    = `se'
                 ereturn scalar sim_el                    = `elast'
                 ereturn scalar sim_b                     = `b_bunch'
@@ -1070,6 +1199,7 @@ program polbunchsim, eclass
                 ereturn scalar sim_perm_n_tried          = `permntried'
                 ereturn scalar eltrue                    = `eltrue'
                 ereturn scalar ietrue                    = `ietrue'
+                if `nullel' > -999 ereturn scalar nullel = `nullel'
                 ereturn scalar obs                       = `obs'
                 ereturn scalar cutoff                    = `cutoff'
                 ereturn scalar t0                        = `t0'
@@ -1182,6 +1312,7 @@ program polbunchsim, eclass
             ereturn scalar sim_time            = `time_post'
             ereturn scalar sim_se              = `se_post'
             ereturn scalar sim_p               = `p_post'
+            ereturn scalar sim_p0              = `p0_post'
             ereturn scalar sim_el              = `elast'
             ereturn scalar sim_b               = `b_bunch'
             ereturn scalar sim_se_b            = `se_bunch'
@@ -1209,6 +1340,7 @@ program polbunchsim, eclass
             else            ereturn local  el "`elasticity'"
             if "`eltrue'" != "" ereturn scalar eltrue = `eltrue'
             if "`ietrue'" != "" ereturn scalar ietrue = `ietrue'
+            if `nullel' > -999 ereturn scalar nullel = `nullel'
             ereturn local incomeeffect "`incomeeffect'"
             ereturn local buncherror   "`buncherror'"
             ereturn scalar t0     = `t0'

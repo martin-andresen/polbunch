@@ -4,7 +4,7 @@ d
 d {bf:M. E. Andresen, Department of Economics, University of Oslo}
 d Efficient bunching estimation with inference for binned data. After installation, see help {bf:polbunch}, help {bf:polbunchplot}, help {bf:polbunchbias}, help {bf:polbunch_contrast}, help {bf:polbunch_permute}.
 d
-d Distribution-Date: 20260917
+d Distribution-Date: 20261009
 f polbunch.ado
 f polbunch_contrast.ado
 f polbunch_contrast.sthlp

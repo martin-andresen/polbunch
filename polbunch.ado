@@ -1,4 +1,4 @@
-				*! polbunch version date 20260917
+				*! polbunch version date 20261009
 				* Author: Martin Eckhoff Andresen
 				* This program is part of the polbunch package.
 				
@@ -10,9 +10,9 @@
 					t1(numlist min=1 max=1 <1) ///
 					POLynomial(integer 7) ///
 					NOIsily ///
-					ESTimator(integer 3) /// Specify estimator - 3 = theoretically consistent efficient estimator, 2 = chetty, 1 = no adjustment, 0=data to the left only, 4=Saez three-region trapezoid approximaton
-					DELTAmax(real 1) /// upper bound on the structural delta in the estimator 2/3 profile search (default 1 = a 100% earnings response)
-					ALLOWnegative /// allow the structural shift delta to range down to -1 in the estimator 2/3 profile; by default the search is restricted to delta >= 0 (a convex kink implies a non-negative response)
+					ESTimator(integer 3) /// Specify estimator - 3 = theoretically consistent efficient estimator, 2 = Chetty et al. (2011) faithful replication (bin-count gross-up + exact accounting identity; point estimate, closed-form vce(analytic)), 1 = no adjustment, 0=data to the left only, 4=Saez three-region trapezoid approximaton, (5 = undocumented backward-compatibility option: the former Chetty-style NLS recast, h1=h0/(1+delta) shape restriction)
+					DELTAmax(real 1) /// upper bound on the structural delta in the estimator 3/5 profile search (default 1 = a 100% earnings response)
+					ALLOWnegative /// allow the structural shift delta to range down to -1 in the estimator 3/5 profile; by default the search is restricted to delta >= 0 (a convex kink implies a non-negative response)
 					nodrop ///
 					notransform ///
 					positive ///
@@ -35,6 +35,8 @@
 					NOITERate ///
 					SAVEbins(string) ///
 					CONTRAST ///
+					WLS /// efficient (minimum-chi-square) weighting of the stacked normal equations by 1/Var(y), Var(y) from a fixed, unweighted estimator(0) pilot fit; estimator(3), non-log only for now
+					WLSPilot(integer 0) /// UNDOCUMENTED/experimental: which estimator to fit (unweighted) as the wls pilot (default 0); for a one-off robustness check only
 					]
 
 					local cmdline0 `"`0'"'
@@ -83,8 +85,8 @@
 							loc coeftabresults=c(coeftabresults)
 							set coeftabresults off
 						}
-						if !inlist(`estimator',0,1,2,3,4) {
-							noi di as error "Option estimator can take only values 0 (using data to the left only),  1 (no adjustment), 2 (Chetty et. al. adjustment),  3 (theoretically consistent and efficient estimator) or 4 (Saez trapezoid approximation)."
+						if !inlist(`estimator',0,1,2,3,4,5) {
+							noi di as error "Option estimator can take only values 0 (using data to the left only),  1 (no adjustment), 2 (Chetty et al. 2011), 3 (theoretically consistent and efficient estimator) or 4 (Saez trapezoid approximation)."
 							exit 301
 						}
 
@@ -100,7 +102,7 @@
 							  constant / exact -- how excess mass is turned into a
 							    response (constant-density approximation vs. exact
 							    inversion of the counterfactual-density integral).
-							    Default: constant for estimators 1 and 2, exact for
+							    Default: constant for estimators 1, 2 and 5, exact for
 							    estimators 0 and 3.
 
 							  poolmass / splitmass -- how the bunching mass B is
@@ -108,7 +110,7 @@
 							      poolmass  : B = M - int_{zL}^{zH} h0
 							      splitmass : B = M - int_{zL}^{z*} h0
 							                       - int_{z*}^{zH} h1
-							    Default: poolmass for estimators 1 and 2, splitmass
+							    Default: poolmass for estimators 1, 2 and 5, splitmass
 							    for estimators 0 and 3.  Irrelevant for estimator 1
 							    (h0 == h1) and ignored for estimator 4 (Saez has its
 							    own two-point mass calculation).
@@ -126,7 +128,7 @@
 							Sign of the structural shift.  polbunch supports only
 							convex kinks (t1 > t0), where the marginal buncher
 							reduces earnings to the cutoff -- so delta >= 0 by
-							construction.  The estimator 2/3 profile is therefore
+							construction.  The estimator 3/5 profile is therefore
 							restricted to delta >= 0 by default (equivalent to the
 							old `positive' option, which is now redundant).
 							`allownegative' opens the search back up to delta > -1
@@ -142,11 +144,11 @@
 
 						if "`constant'" != ""      loc useconstant = 1
 						else if "`exact'" != ""    loc useconstant = 0
-						else                       loc useconstant = inlist(`estimator',1,2)
+						else                       loc useconstant = inlist(`estimator',1,2,5)
 
 						if "`poolmass'" != ""      loc nosplit = 1
 						else if "`splitmass'" != "" loc nosplit = 0
-						else                       loc nosplit = inlist(`estimator',1,2)
+						else                       loc nosplit = inlist(`estimator',1,2,5)
 						if `estimator' == 1        loc nosplit = 1
 
 						loc constant = cond(`useconstant',"constant","")
@@ -378,8 +380,8 @@
 								noi di as error "contrast requires vce(bootstrap[, ...]) -- the test is a paired bootstrap of the elasticity difference."
 								exit 198
 							}
-							if !inlist(`estimator',1,2,3) {
-								noi di as error "contrast is available for estimator(1), (2) or (3) only -- estimators 0 and 4 use a different reference-bin set / window than the estimator(3) reference."
+							if !inlist(`estimator',1,3,5) {
+								noi di as error "contrast is available for estimator(1), (3) or (5) only -- estimators 0 and 4 use a different reference-bin set / window than the estimator(3) reference."
 								exit 198
 							}
 							if "`t0'"=="" | "`t1'"=="" {
@@ -392,7 +394,7 @@
 							}
 							if `estimator'==3 & `useconstant'==0 & `nosplit'==0 {
 								noi di as error "the reported estimate already IS the reference (estimator(3), exact, splitmass) -- nothing to contrast."
-								noi di as error "Use estimator(3) with constant or poolmass, or estimator(1)/(2), to contrast against it."
+								noi di as error "Use estimator(3) with constant or poolmass, or estimator(1), to contrast against it."
 								exit 198
 							}
 						}
@@ -417,7 +419,57 @@
 							}
 						}
 						loc masscorr = ("`nomasscorr'"=="")
-						
+
+						/*
+							Estimator 5 (Chetty faithful replication) has an
+							analytic vce() for the conventional (multinomial)
+							and robust/hc0/hc1 flavours -- see chetty_vcov()'s
+							header note for the derivation (a closed-form GMM
+							sandwich; delta enters the right-side moment via
+							the OUTCOME, not the mean, which is why it needed
+							its own derivation rather than reusing estimators
+							0-3's Gv=[D.X,D.dXddelta*beta] trick). hc2/hc3
+							(leverage-adjusted) and vce(cluster)/scale() are
+							NOT yet derived for this estimator; force vce(none)
+							for those combinations rather than let a missing/
+							wrong V reach ereturn post.
+						*/
+						if `estimator'==2 & "`vce'"=="analytic" & (`hctype'>1 | "`clustvar'"!="" | "`scalemode'"!="1") {
+							loc vce none
+							noi di as text "Note: vce(analytic) for estimator(2) supports only conventional/robust/hc0/hc1;"
+							noi di as text "      hc2, hc3, vce(cluster), and scale() are not yet derived. Reporting the"
+							noi di as text "      point estimate without standard errors; use vce(bootstrap) for inference."
+						}
+
+						/*
+							wls: efficient (minimum-chi-square) weighting of
+							estimator(3)'s stacked normal equations by
+							1/Var(y), Var(y) taken from a fixed, unweighted
+							estimator(0) pilot fit -- see the header note
+							above pbx_wls_pilot_weights(). Scoped narrowly
+							for now: estimator(3), non-log, and vce(none) or
+							vce(analytic) [conventional only -- the GLS
+							variance is just the bread when the weight IS a
+							feasible inverse-variance estimate, see the wvec
+							branch in profile_run's dovar block]. Refused
+							(not silently ignored) outside that scope, same
+							style as the estimator(2) vce() guard above.
+						*/
+						if "`wls'" != "" {
+							if `estimator' != 3 | "`log'" != "" {
+								noi di as error "wls is currently only supported for estimator(3) with level (non-log) earnings."
+								exit 198
+							}
+							if inlist("`vce'","bootstrap") {
+								noi di as error "wls does not yet support vce(bootstrap) -- rebuilding/holding the pilot weights across replications is not yet implemented. Use vce(analytic) or vce(none)."
+								exit 198
+							}
+							if "`vce'"=="analytic" & (`hctype'>=0 | "`clustvar'"!="") {
+								noi di as error "wls currently supports only vce(conventional) (or vce(none)) -- vce(robust/hc2/hc3/cluster) are not yet derived for the weighted fit."
+								exit 198
+							}
+						}
+
 						if `bootreps'<=1 {
 							noi di as error "Option reps() can only take an integer >1 (binned bootstrap)."
 							exit 301
@@ -930,7 +982,7 @@
 									local test none
 								}
 
-						if inlist(`estimator',2,3) { //STARTING VALUES
+						if inlist(`estimator',3,5) { //STARTING VALUES
 							tempname h0coefs h1coefs bu
 							mat `bu'=e(b)
 							local Kb = `polynomial' + 1
@@ -954,7 +1006,7 @@
 							local dstart_default = 0
 							}
 
-						if `estimator' == 2 {
+						if `estimator' == 5 {
 							/*
 								Prefer constant if usable, otherwise first polynomial coefficient.
 							*/
@@ -1016,10 +1068,81 @@
 						}
 							
 						local dstart = scalar(dstart)
-						} 
+						}
 						else local dstart=0
-					
-							
+
+						/*
+							wls pilot: fit estimator(0) once, unweighted, on
+							the ORIGINAL sample only (wls doesn't support
+							vce(bootstrap), refused above, so this never
+							needs rebuilding across replications) to get a
+							fixed inverse-variance weight -- for estimator
+							(3)'s own fit AND for the weighted unrestricted
+							comparison model test() uses below. See
+							pbx_wls_pilot_weights()'s header note.
+						*/
+						tempname _wlsvec
+						if "`wls'" != "" {
+							tempname _b0pilot _g0pilot
+							local _wlspilot_est = cond(`wlspilot'==0, 0, `wlspilot')
+							quietly bunch_profile `y' `z' `side' `bunch', ///
+								estimator(`_wlspilot_est') k(`polynomial') ///
+								cutoff_orig(`cutoff_orig') bw_orig(`bw_orig') ///
+								cutoff_est(`cutoff_est') bw_est(`bw_est') ///
+								l(`L') h(`H') ///
+								`normalize' vce(none) ///
+								zbar_est(`zbar_est') ///
+								zl_excl_orig(`zL_excl_orig') ///
+								zh_excl_orig(`zH_excl_orig') ///
+								zl_excl_est(`zL_excl_est') ///
+								zh_excl_est(`zH_excl_est')
+
+							matrix `_b0pilot' = J(1, `polynomial'+1, 0)
+							matrix `_g0pilot' = J(1, `polynomial'+1, 0)
+							local _pterm "c.`z'"
+							forvalues _pk = 1/`polynomial' {
+								if `_pk' > 1 local _pterm "`_pterm'#c.`z'"
+								capture local _bk = _b[h0:`_pterm']
+								if !_rc & !missing(`_bk') matrix `_b0pilot'[1,`_pk'] = `_bk'
+								if `_wlspilot_est' != 3 {
+									capture local _gk = _b[h1:`_pterm']
+									if !_rc & !missing(`_gk') matrix `_g0pilot'[1,`_pk'] = `_gk'
+								}
+							}
+							matrix `_b0pilot'[1,`polynomial'+1] = _b[h0:_cons]
+							if `_wlspilot_est' != 3 {
+								matrix `_g0pilot'[1,`polynomial'+1] = _b[h1:_cons]
+							}
+							else {
+								/* experimental wlspilot(3): estimator(3)'s own
+								   bunch_profile fit posts no free h1 -- derive
+								   it from h0 + delta via the SAME h1_A_matrix
+								   transform the main display path uses
+								   (h1coef_map()); wls is level-mode only so
+								   islog=0 here always. */
+								local _pilot_delta = _b[bunching:delta]
+								mata: st_matrix("`_g0pilot'", st_matrix("`_b0pilot'") * h1_A_matrix(`_pilot_delta', 3, `polynomial', `cutoff_orig', `bw_orig', `cutoff_est', `bw_est', 0, 0)')
+							}
+
+							quietly summarize `y' if `bunch' > 0, meanonly
+							local _wls_Hstar = r(sum)
+							quietly summarize `y', meanonly
+							local _wls_Ntot  = r(sum)
+
+							mata: pbx_wls_pilot_weights("`z'", "`side'", "`bunch'", ///
+								st_matrix("`_b0pilot'"), st_matrix("`_g0pilot'"), ///
+								`polynomial', `_wls_Hstar', `_wls_Ntot', "`_wlsvec'")
+
+							if r_wls_pilot_ok == 0 {
+								noi di as text "Note: wls requested, but the estimator(0) pilot fit is degenerate (a"
+								noi di as text "      non-positive fitted reference density, or a degenerate window"
+								noi di as text "      mass share) -- proceeding unweighted."
+								local wls
+							}
+						}
+						local _wvecopt
+						if "`wls'" != "" local _wvecopt wvec(`_wlsvec')
+
 						//BOOTSTRAP SETUP
 						loc _wildflag = ("`boottype'"=="wild")
 						loc _wildcode = cond("`wildwt'"=="webb",3,cond("`wildwt'"=="mammen",2,1))
@@ -1046,7 +1169,7 @@
 							}
 						}
 								
-						local dotest = inlist(`estimator', 1, 2, 3,4) & "`test'" != "none" & "`vce'"!="none"
+						local dotest = inlist(`estimator', 1, 2, 3, 4, 5) & "`test'" != "none" & "`vce'"!="none"
 						
 						//ESTIMATION AND INFERENCE
 						tempname b V bs bmain Vmain b0 V0 b0s GR_raw y_raw GU_raw muU_raw GbcR_raw GbcU_raw
@@ -1088,7 +1211,7 @@
 
 							}
 							
-							//estimate model: single stacked profile branch for estimators 0/1/2/3
+							//estimate model: single stacked profile branch for estimators 0/1/5/3
 
 								/*
 									vce(bootstrap, residual|wild) needs the fitted
@@ -1146,7 +1269,7 @@
 										zl_excl_est(`zL_excl_est') ///
 										zh_excl_est(`zH_excl_est') ///
 										nosplit(`nosplit') ///
-										`positive'
+										`positive' `_wvecopt'
 								}
 
 								if `s'==0 & "`vce'"=="bootstrap" & inlist("`boottype'","residual","wild") {
@@ -1190,7 +1313,7 @@
 									}
 
 									/*
-										estimator 2/3 profile: was the structural
+										estimator 3/5 profile: was the structural
 										delta weakly identified (boundary of the
 										deltamax() search or a multi-modal profile
 										SSR)?  Captured from the MAIN fit and reused
@@ -1224,7 +1347,7 @@
 
 							//STORE RESTRICTED STACKED GRADIENT for the scalar Hausman test.
 							if `dotest' & `s'==0 & "`vce'"=="analytic" & ///
-							   inlist("`test'","hausman","all") & inlist(`estimator',1,2,3) {
+							   inlist("`test'","hausman","all") & inlist(`estimator',1,3,5) {
 								matrix `GR_raw' = e(G_stack)
 								matrix `y_raw'  = e(y_stack)
 							}
@@ -1238,7 +1361,7 @@
 									local taxopts t0(`t0') t1(`t1')
 								}
 								capture scalar drop bd_buncher_lb bd_buncher_z0 bd_buncher_z1 bd_buncher_extrap
-								if inlist(`estimator',0,1,2,3) {
+								if inlist(`estimator',0,1,2,3,5) {
 									bunch_transform `z', ///
 										estimator(`estimator') ///
 										k(`polynomial') ///
@@ -1299,15 +1422,18 @@
 
 									/*
 										Scalar Hausman: the restricted model's
-										elasticity and the delta-method Jacobian
-										e(G) of the transform (its last row is
-										d elasticity / d raw stacked coefs).
+										excess mass and the delta-method
+										Jacobian e(G) of the transform (its
+										bunching:excess_mass row is d excess
+										mass / d raw stacked coefs -- looked
+										up by name inside polbunch_shausman_mata,
+										not assumed to be any fixed row).
 									*/
 									local _shaus_eR = .
 									if `dotest' & "`vce'"=="analytic" & ///
-									   inlist("`test'","hausman","all") & inlist(`estimator',1,2,3) {
+									   inlist("`test'","hausman","all") & inlist(`estimator',1,3,5) {
 										capture matrix `GbcR_raw' = e(G)
-										capture local _shaus_eR = _b[bunching:elasticity]
+										capture local _shaus_eR = _b[bunching:excess_mass]
 										if _rc local _shaus_eR = .
 									}
 
@@ -1406,7 +1532,7 @@
 										zh_excl_orig(`zH_excl_orig') ///
 										zl_excl_est(`zL_excl_est') ///
 										zh_excl_est(`zH_excl_est') ///
-										`positive'
+										`positive' `_wvecopt'
 
 									if `s' == 0 {
 										matrix `b0' = e(b)
@@ -1419,41 +1545,44 @@
 									/*
 										Scalar Hausman: capture the unrestricted
 										stacked gradient, then transform the
-										estimator-0 fit to get its elasticity and
-										the transform Jacobian.  Analytic vce only
-										(the influence functions need e(G_stack));
-										main fit only.  e() is left holding the
-										transformed estimator-0 model, but nothing
+										estimator-0 fit to get its excess mass
+										and the transform Jacobian.  Analytic
+										vce only (the influence functions need
+										e(G_stack)); main fit only.  e() is
+										left holding the transformed
+										estimator-0 model, but nothing
 										downstream reads it -- b0/V0 are already
 										stored raw above.
 									*/
 									local _shaus_eU = .
 									if `s'==0 & "`vce'"=="analytic" & ///
-									   inlist("`test'","hausman","all") & inlist(`estimator',1,2,3) {
+									   inlist("`test'","hausman","all") & inlist(`estimator',1,3,5) {
 										capture matrix `GU_raw'  = e(G_stack)
 										capture matrix `muU_raw' = e(mu_stack)
 										summarize `y' if `bunch' > 0, meanonly
 										local _Hobs_u = r(sum)
 
 										/*
-											e_U -- the elasticity the unrestricted
-											two-sided fit implies -- always on the
-											EXACT + SPLITMASS axes, the consistent
-											combination (estimators 0 and 3 are
-											unbiased there), whatever inversion/mass
-											axes the reported estimate used.  So for
-											the model-consistent estimator the contrast
-											isolates the cross-kink density restriction;
-											for the naive / Chetty estimators it also
-											reflects their own constant/poolmass
-											approximations, which is appropriate --
-											those are part of the estimator's bias.  If
-											the exact inversion has no real root on the
-											extrapolated unrestricted counterfactual,
-											e_U is left missing and the Hausman test is
-											not reported (lower polynomial(), narrow
-											window(), or read the minimum-distance
-											test, which needs no inversion).
+											B_U -- the excess mass the
+											unrestricted two-sided fit implies --
+											always on the EXACT + SPLITMASS
+											axes, the consistent combination
+											(estimators 0 and 3 are unbiased
+											there), whatever inversion/mass
+											axes the reported estimate used.
+											So for the model-consistent
+											estimator the contrast isolates the
+											cross-kink density restriction; for
+											the naive / Chetty estimators it
+											also reflects their own
+											constant/poolmass approximations,
+											which is appropriate -- those are
+											part of the estimator's bias.
+											Excess mass needs no elasticity
+											inversion (unlike the earlier
+											elasticity-based version of this
+											test), so it is available whenever
+											bunch_transform itself succeeds.
 										*/
 										capture bunch_transform `z', ///
 											estimator(0) k(`polynomial') ///
@@ -1466,7 +1595,7 @@
 											zbar(`zbar_est') massobs(`_Hobs_u') nosplit(0) weakid(0)
 										if !_rc {
 											capture matrix `GbcU_raw' = e(G)
-											capture local _shaus_eU = _b[bunching:elasticity]
+											capture local _shaus_eU = _b[bunching:excess_mass]
 											if _rc local _shaus_eU = .
 										}
 									}
@@ -1687,7 +1816,7 @@
 									  wald            -- linear restriction (naive, Saez)
 									  minimumdistance -- chi2_{K+1} on the cross-kink
 									                     coefficient vector (Chetty, model-consistent)
-									  hausman         -- focused chi2_1 on the elasticity
+									  hausman         -- focused chi2_1 on excess mass
 									For the naive estimator wald IS the minimum-distance
 									test (no nuisance parameter), so it is not run twice.
 									Exactly one of wald/minimumdistance is ever the
@@ -1695,7 +1824,7 @@
 									1/4, minimumdistance for 2/3 -- and is reported under
 									the unified name "omnibus" (see the _tests_pub
 									bookkeeping below). wald CAN still be explicitly
-									requested on estimator 2/3 as a secondary shape
+									requested on estimator 3/5 as a secondary shape
 									diagnostic (see the note a few lines up); that
 									off-label case keeps its own "wald" name, since it is
 									NOT the estimator's omnibus test.
@@ -1719,7 +1848,7 @@
 									else local _tests_to_run "`test'"
 									local _is_omnibus_req = ///
 										(inlist(`estimator',1,4) & "`_tests_to_run'"=="wald") | ///
-										(inlist(`estimator',2,3) & "`_tests_to_run'"=="minimumdistance")
+										(inlist(`estimator',2,3,5) & "`_tests_to_run'"=="minimumdistance")
 									local testname = cond(`_is_omnibus_req', "Omnibus test", ///
 										cond("`_tests_to_run'"=="wald","Wald test", ///
 										cond("`_tests_to_run'"=="minimumdistance","Minimum-distance test","Hausman test")))
@@ -1728,16 +1857,38 @@
 								/*
 									The scalar Hausman test needs the analytic stacked
 									gradients (e(G_stack) of both fits); drop it when
-									vce() is not analytic.
+									vce() is not analytic, or (separately) when the
+									restricted fit is estimator 2 -- chetty_vcov()
+									derives V directly from the closed-form GMM
+									sandwich rather than a stacked Gv/mu/y design (see
+									its header note), so there is no e(G_stack) to feed
+									the Hausman machinery. The minimum-distance/omnibus
+									test above does not need it (it only reads e(b)/
+									e(V) of the UNRESTRICTED estimator(0) fit), so it
+									is unaffected. Same story for wls: e(G_stack) is
+									always the UNweighted Jacobian (only e(V) itself
+									gets the GLS-bread treatment, see profile_run's
+									dovar block), so it is not consistent with a
+									weighted e(V) for the Hausman sandwich either.
 								*/
-								if "`vce'"!="analytic" & strpos(" `_tests_to_run' "," hausman ") {
+								if ("`vce'"!="analytic" | `estimator'==2 | "`wls'"!="") & strpos(" `_tests_to_run' "," hausman ") {
 									local _ttr2 ""
 									foreach _tt of local _tests_to_run {
 										if "`_tt'"!="hausman" local _ttr2 "`_ttr2' `_tt'"
 									}
 									local _tests_to_run = strtrim("`_ttr2'")
 									if "`test'"=="hausman" {
-										noi di as text "Note: the Hausman test requires vce(analytic|robust|hc2|hc3|cluster); not computed under vce(`vce')."
+										if `estimator'==2 {
+											noi di as text "Note: the Hausman test is not yet supported for estimator(2) (no e(G_stack));"
+											noi di as text "      use test(minimumdistance) or test(omnibus)."
+										}
+										else if "`wls'"!="" {
+											noi di as text "Note: the Hausman test is not yet supported together with wls (e(G_stack) is"
+											noi di as text "      unweighted); use test(minimumdistance) or test(omnibus) instead."
+										}
+										else {
+											noi di as text "Note: the Hausman test requires vce(analytic|robust|hc2|hc3|cluster); not computed under vce(`vce')."
+										}
 										local dotest = 0
 									}
 								}
@@ -1946,11 +2097,11 @@
 										test (wald for 1/4, minimumdistance for 2/3),
 										otherwise its own mechanics name unchanged
 										(hausman always, or wald requested off-label on
-										estimator 2/3 as a diagnostic).
+										estimator 3/5 as a diagnostic).
 									*/
 									local _ispub_omni = ///
 										(inlist(`estimator',1,4) & "`_tt'"=="wald") | ///
-										(inlist(`estimator',2,3) & "`_tt'"=="minimumdistance")
+										(inlist(`estimator',2,3,5) & "`_tt'"=="minimumdistance")
 									local _pubname = cond(`_ispub_omni', "omnibus", "`_tt'")
 
 									if `estimator'!=4 {
@@ -2072,10 +2223,10 @@
 										if `_test_rc' != 0 local _tfc = `_test_rc'
 										else local _tfc = `_fc'
 										noi di as text "Note: `_tname' could not be computed; statistic not reported (rc=`_tfc')."
-										if "`_tt'"=="hausman" & inlist(`_tfc',110,111) {
-											noi di as text "      The exact response inversion has no real root on the unrestricted"
-											noi di as text "      counterfactual.  Use a lower polynomial() or narrower window(), or read"
-											noi di as text "      the minimum-distance test, which needs no inversion."
+										if "`_tt'"=="hausman" & inlist(`_tfc',110,111,112) {
+											noi di as text "      Excess mass could not be recovered for the restricted or unrestricted"
+											noi di as text "      counterfactual on this window/polynomial().  Try a different window() or"
+											noi di as text "      polynomial(), or read the minimum-distance test instead."
 										}
 									}
 									else {
@@ -2234,7 +2385,7 @@
 								if "`p_md_boot'" != "" {
 									/*
 										minimumdistance is only ever valid on
-										estimator 2/3 (disallowed on 1/4), so it is
+										estimator 3/5 (disallowed on 1/4), so it is
 										always this estimator's own omnibus test --
 										no off-label case to guard against.
 									*/
@@ -2253,8 +2404,8 @@
 								if "`mdbtype'"=="wild" ereturn local mdboot_wildweights "`mdbwildwt'"
 							}
 							if strpos(" `_tests_done' "," hausman ") {
-								if !missing(`_shaus_eU')  ereturn scalar elast_unrestricted    = `_shaus_eU'
-								if !missing(`_shaus_seU') ereturn scalar se_elast_unrestricted = `_shaus_seU'
+								if !missing(`_shaus_eU')  ereturn scalar excess_mass_unrestricted    = `_shaus_eU'
+								if !missing(`_shaus_seU') ereturn scalar se_excess_mass_unrestricted = `_shaus_seU'
 							}
 						}
 						if `docontrast' {
@@ -2407,7 +2558,7 @@
 						else     ereturn scalar hasresp = .
 
 						/*
-							estimator 2/3 only: delta_weakid = 1 when the
+							estimator 3/5 only: delta_weakid = 1 when the
 							structural-delta profile search hit the deltamax()
 							boundary or found competing minima (multi-modal
 							concentrated SSR).  Then hasresp is forced to 0 and
@@ -2415,7 +2566,7 @@
 							delta_nbasin reports how many local minima the grid
 							found (a diagnostic).
 						*/
-						if inlist(`estimator',2,3) {
+						if inlist(`estimator',2,3,5) {
 							capture confirm number `weakid_main'
 							if !_rc ereturn scalar delta_weakid = `weakid_main'
 							capture confirm number `nbasin_main'
@@ -2512,7 +2663,7 @@
 									local _gpa : di %5.2f `gof_dispersion_above'
 									di as txt "      phi-hat below the cutoff (A3 only) " as res "`_gpb'" as txt " | above (+ A1/A2) " as res "`_gpa'"
 								}
-								if inlist(`estimator',2,3) & !missing(`gof_gof_massresid') {
+								if inlist(`estimator',3,5) & !missing(`gof_gof_massresid') {
 									if abs(`gof_gof_massresid') > 1e-4 {
 										local _gmr : di %9.2e `gof_gof_massresid'
 										di as txt "      (mass-restriction residual " as res "`_gmr'" as txt " relative -- delta solve not fully converged)"
@@ -2595,7 +2746,7 @@
 									}
 								}
 								if strpos(" `_tests_done' "," hausman ") & !missing(`_shaus_seU') {
-									di as txt _col(`=`W'-35') "(unrestricted elast." ///
+									di as txt _col(`=`W'-35') "(unrestricted excess mass" ///
 										_col(`=`W'-10') as res %10.4f `_shaus_eU'
 									di as txt _col(`=`W'-35') " std. err.)" ///
 										_col(`=`W'-10') as res %10.4f `_shaus_seU'
@@ -2617,7 +2768,7 @@
 								local _cwstub = max(`_cwstub', 12)
 								local _cW = `_cwstub' + 67
 								local _cestlab = cond(`estimator'==1,"estimator 1", ///
-									cond(`estimator'==2,"estimator 2", ///
+									cond(`estimator'==5,"estimator 5", ///
 									"estimator 3 (`=cond(`useconstant',"constant","exact")', `=cond(`nosplit',"poolmass","splitmass")')"))
 								if `_c_ok' {
 									di as txt "Elasticity contrast" ///
@@ -2665,7 +2816,7 @@
 							// counterfactual in both the mass and inversion steps
 							// -- both are zero-bias by construction, polbunchbias
 							// errors there, and the capture swallows it silently.
-							if "`nobias'" == "" & inlist(`estimator', 0, 1, 2, 3, 4) & ///
+							if "`nobias'" == "" & inlist(`estimator', 0, 1, 2, 3, 4, 5) & ///
 									"`transform'" != "notransform" & "`t0'" != "" & "`t1'" != "" {
 								local _binvopt = cond(`useconstant',"constant","exact")
 								local _bmassopt = cond(`nosplit',"poolmass","splitmass")
@@ -2921,14 +3072,14 @@
 				zh_excl_orig(real) ///
 				zl_excl_est(real) ///
 				zh_excl_est(real) ///
-				[ nonormalize LOG vce(string) initdelta(real 0.05) DELTAmax(real 1) positive HCType(real -1) MASScorr(real 1) COVis(name) NCLust(real 0) nosplit(integer 1) ]
+				[ nonormalize LOG vce(string) initdelta(real 0.05) DELTAmax(real 1) positive HCType(real -1) MASScorr(real 1) COVis(name) NCLust(real 0) nosplit(integer 1) WVec(name) ]
 
 			gettoken yvar rest : varlist
 			gettoken zvar rest : rest
 			gettoken sidevar bunch : rest
 
-			if !inlist(`estimator', 0, 1, 2, 3) {
-				noi di as err "estimator() must be 0, 1, 2, or 3"
+			if !inlist(`estimator', 0, 1, 2, 3, 5) {
+				noi di as err "estimator() must be 0, 1, 2, 3, or 5"
 				exit 198
 			}
 
@@ -2950,6 +3101,11 @@
 			tempname b V Gstack mustack ystack
 
 			capture scalar drop r_weakid_profile r_nbasin_profile r_zerosub_profile
+			/* estimator 2's dovar branch never sets these -- drop any stale
+			   copy left over from a prior est 0-3 call in the same session,
+			   or bunch_profile's ereturn-if-found guard below would wrongly
+			   attach a previous fit's design matrices to this one. */
+			capture matrix drop r_G_stack r_mu_stack r_ystack
 
 			mata: profile_run( ///
 				"`y_t'", ///
@@ -2976,7 +3132,8 @@
 				`deltamax', ///
 				"`covis'", ///
 				`nclust', ///
-				`nosplit' ///
+				`nosplit', ///
+				"`wvec'" ///
 			)
 
 			matrix `b' = r_b_profile
@@ -2992,7 +3149,7 @@
 			capture confirm scalar r_robust_psdclip
 			if !_rc local psdclip = r_robust_psdclip
 
-			/* estimator 2/3 profile: weak-identification flag + basin count */
+			/* estimator 3/5 profile: weak-identification flag + basin count */
 			local weakid0 = 0
 			capture confirm scalar r_weakid_profile
 			if !_rc local weakid0 = r_weakid_profile
@@ -3065,7 +3222,7 @@
 			ereturn scalar estimator   = `estimator'
 			if `phihat'<. ereturn scalar dispersion = `phihat'
 			if `psdclip'<. ereturn scalar vce_psdclip = `psdclip'
-			if inlist(`estimator',2,3) {
+			if inlist(`estimator',2,3,5) {
 				ereturn scalar delta_weakid = `weakid0'
 				if `nbasin0'<. ereturn scalar delta_nbasin = `nbasin0'
 				ereturn scalar delta_zerosub = `zerosub0'
@@ -3084,13 +3241,21 @@
 				ereturn local vcetype "Analytic"
 				ereturn local properties "b V"
 
-				matrix `Gstack'  = r_G_stack
-				matrix `mustack' = r_mu_stack
-				matrix `ystack'  = r_ystack
+				/* Not populated for estimator 2 -- its dovar branch (see
+				   chetty_vcov()) computes V directly from the closed-form
+				   GMM sandwich rather than a stacked Gv/mu/y design, so
+				   there is no reference-region design matrix to expose for
+				   the residual bootstrap or estat gof. */
+				capture confirm matrix r_G_stack
+				if !_rc {
+					matrix `Gstack'  = r_G_stack
+					matrix `mustack' = r_mu_stack
+					matrix `ystack'  = r_ystack
 
-				ereturn matrix G_stack  = `Gstack'
-				ereturn matrix mu_stack = `mustack'
-				ereturn matrix y_stack  = `ystack'
+					ereturn matrix G_stack  = `Gstack'
+					ereturn matrix mu_stack = `mustack'
+					ereturn matrix y_stack  = `ystack'
+				}
 
 				_pb_gof_post
 			}
@@ -3207,7 +3372,7 @@
 			*/
 			local nosplit0 = `nosplit'
 			/*
-				A structural delta column is reported for estimator 2
+				A structural delta column is reported for estimator 5
 				always, and for estimator 3 whenever the reported response
 				is NOT the pure structural delta -- i.e. under constant
 				(constant-density inversion) or under poolmass (response
@@ -3305,7 +3470,7 @@
 				number_bunchers ///
 				excess_mass
 
-			if (`estimator' == 2 | `e3delta') {
+			if (`estimator' == 5 | `estimator' == 2 | `e3delta') {
 				local cnames `cnames' delta
 			}
 
@@ -3352,7 +3517,7 @@
 
 			local eqnames `eqnames' bunching bunching
 
-			if (`estimator' == 2 | `e3delta') {
+			if (`estimator' == 5 | `estimator' == 2 | `e3delta') {
 				local eqnames `eqnames' bunching
 			}
 
@@ -3697,14 +3862,15 @@ cap program drop bunch_saez
 		version 16.0
 
 		/*
-			Scalar Hausman test on the elasticity.  The caller captures the
+			Scalar Hausman test on excess mass.  The caller captures the
 			inputs from the restricted fit + its bunch_transform and from the
 			unrestricted (estimator 0) fit + its bunch_transform:
 
 			  gbcr / gbcu : bunch_transform Jacobian e(G) of the restricted /
-			                unrestricted model (elasticity = last row)
+			                unrestricted model (excess mass row found by
+			                name -- bunching:excess_mass -- not position)
 			  gr   / gu   : stacked-fit gradient e(G_stack) of each model
-			  er   / eu   : the two elasticity point estimates (may be .)
+			  er   / eu   : the two excess-mass point estimates (may be .)
 			  ystack      : e(y_stack) -- the shared bin counts
 			  muu         : e(mu_stack) of the unrestricted fit (HC meat only)
 		*/
@@ -3765,8 +3931,8 @@ cap program drop bunch_saez
 				ZBAR(real) ///
 				[ nonormalize LOG ]
 
-			if !inlist(`estimator', 1, 2, 3) {
-				di as err "polbunch_waldtest only handles estimator(1), estimator(2), or estimator(3)"
+			if !inlist(`estimator', 1, 2, 3, 5) {
+				di as err "polbunch_waldtest only handles estimator(1), estimator(2), estimator(3), or estimator(5)"
 				exit 198
 			}
 
@@ -3830,8 +3996,8 @@ cap program drop bunch_saez
 			ZBAR(real) ///
 			[ NONORMALIZE LOG POSitive INITDELTA(real 0.05) ]
 
-		if !inlist(`estimator', 1, 2, 3) {
-			di as err "polbunch_minimumdistancetest only handles estimator(1), estimator(2), or estimator(3)"
+		if !inlist(`estimator', 1, 2, 3, 5) {
+			di as err "polbunch_minimumdistancetest only handles estimator(1), estimator(2), estimator(3), or estimator(5)"
 			return scalar failcode = 198
 			return scalar chi2 = .
 			return scalar p = .
@@ -3943,7 +4109,7 @@ cap program drop bunch_saez
 
 		struct design_out {
 			real matrix X              // stacked design wrt linear parameters
-			real matrix dXddelta       // derivative of X wrt delta for estimators 2/3
+			real matrix dXddelta       // derivative of X wrt delta for estimators 3/5
 		}
 
 
@@ -4316,14 +4482,20 @@ cap program drop bunch_saez
 
 		/*
 			Estimator 2: h1 = h0 / (1 + delta)
+			Estimator 5 (Chetty (2011) faithful replication) shares this same
+			DISPLAY relationship -- confirmed this session that h1=h0/(1+delta)
+			is Chetty's maintained economic assumption regardless of which
+			estimating procedure recovers (beta,delta); estimator 2's fitting
+			procedure just doesn't use it as a restriction during estimation
+			(see chetty_run()'s header note).
 		*/
-		if (estimator == 2) {
+		if (estimator == 5 | estimator == 2) {
 			if (deriv) return(-I(Kb) / (1 + delta)^2)
 			return(I(Kb) / (1 + delta))
 		}
 
 		if (estimator != 3) {
-			_error(3498, "h1_A_matrix only handles estimators 1, 2, and 3")
+			_error(3498, "h1_A_matrix only handles estimators 1, 2, 3, and 5")
 		}
 
 		/*
@@ -4550,7 +4722,7 @@ cap program drop bunch_saez
 	}
 
 		// -----------------------------------------------------------------------------
-		// Mass-row helpers for profile estimators 2/3
+		// Mass-row helpers for profile estimators 3/5
 		// -----------------------------------------------------------------------------
 
 		real rowvector bmodel_row23(
@@ -4572,7 +4744,7 @@ cap program drop bunch_saez
 				_error(3498, "delta must be greater than -1")
 			}
 
-			if (estimator == 2) {
+			if (estimator == 5 | estimator == 2) {
 				/*
 					Chetty restriction. Estimator 2's model is h1 = h0/(1+delta),
 					so the mass that left the region above the kink and piled up
@@ -4584,6 +4756,13 @@ cap program drop bunch_saez
 					i.e. delta multiplies the integral of the SHIFTED density h1,
 					not the counterfactual h0.  The support endpoints do not move
 					(vertical rescaling), so both integrals run to the same zbar.
+
+					Estimator 5 is tested against this SAME model form (its
+					h0/h1 display convention IS estimator 5's, see
+					h1_A_matrix()) -- the minimum-distance/omnibus test asks
+					"does h1=h0/(1+delta), for some delta, fit the unrestricted
+					shape", which is identical machinery regardless of which
+					procedure recovered the reported (beta,delta).
 				*/
 				R = (delta / ((1 + delta) * bw_est)) * intbasis(cutoff_est, zbar_est, K)
 			}
@@ -4593,7 +4772,7 @@ cap program drop bunch_saez
 				R = intbasis(cutoff_est, cutoff_est + r, K) / bw_est
 			}
 			else {
-				_error(3498, "bmodel_row23 only handles estimators 2 and 3")
+				_error(3498, "bmodel_row23 only handles estimators 2, 3, and 5")
 			}
 
 			return(R)
@@ -4621,7 +4800,7 @@ cap program drop bunch_saez
 			return(out)
 		}
 
-		if (estimator == 2 | estimator == 3) {
+		if (estimator == 5 | estimator == 3) {
 			out[1, 1..Kb] = d_bmodel_row23_ddelta(
 				delta,
 				cutoff_orig,
@@ -4637,7 +4816,7 @@ cap program drop bunch_saez
 			return(out)
 		}
 
-		_error(3498, "d_bmodel_row_ddelta only handles estimators 0, 1, 2, and 3")
+		_error(3498, "d_bmodel_row_ddelta only handles estimators 0, 1, 3, and 5")
 	}
 
 
@@ -4659,8 +4838,10 @@ cap program drop bunch_saez
 			_error(3498, "delta must be greater than -1")
 		}
 
-		if (estimator == 2) {
-			/* d/ddelta [ delta/(1+delta) ] = 1/(1+delta)^2 */
+		if (estimator == 5 | estimator == 2) {
+			/* d/ddelta [ delta/(1+delta) ] = 1/(1+delta)^2 -- estimator 2
+			   is tested against the same h1=h0/(1+delta) model form as
+			   estimator 5, see bmodel_row23()'s header note. */
 			return(intbasis(cutoff_est, zbar_est, K) / ((1 + delta)^2 * bw_est))
 		}
 
@@ -4671,12 +4852,12 @@ cap program drop bunch_saez
 			return(pbasis_row(cutoff_est + r, K) * dr / bw_est)
 		}
 
-		_error(3498, "d_bmodel_row23_ddelta only handles estimators 2 and 3")
+		_error(3498, "d_bmodel_row23_ddelta only handles estimators 2, 3, and 5")
 	}
 
 		
 		// -----------------------------------------------------------------------------
-		// Unified stacked design/profile objective for estimators 0/1/2/3
+		// Unified stacked design/profile objective for estimators 0/1/5/3
 		// -----------------------------------------------------------------------------
 
 		real rowvector cf_mass_row(
@@ -4712,7 +4893,7 @@ cap program drop bunch_saez
 			else if (estimator == 1) {
 				R[1, 1..Kb] = intbasis(zL_excl_est, zH_excl_est, K) / bw_est
 			}
-			else if (estimator == 2) {
+			else if (estimator == 5) {
 				/*
 					Excluded-region counterfactual entering the Chetty
 					mass-balance row.
@@ -4762,7 +4943,7 @@ cap program drop bunch_saez
 				R[1, 1..Kb] = Rlo + Rhi
 			}
 			else {
-				_error(3498, "cf_mass_row only handles estimators 0, 1, 2, and 3")
+				_error(3498, "cf_mass_row only handles estimators 0, 1, 3, and 5")
 			}
 
 			return(R)
@@ -4813,7 +4994,7 @@ cap program drop bunch_saez
 
 		Ihi = intbasis(cutoff_est,zH_excl_est, K)
 
-		if (estimator == 2) {
+		if (estimator == 5) {
 			out[1, 1..Kb] = -Ihi / ((1 + delta)^2 * bw_est)
 		}
 		else if (estimator == 3) {
@@ -4832,7 +5013,7 @@ cap program drop bunch_saez
 			out[1, 1..Kb] = (Ihi * dA) / bw_est
 		}
 		else {
-			_error(3498, "d_cf_mass_row_ddelta only handles estimators 0, 1, 2, and 3")
+			_error(3498, "d_cf_mass_row_ddelta only handles estimators 0, 1, 3, and 5")
 		}
 
 		return(out)
@@ -4864,7 +5045,7 @@ cap program drop bunch_saez
 				return(R)
 			}
 
-			if (estimator == 2) {
+			if (estimator == 5) {
 				/*
 					h1 = h0/(1+delta) => missing mass above the kink is
 					delta/(1+delta) * int_{zstar}^{zbar} h0  (= delta * int h1).
@@ -4877,7 +5058,7 @@ cap program drop bunch_saez
 				R[1, 1..(K+1)] = intbasis(cutoff_est, cutoff_est + r, K) / bw_est
 			}
 			else {
-				_error(3498, "bmodel_row only handles estimators 0, 1, 2, and 3")
+				_error(3498, "bmodel_row only handles estimators 0, 1, 3, and 5")
 			}
 
 			return(R)
@@ -4971,7 +5152,7 @@ cap program drop bunch_saez
 
 				out.dXddelta = J(rows(out.X), 0, .)
 			}
-			else if (estimator == 2 | estimator == 3) {
+			else if (estimator == 5 | estimator == 3) {
 				zL = select(z, (bunch :== 0) :& (side :== -1))
 				zR = select(z, (bunch :== 0) :& (side :==  1))
 
@@ -5026,12 +5207,97 @@ cap program drop bunch_saez
 				}
 			}
 			else {
-				_error(3498, "make_design only handles estimators 0, 1, 2, and 3")
+				_error(3498, "make_design only handles estimators 0, 1, 3, and 5")
 			}
 
 			return(out)
 		}
 
+		/*
+			Builds the fixed WLS pilot weight vector for estimator(3),
+			non-log (see the plan discussion in the polbunch-estimator5-
+			inference / WLS memory notes): a diagonal minimum-chi-square
+			weight, 1/Var(y_i), Var(y_i) approximated Poisson-style as the
+			FITTED MEAN of a separate, unweighted estimator(0) pilot fit
+			(the most flexible model available, fit once and held fixed --
+			never estimator(3)'s own restricted fit, to avoid an estimator
+			weighting itself by its own implied variance).
+
+			Order matches make_ystack()'s stacking convention exactly:
+			[left reference bins ; right reference bins ; pooled mass row].
+			The mass row's weight is the SAME multinomial "adding-up"
+			variance already used for this identical row in
+			variance_multinomial()/variance_robust()'s Vm diagonal,
+			Hstar_obs*(1-Hstar_obs/Ntot) -- no new derivation, since
+			estimator(0) always fits its own free B parameter exactly
+			(zero residual on its own mass row), so the pilot's implied
+			window mass and the actual observed Hstar_obs coincide.
+
+			Sets r_wls_pilot_ok = 0 (and leaves outname unwritten) when any
+			pilot-fitted reference value is non-positive/missing or the
+			mass-row variance is degenerate, rather than emit a weight
+			built from a bad pilot fit -- the caller falls back to an
+			unweighted note in that case.
+		*/
+		void pbx_wls_pilot_weights(
+			string scalar zvar,
+			string scalar sidevar,
+			string scalar bunchvar,
+			real rowvector beta0,
+			real rowvector gamma0,
+			real scalar K,
+			real scalar Hstar_obs,
+			real scalar Ntot,
+			string scalar outname
+		)
+		{
+			real colvector z, side, bunch, zL, zR, fL, fR
+			real matrix XL, XR
+			real rowvector wout
+			real scalar wmass
+
+			st_numscalar("r_wls_pilot_ok", 0)
+
+			z     = st_data(., zvar)
+			side  = st_data(., sidevar)
+			bunch = st_data(., bunchvar)
+
+			zL = select(z, (bunch :== 0) :& (side :== -1))
+			zR = select(z, (bunch :== 0) :& (side :==  1))
+
+			XL = pbasis(zL, K)
+			XR = pbasis(zR, K)
+
+			fL = XL * beta0'
+			fR = XR * gamma0'
+
+			if (missing(fL) | missing(fR) | min(fL) <= 0 | min(fR) <= 0) {
+				return
+			}
+			if (Hstar_obs <= 0 | Ntot <= 0 | Hstar_obs >= Ntot) {
+				return
+			}
+
+			wmass = 1 / (Hstar_obs * (1 - Hstar_obs / Ntot))
+
+			wout = ((1 :/ fL) \ (1 :/ fR) \ wmass)'
+			st_matrix(outname, wout)
+			st_numscalar("r_wls_pilot_ok", 1)
+		}
+
+		/*
+			wvec: WLS diagonal weights (estimator 3, non-log only -- see
+			pbx_wls_pilot_weights()'s header note), in make_ystack()'s row
+			order [left ; right ; mass]. Pass J(0,1,.) (empty) for the
+			ordinary unweighted fit -- rows(wvec)!=rows(ystack) is the
+			"unweighted" sentinel, checked once here rather than requiring
+			every caller to build an all-ones vector. Implemented by row-
+			scaling both sides by sqrt(wvec) before qrsolve(), the standard
+			WLS-via-scaling trick: solves the same normal equations as
+			D.X' diag(wvec) D.X theta = D.X' diag(wvec) ystack without new
+			linear-algebra code, and reduces to the original unweighted
+			solve exactly (bit-identical) when wvec is empty.
+		*/
 		real rowvector profTheta(
 			real scalar delta,
 			real colvector y,
@@ -5051,17 +5317,26 @@ cap program drop bunch_saez
 			real scalar zL_excl_est,
 			real scalar zH_excl_est,
 			real scalar zbar_est,
-			real scalar nosplit
+			real scalar nosplit,
+			real colvector wvec
 		)
 		{
-			real colvector ystack, theta
+			real colvector ystack, theta, sw
 			struct design_out scalar D
+			real matrix Dx
 
 			ystack = make_ystack(y, side, bunch, estimator, Hstar_obs)
 
 			D = make_design(delta, z, side, bunch, cutoff_orig, bw_orig, cutoff_est, bw_est, K, estimator, islog, zL_excl_orig, zH_excl_orig, zL_excl_est, zH_excl_est, zbar_est, 0, nosplit)
 
-			theta = qrsolve(D.X, ystack)
+			Dx = D.X
+			if (rows(wvec) == rows(ystack)) {
+				sw     = sqrt(wvec)
+				Dx     = Dx :* sw
+				ystack = ystack :* sw
+			}
+
+			theta = qrsolve(Dx, ystack)
 			return(theta')
 		}
 		real scalar profQ(
@@ -5084,11 +5359,13 @@ cap program drop bunch_saez
 			real scalar zH_excl_est,
 			real scalar zbar_est,
 			real scalar positive,
-			real scalar nosplit
+			real scalar nosplit,
+			real colvector wvec
 		)
 		{
-			real colvector ystack, theta, resid
+			real colvector ystack, theta, resid, sw
 			struct design_out scalar D
+			real matrix Dx
 
 			if (estimator == 0 | estimator == 1) {
 				return(0)
@@ -5124,8 +5401,15 @@ cap program drop bunch_saez
 				nosplit
 			)
 
-			theta = qrsolve(D.X, ystack)
-			resid = ystack - D.X * theta
+			Dx = D.X
+			if (rows(wvec) == rows(ystack)) {
+				sw     = sqrt(wvec)
+				Dx     = Dx :* sw
+				ystack = ystack :* sw
+			}
+
+			theta = qrsolve(Dx, ystack)
+			resid = ystack - Dx * theta
 
 			return(quadcross(resid, resid))
 		}
@@ -5963,7 +6247,7 @@ cap program drop bunch_saez
 			hasresp = 1
 
 			/*
-				A structural-delta column is reported for estimator 2
+				A structural-delta column is reported for estimator 5
 				always, and for estimator 3 when the reported response is
 				NOT the pure structural delta -- under constant (constant-
 				density inversion) or under poolmass (nosplit==1, response
@@ -5974,7 +6258,7 @@ cap program drop bunch_saez
 			nout =
 				2*Kb +                                      // h0,h1
 				2 +                                         // B, EM
-				(estimator==2 | e3delta) +                  // delta
+				(estimator==5 | estimator==2 | e3delta) +   // delta
 				2 +                                         // shift, MR
 				hastax
 
@@ -5987,7 +6271,7 @@ cap program drop bunch_saez
 			oB     = 2*Kb + 1
 			oEM    = 2*Kb + 2
 
-			if (estimator==2 | e3delta) {
+			if (estimator==5 | estimator==2 | e3delta) {
 				i = 1
 				odelta = 2*Kb + 3
 			}
@@ -6077,7 +6361,12 @@ cap program drop bunch_saez
 				st_numscalar("bd_buncher_z1",     cutoff_orig + (bd_zddag - cutoff_est) * xscale)
 				st_numscalar("bd_buncher_extrap", bd_extrap)
 			}
-			else if (estimator == 2) {
+			else if (estimator == 5 | estimator == 2) {
+				// Estimator 5 (Chetty faithful replication) shares
+				// estimator 5's h1=h0/(1+delta) DISPLAY convention (see
+				// h1_A_matrix), so the same reduced-form B applies here --
+				// this is a DISPLAY quantity only, unrelated to how
+				// (beta,delta) were actually recovered by chetty_run().
 				if (nosplit) {
 					// poolmass (default): reduced-form B from the pooled
 					// h0hat integral (Chetty-style)
@@ -6141,7 +6430,7 @@ cap program drop bunch_saez
 			}
 
 			// structural delta column (see e3delta above)
-			if (estimator == 2 | e3delta) {
+			if (estimator == 5 | estimator == 2 | e3delta) {
 				b[1,odelta] = delta
 				if (dograd) G[odelta,idelta] = 1
 			}
@@ -6228,7 +6517,7 @@ cap program drop bunch_saez
 				}
 			}
 			else {
-				// estimators 0/1/2, and estimator 3 under poolmass:
+				// estimators 0/1/5, and estimator 3 under poolmass:
 				// back the response out of B by solving the counterfactual-
 				// density integral equation with eresp()
 				r = eresp(B, cutoff_est, beta, bw_est, xscale)
@@ -6321,7 +6610,7 @@ cap program drop bunch_saez
 		// -----------------------------------------------------------------------------
 
 		/*
-			Multi-start solve of the estimator 2/3 profile over the scalar
+			Multi-start solve of the estimator 3/5 profile over the scalar
 			delta.  The concentrated SSR profQ(delta) is minimised by a coarse
 			candidate grid, then a golden-section refinement around EVERY
 			sampled interior local minimum -- the same shape as
@@ -6380,7 +6669,8 @@ cap program drop bunch_saez
 			real scalar nbasin,
 			real scalar gapQ,
 			real scalar nearzeroD,
-			real scalar nearzeroQ
+			real scalar nearzeroQ,
+			real colvector wvec
 		)
 		{
 			real colvector grid, cand, gd, gq, rds, rqs
@@ -6426,7 +6716,7 @@ cap program drop bunch_saez
 				if (rows(gd) >= 1) {
 					if (d == gd[rows(gd)]) continue
 				}
-				Q = profQ(d, y, z, side, bunch, Hstar_obs, cutoff_orig, bw_orig, cutoff_est, bw_est, K, estimator, islog, zL_excl_orig, zH_excl_orig, zL_excl_est, zH_excl_est, zbar_est, positive, nosplit)
+				Q = profQ(d, y, z, side, bunch, Hstar_obs, cutoff_orig, bw_orig, cutoff_est, bw_est, K, estimator, islog, zL_excl_orig, zH_excl_orig, zL_excl_est, zH_excl_est, zbar_est, positive, nosplit, wvec)
 				gd = gd \ d
 				gq = gq \ Q
 			}
@@ -6464,8 +6754,8 @@ cap program drop bunch_saez
 				else {
 					x1 = b - gr * (b - a)
 					x2 = a + gr * (b - a)
-					f1 = profQ(x1, y, z, side, bunch, Hstar_obs, cutoff_orig, bw_orig, cutoff_est, bw_est, K, estimator, islog, zL_excl_orig, zH_excl_orig, zL_excl_est, zH_excl_est, zbar_est, positive, nosplit)
-					f2 = profQ(x2, y, z, side, bunch, Hstar_obs, cutoff_orig, bw_orig, cutoff_est, bw_est, K, estimator, islog, zL_excl_orig, zH_excl_orig, zL_excl_est, zH_excl_est, zbar_est, positive, nosplit)
+					f1 = profQ(x1, y, z, side, bunch, Hstar_obs, cutoff_orig, bw_orig, cutoff_est, bw_est, K, estimator, islog, zL_excl_orig, zH_excl_orig, zL_excl_est, zH_excl_est, zbar_est, positive, nosplit, wvec)
+					f2 = profQ(x2, y, z, side, bunch, Hstar_obs, cutoff_orig, bw_orig, cutoff_est, bw_est, K, estimator, islog, zL_excl_orig, zH_excl_orig, zL_excl_est, zH_excl_est, zbar_est, positive, nosplit, wvec)
 
 					for (iter = 1; iter <= 100; iter++) {
 						if (abs(b - a) < 1e-10 * max((1, abs(x1), abs(x2)))) break
@@ -6474,14 +6764,14 @@ cap program drop bunch_saez
 							x1 = x2
 							f1 = f2
 							x2 = a + gr * (b - a)
-							f2 = profQ(x2, y, z, side, bunch, Hstar_obs, cutoff_orig, bw_orig, cutoff_est, bw_est, K, estimator, islog, zL_excl_orig, zH_excl_orig, zL_excl_est, zH_excl_est, zbar_est, positive, nosplit)
+							f2 = profQ(x2, y, z, side, bunch, Hstar_obs, cutoff_orig, bw_orig, cutoff_est, bw_est, K, estimator, islog, zL_excl_orig, zH_excl_orig, zL_excl_est, zH_excl_est, zbar_est, positive, nosplit, wvec)
 						}
 						else {
 							b  = x2
 							x2 = x1
 							f2 = f1
 							x1 = b - gr * (b - a)
-							f1 = profQ(x1, y, z, side, bunch, Hstar_obs, cutoff_orig, bw_orig, cutoff_est, bw_est, K, estimator, islog, zL_excl_orig, zH_excl_orig, zL_excl_est, zH_excl_est, zbar_est, positive, nosplit)
+							f1 = profQ(x1, y, z, side, bunch, Hstar_obs, cutoff_orig, bw_orig, cutoff_est, bw_est, K, estimator, islog, zL_excl_orig, zH_excl_orig, zL_excl_est, zH_excl_est, zbar_est, positive, nosplit, wvec)
 						}
 					}
 
@@ -6601,7 +6891,8 @@ cap program drop bunch_saez
 			real scalar deltamax,
 			string scalar covisname,
 			real scalar nclust,
-			real scalar nosplit
+			real scalar nosplit,
+			string scalar wvecname
 
 		)
 		{
@@ -6611,9 +6902,25 @@ cap program drop bunch_saez
 			real scalar nearzeroD, nearzeroQ, zerosub, edgezone, nearedge
 			real rowvector theta_hat, beta_hat, b
 			real matrix Vout
+			real rowvector chetty_beta_hat
+			real scalar chetty_nroots
+			real colvector wvec
 
 			struct design_out scalar D
 			real colvector ystack, mu
+
+			/*
+				wls (estimator 3, non-log only): wvecname names a Stata
+				matrix -- a 1 x n row of diagonal WLS weights, in
+				make_ystack()'s [left ; right ; mass] row order -- built
+				once by the .ado layer from a fixed estimator-0 pilot fit
+				(pbx_wls_pilot_weights()'s header note). Empty wvecname
+				(the ordinary, non-wls call) leaves wvec empty, profTheta/
+				profQ's own unweighted-sentinel check (rows(wvec)!=
+				rows(ystack)).
+			*/
+			if (wvecname != "") wvec = st_matrix(wvecname)'
+			else                wvec = J(0, 1, .)
 			real colvector gof_grs, gof_gib, gof_gia
 			real scalar    gof_gnb
 			real matrix Gv
@@ -6653,11 +6960,12 @@ cap program drop bunch_saez
 					zL_excl_est,
 					zH_excl_est,
 					zbar_est,
-					nosplit
+					nosplit,
+					wvec
 				)
 				b = theta_hat
 			}
-			else if (estimator == 2 | estimator == 3) {
+			else if (estimator == 5 | estimator == 3) {
 
 				if (positive == 1) lb = 1e-8
 				else               lb = -1 + 1e-8
@@ -6682,7 +6990,7 @@ cap program drop bunch_saez
 					K, estimator, islog,
 					zL_excl_orig, zH_excl_orig, zL_excl_est, zH_excl_est,
 					zbar_est, positive, nosplit, initdelta, lb, dhi,
-					bestQ, nbasin, gapQ, nearzeroD, nearzeroQ)
+					bestQ, nbasin, gapQ, nearzeroD, nearzeroQ, wvec)
 
 				if (delta_hat >= .) delta_hat = initdelta
 
@@ -6771,17 +7079,54 @@ cap program drop bunch_saez
 					zL_excl_est,
 					zH_excl_est,
 					zbar_est,
-					nosplit
+					nosplit,
+					wvec
 				)
 
 				theta_hat = beta_hat, delta_hat
 				b = theta_hat
 			}
+			else if (estimator == 2) {
+				// Chetty (2011) faithful replication -- see chetty_run()'s
+				// header note (just above delta_from_mass_e3 in this file)
+				// for the full derivation and validation history.
+				if (positive == 1) lb = 1e-8
+				else                lb = -1 + 1e-8
+
+				dhi = deltamax
+				if (dhi >= . | dhi <= 0) dhi = 1
+				if (dhi <= lb)            dhi = lb + 1e-6
+
+				chetty_run(y, z, side, bunch, Hstar_obs, K, lb, dhi, initdelta,
+					chetty_beta_hat, delta_hat, chetty_nroots)
+
+				weakid = 0
+				if (delta_hat <= lb + 1e-6)  weakid = 1
+				if (delta_hat >= dhi - 1e-6) weakid = 1
+				if (chetty_nroots >= 2)     weakid = 1
+				if (chetty_nroots == 0)     weakid = 1
+				nbasin = chetty_nroots
+				gapQ   = .
+				zerosub = 0
+				st_numscalar("r_weakid_profile", weakid)
+				st_numscalar("r_nbasin_profile", nbasin)
+				st_numscalar("r_zerosub_profile", zerosub)
+
+				theta_hat = chetty_beta_hat, delta_hat
+				b = theta_hat
+			}
 			else {
-				_error(3498, "profile_run only handles estimators 0, 1, 2, and 3")
+				_error(3498, "profile_run only handles estimators 0, 1, 2, 3, and 5")
 			}
 
-			if (dovar == 1) {
+			if (dovar == 1 & estimator == 2) {
+				// See chetty_vcov()'s header note (just above it in this
+				// file) for the closed-form GMM derivation. hc2/hc3/cluster/
+				// scale() are blocked at the .ado option-parsing layer, so
+				// hctype here is always < 0, 0, or 1.
+				Vout = chetty_vcov(y, z, side, bunch, K, chetty_beta_hat, delta_hat, hctype)
+			}
+			else if (dovar == 1) {
 				D = make_design(delta_hat, z, side, bunch,
 					cutoff_orig, bw_orig, cutoff_est, bw_est, K, estimator, islog,
 					zL_excl_orig, zH_excl_orig, zL_excl_est, zH_excl_est, zbar_est, 1, nosplit)
@@ -6798,7 +7143,63 @@ cap program drop bunch_saez
 					mu = D.X * beta_hat'
 				}
 
-				if (covisname != "") {
+				/*
+					wls (estimator 3, non-log only): NOT simply the GLS
+					bread (X'WX)^{-1}. That collapse is only valid when W
+					equals the TRUE meat's inverse as a MATRIX -- but wvec
+					is a diagonal (Poisson, 1/fitted) approximation, while
+					the true multinomial covariance Vm=diag(y)-yy'/N is NOT
+					diagonal (it carries the adding-up covariance across
+					bins). A diagonal weight can never invert that
+					off-diagonal structure, so the sandwich does not
+					collapse -- confirmed empirically: an MC on a DGP with
+					meaningfully heterogeneous bin weights showed ~10%
+					under-stated SEs / 91% actual coverage of a nominal 95%
+					CI under the old bread-only formula.
+
+					Two-step (generated-weight/pilot) correction is NOT
+					needed here, despite wvec coming from a separately
+					estimated pilot fit: the standard Murphy-Topel/Newey-
+					McFadden two-step variance adds terms in
+					A21 = -E[dPsi2/dgamma'], but dw_i/dgamma is a
+					deterministic function of the COVARIATE z_i alone (not
+					of y_i), so conditioning on z_i, E[dPsi2/dgamma'] =
+					sum_i (dw_i/dgamma)(z_i) x_i E[e_i | z_i] = 0 under
+					correct specification (E[e_i|z_i]=0) -- the classic
+					feasible-GLS result that a weight from a separate,
+					consistent first-stage regression needs no correction,
+					provided it does not depend on the SAME residual whose
+					variance is being estimated. So Var(theta) reduces
+					exactly to the GENERAL (not efficient-weight-collapsed)
+					sandwich for whatever (sub-optimal, diagonal) weight is
+					actually used:
+						bread = (D'WD)^{-1} = pbx_bread(D :* sqrt(wvec))
+						meat  = (D'w)' Vm (D'w), RAW wvec (not sqrt) on the
+						        meat side -- Var(diag(w) e) = W Vm W.
+					Nests the unweighted case exactly: wvec==1 collapses
+					this to variance_multinomial()'s own formula (bread
+					and meat both built from the SAME unscaled G).
+				*/
+				if (rows(wvec) == rows(ystack)) {
+					real matrix Gwb, Gwm, Vmw, Abread
+					real scalar Nw
+
+					Gwb = Gv :* sqrt(wvec)
+					Gwm = Gv :* wvec
+					Nw  = sum(ystack)
+
+					if (Nw <= 0 | Nw >= .) {
+						Vout = J(cols(Gv), cols(Gv), .)
+					}
+					else {
+						Vmw = diag(ystack) - (ystack * ystack') / Nw
+						Vmw = (Vmw + Vmw') / 2
+						Abread = pbx_bread(Gwb)
+						Vout = Abread * (Gwm' * Vmw * Gwm) * Abread'
+						Vout = (Vout + Vout') / 2
+					}
+				}
+				else if (covisname != "") {
 					Vout = variance_cluster(Gv, ystack, st_matrix(covisname), nclust)
 				}
 				else if (hctype >= 0) {
@@ -6827,7 +7228,7 @@ cap program drop bunch_saez
 						A3 (the polynomial's fit to h0).  Above z* it also picks
 						up an A1/A2 shape error in h1.  df per side uses the h0
 						order K+1.  Stacked reference order is [below ; above]
-						for estimators 0/2/3, dataset order for estimator 1.
+						for estimators 0/5/3, dataset order for estimator 1.
 					*/
 					gof_grs = select(side, bunch :== 0)
 					if (estimator == 1) {
@@ -6854,7 +7255,10 @@ cap program drop bunch_saez
 			st_matrix("r_b_profile", b)
 			st_matrix("r_V_profile", Vout)
 
-			if (dovar == 1) {
+			if (dovar == 1 & estimator != 2) {
+				// Gv/mu/ystack are only populated by the estimator!=2 branch
+				// above (analytic vce not yet supported for estimator 2 --
+				// see the header note above chetty_run()).
 				st_matrix("r_G_stack", Gv)
 				st_matrix("r_mu_stack", mu)
 				st_matrix("r_ystack", ystack)
@@ -6996,6 +7400,339 @@ cap program drop bunch_saez
 		return(.)
 	}
 
+	// -------------------------------------------------------------------
+	// Estimator 5: Chetty (2011), FAITHFUL replication (added 2026-09-22).
+	//
+	// Estimator 2 imposes h1=h0/(1+delta) as a restriction on the FITTED
+	// design (h1design23 scales pbasis(zR,K) by 1/(1+delta)) and picks
+	// delta by minimizing a combined SSR (shape residuals + one mass-row
+	// residual, unit-weighted) -- see prof_delta_solve/profQ.  That is a
+	// self-consistent estimator, but it is NOT what Chetty et al. (2011)
+	// actually publish (QJE p.777-778, eq 14-16), confirmed this session
+	// both from the paper text and from Chetty/Olsen's own bunch_reg /
+	// bunch_corr_prop Mata code (bunch_count.ado): there is only ONE
+	// unrestricted polynomial beta, fit jointly with per-excluded-bin
+	// dummies on ALL bins; the response enters ONLY by grossing up the
+	// OBSERVED right-tail data y_right by (1+delta) before that single
+	// fit (not by scaling the design); delta is pinned by an EXACT
+	// accounting identity, not chosen to minimize anything.
+	//
+	// Faithful recast used here (validated against a synthetic
+	// known-truth DGP via validate_chetty_faithful.do /
+	// validate_chetty_functions.do before being wired in): for a trial
+	// delta,
+	//   beta(delta) solves  [Glo+Ghi] beta = sum_left P*y_left
+	//                                        + sum_right P*(1+delta)*y_right
+	// (an ORDINARY linear qrsolve -- delta only touches the DATA, never
+	// the design, so no Gauss-Newton/Newton iteration is needed for this
+	// step at all, unlike estimator 5's (K+2)-square system).  The
+	// excluded-bin dummies are never built explicitly: since a dummy
+	// perfectly absorbs its own bin's residual and has zero influence on
+	// beta, omitting them from this linear solve gives the identical
+	// beta a full bunch_reg-style regression would produce.
+	//
+	// delta itself is the root of chetty_extra(delta)=0: the fitted
+	// polynomial's OWN predicted mass from the start of the excluded
+	// window (zL) out to zbar must equal the ACTUAL observed mass over
+	// that same range.  IMPORTANT: this is NOT "actual minus bn" -- an
+	// earlier draft of this identity (during design) subtracted bn
+	// (mirroring a naive reading of bunch_corr_prop's
+	// posited=actual-bn*(1-actual/mass_to_infinity) term as
+	// posited~=actual-bn).  That is wrong: mass_to_infinity~=actual (the
+	// two differ only by the single bin exactly at zL -- confirmed this
+	// session), so the damping factor (1-actual/mass_to_infinity)~=0, not
+	// ~=1, meaning bn barely nets out at all.  The bn-free identity below
+	// recovered a known synthetic DGP's (beta,delta) to ~1e-4 relative
+	// precision; the bn-subtracted version was off by an order of
+	// magnitude.  Do not reintroduce a bn term here without re-deriving
+	// and re-validating against a known-truth check first.
+	//
+	// Root-find (not SSR-minimize, unlike prof_delta_solve/profQ) mirrors
+	// delta_from_mass_e3()'s grid+bisection pattern immediately above,
+	// scanning ALL brackets (not just the first) to flag multiple roots.
+	//
+	// NOT YET SUPPORTED (deliberately, see the plan
+	// adaptive-weaving-coral.md): vce(analytic) for estimator 2 -- the
+	// M-estimator Jacobian for this identity has a genuinely different
+	// structure from estimators 0-3's (delta enters the moment via the
+	// OUTCOME transformation, not the mean function, so the existing
+	// Gv=[D.X,D.dXddelta*beta] sandwich trick does not apply as-is) and
+	// has not been derived/validated.  profile_run() below sets
+	// Vout=missing for estimator 2 rather than guess.
+	// -------------------------------------------------------------------
+	real rowvector chetty_beta(
+		real scalar delta,
+		real matrix XL, real colvector yL,
+		real matrix XR, real colvector yR
+	)
+	{
+		real matrix Xall
+		real colvector yall
+
+		Xall = XL \ XR
+		yall = yL \ (yR :* (1 + delta))
+		return((qrsolve(Xall, yall))')
+	}
+
+	real scalar chetty_extra(
+		real scalar delta,
+		real matrix XL, real colvector yL,
+		real matrix XR, real colvector yR,
+		real matrix XW,
+		real scalar mass_actual
+	)
+	{
+		real rowvector beta
+
+		beta = chetty_beta(delta, XL, yL, XR, yR)
+		return(mass_actual - sum(XW * beta') - sum(XR * beta'))
+	}
+
+	real scalar chetty_delta_solve(
+		real matrix XL, real colvector yL,
+		real matrix XR, real colvector yR,
+		real matrix XW, real scalar mass_actual,
+		real scalar lb, real scalar dhi,
+		real scalar nroots
+	)
+	{
+		real rowvector grid
+		real scalar ng, j, d0, d1, f0, f1, mid, fmid, iter
+		real scalar a, b, fa, fb
+		real colvector roots
+		real scalar delta_hat
+
+		grid = (-0.5, -0.25, -0.1, -0.05, -0.01, 0, 0.01, 0.05, 0.1, 0.25,
+				0.5, 0.75, 1, 1.5, 2, 3, 5)
+		grid = select(grid, (grid:>lb):&(grid:<dhi))
+		grid = lb, grid, dhi
+		grid = sort(grid', 1)'
+
+		roots = J(0, 1, .)
+		ng = cols(grid)
+		d0 = grid[1]
+		f0 = chetty_extra(d0, XL,yL,XR,yR,XW,mass_actual)
+		for (j=2; j<=ng; j++) {
+			d1 = grid[j]
+			f1 = chetty_extra(d1, XL,yL,XR,yR,XW,mass_actual)
+			if (f0<. & f1<. & f0*f1<=0 & f0!=f1) {
+				a = d0
+				b = d1
+				fa = f0
+				fb = f1
+				for (iter=1; iter<=100; iter++) {
+					mid = (a+b)/2
+					fmid = chetty_extra(mid, XL,yL,XR,yR,XW,mass_actual)
+					if (fa*fmid <= 0) {
+						b = mid
+						fb = fmid
+					}
+					else {
+						a = mid
+						fa = fmid
+					}
+					if (abs(b-a) < 1e-10) break
+				}
+				roots = roots \ ((a+b)/2)
+			}
+			d0 = d1
+			f0 = f1
+		}
+
+		nroots = rows(roots)
+		if (nroots == 0) return(.)
+		delta_hat = roots[1]
+		return(delta_hat)
+	}
+
+	// Builds (XL,yL,XR,yR,XW,mass_actual) from polbunch's own z/y/side/
+	// bunch vectors and runs the fixed point above.  Hstar_obs (already
+	// computed by the caller as sum(select(y,bunch:>0))) plus the raw
+	// right-tail total gives mass_actual directly -- no per-bin dummy
+	// columns are ever constructed (see header note: unnecessary, since
+	// dummies have zero influence on beta and bn is never needed on its
+	// own for this identity).
+	void chetty_run(
+		real colvector y, real colvector z, real colvector side,
+		real colvector bunch, real scalar Hstar_obs, real scalar K,
+		real scalar lb, real scalar dhi, real scalar initdelta,
+		real rowvector beta_hat, real scalar delta_hat, real scalar nroots
+	)
+	{
+		real colvector zL, yL, zR, yR, zW
+		real matrix XL, XR, XW
+		real scalar mass_actual
+
+		zL = select(z, (bunch:==0):&(side:==-1))
+		yL = select(y, (bunch:==0):&(side:==-1))
+		zR = select(z, (bunch:==0):&(side:== 1))
+		yR = select(y, (bunch:==0):&(side:== 1))
+		zW = select(z, bunch:>0)
+		mass_actual = Hstar_obs + sum(yR)
+
+		// pbasis() orders columns [z, z^2, ..., z^K, const] (constant
+		// LAST) -- this MUST match that convention, not build its own
+		// [const, z, ...] ordering, since beta_hat is handed straight to
+		// bunch_transform/h1coef_map/h1_A_matrix, which all assume the
+		// pbasis() column order.  (A constant-first version of this
+		// function shipped briefly and produced a badly mislabelled,
+		// garbled-looking fit -- caught by comparing against a manual
+		// reg replication of the same data.)
+		XL = pbasis(zL, K)
+		XR = pbasis(zR, K)
+		XW = pbasis(zW, K)
+
+		delta_hat = chetty_delta_solve(XL,yL,XR,yR,XW,mass_actual, lb,dhi, nroots)
+		if (delta_hat >= .) {
+			// No sign change found anywhere in [lb,dhi] -- mirror
+			// prof_delta_solve's own fallback for estimator 3/5
+			// (profile_run's dispatch: "if (delta_hat>=.) delta_hat =
+			// initdelta"): fall back to a finite delta rather than post an
+			// all-missing b, which "ereturn post" refuses outright
+			// (r(504)).  nroots==0 already flags this case via weakid at
+			// the call site.
+			delta_hat = initdelta
+			if (delta_hat <= lb | delta_hat >= dhi) delta_hat = (lb + dhi) / 2
+		}
+		beta_hat = chetty_beta(delta_hat, XL,yL,XR,yR)
+	}
+
+	/* -------------------------------------------------------------------
+	   Analytic vce() for estimator 2 (Chetty faithful replication).
+
+	   theta = (beta, delta) solves the exactly-identified system
+	     G_beta(theta)  = sum_L XL_i'(y_i - XL_i beta)
+	                     + sum_R XR_i'((1+delta) y_i - XR_i beta) = 0   (Kb eqns)
+	     G_delta(theta) = sum_W(y_i - XW_i beta) + sum_R(y_i - XR_i beta) = 0
+	                                                                     (1 eqn)
+	   -- chetty_beta()'s stacked OLS normal equations plus
+	   chetty_delta_solve()'s exact accounting identity. Both G_beta and
+	   G_delta are LINEAR in theta (delta enters G_beta only through the
+	   (1+delta)*y_i outcome grossing, never multiplying beta), so the
+	   Jacobian A = -dG/dtheta' is a CONSTANT (Kb+1)x(Kb+1) matrix, not a
+	   local linearization:
+	       A = [ Xall'Xall     -XR'yR ]      Xall = XL \ XR
+	           [    S             0   ]      S = colsum(XW) + colsum(XR)
+	   and G is itself linear in the stacked count vector y (each bin's y_i
+	   enters exactly one of the three roles below), so by the implicit
+	   function theorem theta_hat's exact local sensitivity to y is
+	   dtheta/dy = A^{-1} * Gscore', where Gscore (n x (Kb+1)) is the
+	   per-bin coefficient of y_i in G:
+	       left   bin i:  [ XL_i , 0 ]
+	       right  bin i:  [ (1+delta) XR_i , 1 ]   (dual duty: shape AND mass)
+	       window bin i:  [ 0 , 1 ]
+	   This is the genuinely different structure flagged in chetty_run()'s
+	   header note -- delta enters the right-side moment via the OUTCOME
+	   ((1+delta)*y_i), not the mean function, so estimators 0-3's
+	   Gv=[D.X, D.dXddelta*beta_hat'] trick (which assumes dmu_i/dtheta IS
+	   the row weight) does not apply; this derives the sandwich directly
+	   from theta_hat's closed-form dependence on y instead.
+
+	   hctype<0 (conventional): multinomial meat Ainv*(Gscore'*Vm*Gscore)*Ainv',
+	   Vm = diag(y)-yy'/N, identical convention to variance_multinomial.
+
+	   hctype>=0 (robust/hc0/hc1): empirical (White) sandwich using the
+	   observation-level moment contributions g_i(theta_hat) themselves
+	   (not their y-linear part) -- these do NOT reduce to a single
+	   weight*(y_i-mu_i) row per bin (a right bin's beta-contribution and
+	   mass-contribution have DIFFERENT implied means, XR_i*beta/(1+delta)
+	   vs XR_i*beta), so this cannot reuse variance_robust()'s diagonal-
+	   swap trick; hc2/hc3 (leverage-adjusted) are not derived and are
+	   blocked at the .ado option-parsing layer, along with vce(cluster)
+	   and scale().
+
+	   Validated (scratchpad, 2026-09-23): analytic dtheta/dy above matches
+	   a finite-difference perturbation of chetty_run() to ~1e-6 relative;
+	   analytic SE(excess_mass) on the Chetty fig-3 digitized data sits
+	   within the vce(bootstrap) range.
+	   ------------------------------------------------------------------- */
+	real matrix chetty_vcov(
+		real colvector y, real colvector z, real colvector side,
+		real colvector bunch, real scalar K,
+		real rowvector beta_hat, real scalar delta_hat, real scalar hctype
+	)
+	{
+		real colvector zL, yL, zR, yR, zW, yW, ystack5
+		real colvector eL, eRmass, eW
+		real matrix XL, XR, XW, Xall, A, Ainv, Gscore, Gi, Vm, Meat, V
+		real rowvector S, betacol
+		real scalar Kb, nL, nR, nW, n, N, dfadj
+
+		Kb = K + 1
+
+		zL = select(z, (bunch:==0):&(side:==-1))
+		yL = select(y, (bunch:==0):&(side:==-1))
+		zR = select(z, (bunch:==0):&(side:== 1))
+		yR = select(y, (bunch:==0):&(side:== 1))
+		zW = select(z, bunch:>0)
+		yW = select(y, bunch:>0)
+
+		nL = rows(yL)
+		nR = rows(yR)
+		nW = rows(yW)
+		n  = nL + nR + nW
+
+		if (nL < 1 | nR < 1) return(J(Kb+1, Kb+1, .))
+
+		XL = pbasis(zL, K)
+		XR = pbasis(zR, K)
+		XW = (nW >= 1 ? pbasis(zW, K) : J(0, Kb, 0))
+
+		if (missing(XL) | missing(XR) | missing(XW)) return(J(Kb+1, Kb+1, .))
+
+		Xall = XL \ XR
+		S    = colsum(XW) + colsum(XR)
+		betacol = beta_hat'
+
+		A = (quadcross(Xall,Xall), -quadcross(XR,yR)) \ (S, 0)
+		if (missing(A) | rows(A) != Kb+1) return(J(Kb+1, Kb+1, .))
+
+		Ainv = luinv(A)
+		if (missing(Ainv)) return(J(Kb+1, Kb+1, .))
+
+		ystack5 = yL \ yR \ yW
+
+		if (hctype < 0) {
+			N = sum(ystack5)
+			if (N <= 0 | N >= .) return(J(Kb+1, Kb+1, .))
+
+			Vm = diag(ystack5) - (ystack5 * ystack5') / N
+			Vm = (Vm + Vm') / 2
+
+			Gscore = J(n, Kb+1, 0)
+			Gscore[1::nL, 1..Kb] = XL
+			Gscore[(nL+1)::(nL+nR), 1..Kb] = (1 + delta_hat) :* XR
+			Gscore[(nL+1)::(nL+nR), Kb+1]  = J(nR, 1, 1)
+			if (nW >= 1) Gscore[(nL+nR+1)::n, Kb+1] = J(nW, 1, 1)
+
+			Meat = quadcross(Gscore, Vm * Gscore)
+		}
+		else {
+			eL     = yL - XL*betacol
+			eRmass = yR - XR*betacol
+			eW     = (nW >= 1 ? yW - XW*betacol : J(0,1,0))
+
+			Gi = J(n, Kb+1, 0)
+			Gi[1::nL, 1..Kb] = XL :* eL
+			Gi[(nL+1)::(nL+nR), 1..Kb] = XR :* (eRmass :+ delta_hat :* yR)
+			Gi[(nL+1)::(nL+nR), Kb+1]  = eRmass
+			if (nW >= 1) Gi[(nL+nR+1)::n, Kb+1] = eW
+
+			Meat = quadcross(Gi, Gi)
+
+			if (hctype == 1) {
+				dfadj = ((nL+nR) > (Kb+1) ? (nL+nR) / ((nL+nR)-(Kb+1)) : 1)
+				Meat = Meat :* dfadj
+			}
+		}
+
+		if (missing(Meat)) return(J(Kb+1, Kb+1, .))
+
+		V = Ainv * Meat * Ainv'
+		V = (V + V') / 2
+		return(V)
+	}
+
 	real matrix polbunch_mdt_qG(
 		real rowvector theta,
 		real matrix V,
@@ -7057,13 +7794,13 @@ cap program drop bunch_saez
 		}
 
 		/*
-			For estimators 2 and 3, stack:
+			For estimators 5 and 3, stack:
 				q_shape = gamma - gamma_model(beta, delta)
 				q_mass  = B - B_model(beta, delta)
 
 			Important:
 				bmodel_row23() is already correct:
-				  estimator 2 uses zbar_est;
+				  estimator 5 uses zbar_est;
 				  estimator 3 ignores zbar_est and uses the response interval.
 		*/
 		hmap = h1coef_map(
@@ -7198,7 +7935,7 @@ cap program drop bunch_saez
 		st_numscalar("r(pb_md_delta)", .)
 		st_numscalar("r(pb_md_failcode)", 0)
 
-		if (!(estimator == 1 | estimator == 2 | estimator == 3)) {
+		if (!(estimator == 1 | estimator == 5 | estimator == 3 | estimator == 2)) {
 			st_numscalar("r(pb_md_failcode)", 101)
 			return
 		}
@@ -7456,7 +8193,7 @@ cap program drop bunch_saez
 		}
 
 		/*
-			rows(q) = Kb + 1 for estimators 2/3.
+			rows(q) = Kb + 1 for estimators 3/5.
 			We minimized over one nuisance scalar delta.
 			df = Kb.
 		*/
@@ -7580,7 +8317,7 @@ cap program drop bunch_saez
 		polbunch_wald_from_unrestricted's own final step (Vq = Gq*V*Gq';
 		W = q'*qrinv(Vq)*q; chi2tail(df,W)) is line-for-line the same
 		construction as polbunch_mdt_crit, just without a delta-profiling
-		loop (estimator 2/3's delta here is a closed-form inversion, not a
+		loop (estimator 3/5's delta here is a closed-form inversion, not a
 		grid search). So the same wild-bootstrap-of-the-statistic fix
 		applies for the same reason, and is expected to need the same
 		wild-only restriction (residual bootstrap over-rejects -- see
@@ -7635,35 +8372,50 @@ cap program drop bunch_saez
 	}
 
 	/*
-		polbunch_shausman_mata -- scalar Hausman test on the ELASTICITY.
+		polbunch_shausman_mata -- scalar Hausman test on EXCESS MASS.
 
-		Contrasts the restricted estimator's elasticity e_R (efficient under
-		its own H0) with e_U, the elasticity implied by the unrestricted
-		two-sided fit (estimator 0).  The minimum-distance test is an omnibus
-		chi2_{K+1} on the whole cross-kink coefficient vector; this is a
-		focused chi2_1 on the single parameter of interest.
+		Contrasts the restricted estimator's excess mass B_R (efficient
+		under its own H0) with B_U, the excess mass implied by the
+		unrestricted two-sided fit (estimator 0).  The minimum-distance test
+		is an omnibus chi2_{K+1} on the whole cross-kink coefficient vector;
+		this is a focused chi2_1 on a single reduced-form parameter.
 
-		The two elasticities come from the SAME bin counts and covary, so the
-		denominator is the variance of the CONTRAST, built from the joint
-		influence functions:
+		Excess mass, not elasticity: elasticity is excess mass run through
+		an ADDITIONAL, shared inversion (shift -> marginal response ->
+		elasticity via z_m = z*((1-t0)/(1-t1))^e) that is applied IDENTICALLY
+		to both the restricted and unrestricted fit and does not itself
+		depend on whether the restricted model's cross-kink shape
+		restriction holds -- so it cancels out of the R-vs-U comparison
+		without adding any discriminating power, while adding (a) a Wald
+		statistic's known sensitivity to nonlinear reparametrization
+		(Gregory-Veall/Lafontaine-White) and (b) numerical fragility near a
+		small/zero response, where the shift/marginal-response/elasticity
+		chain is poorly behaved.  Excess mass is the more primitive object
+		-- computed directly from the fitted h0/h1 and the window mass
+		identity, with no tax-rate-dependent behavioral inversion involved
+		at all -- so contrasting IT isolates the cross-kink density
+		restriction (A1 given A3) as cleanly as this framework allows.
 
-			e_j - e0  ~=  psi_j' (y - mu),   psi_j = A_j' grad_j'
+		The two excess-mass estimates come from the SAME bin counts and
+		covary, so the denominator is the variance of the CONTRAST, built
+		from the joint influence functions:
+
+			B_j - B0  ~=  psi_j' (y - mu),   psi_j = A_j' grad_j'
 
 		A_j = diag(1/s_j) qrinv(G_j / s_j) is the stacked-fit "bread" and
-		grad_j is the delta-method gradient of the elasticity w.r.t. the raw
-		stacked coefficients -- the LAST row of the bunch_transform Jacobian
-		e(G).  Then
+		grad_j is the delta-method gradient of excess mass w.r.t. the raw
+		stacked coefficients -- the row of the bunch_transform Jacobian
+		e(G) named bunching:excess_mass (looked up by row stripe, not by
+		position, since its index shifts with K/estimator).  Then
 
-			Var(e_R - e_U) = (psi_R - psi_U)' Vm (psi_R - psi_U)
+			Var(B_R - B_U) = (psi_R - psi_U)' Vm (psi_R - psi_U)
 
 		with Vm the multinomial (or cluster / HC) meat.  No efficiency
-		assumption on e_R is needed -- this is the generalised (Wooldridge)
+		assumption on B_R is needed -- this is the generalised (Wooldridge)
 		Hausman form, valid for Chetty as well as the model-consistent
-		estimator.  Both e_R and e_U use A1's marginal-buncher inversion to
-		map excess mass to an elasticity, so the test targets A1's density
-		restriction given A3, NOT the shared inversion premise.
+		estimator.
 
-		When e_U is weakly identified (wild extrapolation of h0 into the
+		When B_U is weakly identified (wild extrapolation of h0 into the
 		excluded region) the denominator inflates and the test loses power
 		rather than over-rejecting; the returned seU lets the caller show it.
 	*/
@@ -7713,9 +8465,24 @@ cap program drop bunch_saez
 			return
 		}
 
-		/* elasticity gradient = last row of each transform Jacobian */
-		gradU = GbcU[rows(GbcU), .]
-		gradR = GbcR[rows(GbcR), .]
+		/* excess-mass gradient = the bunching:excess_mass row of each
+		   transform Jacobian, found by name (its position shifts with
+		   K/estimator) rather than assumed to be any fixed row. */
+		{
+			string matrix rsU, rsR
+			real colvector idxU, idxR
+
+			rsU = st_matrixrowstripe(GbcUname)
+			rsR = st_matrixrowstripe(GbcRname)
+			idxU = selectindex((rsU[.,1] :== "bunching") :& (rsU[.,2] :== "excess_mass"))
+			idxR = selectindex((rsR[.,1] :== "bunching") :& (rsR[.,2] :== "excess_mass"))
+			if (length(idxU) != 1 | length(idxR) != 1) {
+				st_numscalar("r(pb_sh_failcode)", 112)
+				return
+			}
+			gradU = GbcU[idxU[1], .]
+			gradR = GbcR[idxR[1], .]
+		}
 		if (cols(gradU) != cols(GU) | cols(gradR) != cols(GR)) {
 			st_numscalar("r(pb_sh_failcode)", 103)
 			return
@@ -7866,9 +8633,10 @@ cap program drop bunch_saez
 
 				delta = .
 			}
-			else if (estimator == 2) {
+			else if (estimator == 5 | estimator == 2) {
 				/*
-					Estimator 2:
+					Estimator 2 (and 5, tested against the same h1=h0/(1+delta)
+					model form -- see bmodel_row23()'s header note):
 						gamma = beta / (1 + delta)
 						B = delta/(1+delta) * int_{cutoff}^{zbar} h0(z) dz / bw
 						  = delta/(1+delta) * Rbeta
@@ -8035,7 +8803,7 @@ cap program drop bunch_saez
 					-hmap.dgamma_ddelta * ddelta_dtheta[1, 2*Kb + 1]
 			}
 			else {
-				_error(3498, "polbunch_wald_from_unrestricted only handles estimators 1, 2, and 3")
+				_error(3498, "polbunch_wald_from_unrestricted only handles estimators 1, 2, 3, and 5")
 			}
 
 			/*

@@ -43,9 +43,17 @@
 * deliberately DIFFERENT, presumed-kink-free sample (e.g. a pre-policy
 * year) -- skips the bin-for-bin same-data verification (the whole
 * point is that the loaded data is NOT the data the model was fitted
-* on), while everything else -- including the self-window exclusion
-* around the nominal cutoff, which is a pure function of
-* (cutoff,bw,limits) and so needs no change -- works unmodified.
+* on), AND disables the true-excluded-region overlap exclusion (both at
+* grid-construction and at each placebo's own pre-fit check): with a
+* genuinely different sample there is no real kink at the target's own
+* (lo0,hi0], so a placebo window merely touching that location is not
+* touching anything structurally special in THIS sample, and excluding
+* it would just be throwing away otherwise-valid candidates for no
+* reason. avoid() and if/in continue to work exactly as without clean --
+* if particular regions of the clean sample should still be kept out of
+* the candidate grid (a different real kink in this OTHER sample, a
+* known contamination window, ...), pass avoid() for those locations, or
+* restrict what's loaded via if/in/an explicit drop before calling.
 *
 * spectests: permutes whatever specification tests the TARGET model
 * already has posted in e() -- its own omnibus (wald for estimator 1/4,
@@ -53,7 +61,7 @@
 * test() choice) and the reference-region deviance / below-cutoff-only
 * deviance (posted by every polbunch fit that isn't vce(none)/
 * multinomial|bayesian-boot, i.e. free -- see polbunch_estat). A target
-* fit with an off-label test(wald) on estimator 2/3 (a secondary shape
+* fit with an off-label test(wald) on estimator 3/5 (a secondary shape
 * diagnostic, NOT that estimator's own omnibus test -- see polbunch's
 * test() docs) is detected and permuted separately, under its own
 * e(chi2_wald), never folded into the omnibus slot. Nothing new is
@@ -121,7 +129,10 @@
 * value, se, status [1=used, 0=failed]; sorted ascending by cutoff).
 * Candidates whose own recentered window would overlap the true excluded
 * region are excluded before this matrix is even built (counted in
-* r(cutoffs_overlap) instead) -- n_placebo_tried and this matrix's row
+* r(cutoffs_overlap) instead) -- UNLESS clean is specified, in which case
+* this exclusion is off entirely (r(cutoffs_overlap) stays 0; avoid()/
+* if-in are the only remaining ways to keep a region out of the grid) --
+* n_placebo_tried and this matrix's row
 * count both already exclude them, so there is no -1/overlap status value
 * to see here (status -1 remains theoretically possible only in the
 * window_recentered==0 fallback, where overlap can only be discovered
@@ -140,7 +151,7 @@
 * applicable). chi2_omnibus is the target's own nested-restriction test
 * (wald for estimator 1/4, minimumdistance for 2/3); chi2_wald here is
 * ONLY the off-label diagnostic case (test(wald) explicitly requested on
-* estimator 2/3), never the same thing as chi2_omnibus for the same fit.
+* estimator 3/5), never the same thing as chi2_omnibus for the same fit.
 
 cap program drop polbunch_permute
 program define polbunch_permute, rclass
@@ -236,7 +247,7 @@ program define polbunch_permute, rclass
 		else di as error "no polbunch estimation results are currently active; fit a model first, or give a stored name."
 		exit 301
 	}
-	if !inlist(e(estimator),0,1,2,3,4) {
+	if !inlist(e(estimator),0,1,3,4,5) {
 		di as error "the stored/active estimate has an unrecognised e(estimator)."
 		exit 301
 	}
@@ -255,7 +266,7 @@ program define polbunch_permute, rclass
 	/* hadomni/hadwald are mutually exclusive for the same target fit: a
 	   normal fit's own nested-restriction test posts e(chi2_omnibus)
 	   (whichever of wald/minimumdistance mechanically applies); only an
-	   explicit off-label test(wald) on estimator 2/3 posts e(chi2_wald)
+	   explicit off-label test(wald) on estimator 3/5 posts e(chi2_wald)
 	   instead, and it never runs alongside hausman (see polbunch's
 	   test() option) -- so hadwald & hadhaus never co-occur either. */
 	local hadomni = 0
@@ -656,6 +667,7 @@ program define polbunch_permute, rclass
 			local hi_k = `cand_k' + `rightdist0'
 			local lo_k = `cand_k' - `leftdist0'
 			local iswoverlap = !(`hi_k' <= `lo0' | `lo_k' > `hi0')
+			if "`clean'" != "" local iswoverlap = 0
 			if !`iswoverlap' & `navoid' > 0 {
 				forvalues j = 1/`navoid' {
 					if !(`hi_k' <= `avoidlo`j'' | `lo_k' > `avoidhi`j'') {
@@ -684,6 +696,7 @@ program define polbunch_permute, rclass
 			local hi_k = `cand_k' + `rightdist0'
 			local lo_k = `cand_k' - `leftdist0'
 			local iswoverlap = !(`hi_k' <= `lo0' | `lo_k' > `hi0')
+			if "`clean'" != "" local iswoverlap = 0
 			if !`iswoverlap' & `navoid' > 0 {
 				forvalues j = 1/`navoid' {
 					if !(`hi_k' <= `avoidlo`j'' | `lo_k' > `avoidhi`j'') {
@@ -808,6 +821,7 @@ program define polbunch_permute, rclass
 		local windowoverlap = 0
 		if `recenter' {
 			local windowoverlap = !(`hi_i' <= `lo0' | `lo_i' > `hi0')
+			if "`clean'" != "" local windowoverlap = 0
 			if !`windowoverlap' & `navoid' > 0 {
 				forvalues j = 1/`navoid' {
 					if !(`hi_i' <= `avoidlo`j'' | `lo_i' > `avoidhi`j'') {
@@ -899,6 +913,7 @@ program define polbunch_permute, rclass
 			 * check above: hik<=lo0 (weak) is correct, lok>hi0 must be       *
 			 * strict, since hi0 itself belongs to the excluded bin.          */
 			local overlaps = !(`hik' <= `lo0' | `lok' > `hi0')
+			if "`clean'" != "" local overlaps = 0
 			if !`overlaps' & `navoid' > 0 {
 				forvalues j = 1/`navoid' {
 					if !(`hik' <= `avoidlo`j'' | `lok' > `avoidhi`j'') {

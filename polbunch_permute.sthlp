@@ -70,7 +70,7 @@ Every draw -- the true cutoff's and every placebo's -- is {bf:studentized} by it
 {opt maxcutoffs(#)} caps the total number of candidate cutoffs attempted (both directions from the true cutoff combined).  The default is 100; {cmd:maxcutoffs(0)} removes the cap and walks the full usable data range, which can be slow on finely-binned data.
 
 {phang}
-{opt deltamax(#)} is passed through to every placebo and observed refit's estimator 2/3 delta-profile search.  It is not reconstructed from the stored model.
+{opt deltamax(#)} is passed through to every placebo and observed refit's estimator 3 delta-profile search.  It is not reconstructed from the stored model.
 
 {phang}
 {opt onesided} switches the permutation p-value from the default two-sided test on {cmd:|target|} to a one-sided test on {cmd:target} itself, matching the theoretical prior that true bunching produces positive excess mass.
