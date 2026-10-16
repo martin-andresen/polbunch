@@ -1,8 +1,8 @@
 # polbunch
 
-**Bunching estimation consistent with the model it assumes.**
+**Polynomial bunching estimation consistent with it's own assumptions.**
 
-Conventional polynomial bunching estimators (Saez 2010; Chetty et al. 2011) ignore or only approximately handle how the iso-elastic response to a kink reshapes the density *above* the cutoff, leading to bias. `polbunch` implements an estimator that is consistent and efficient under the iso-elastic model as well as the existing estimators from the literature, requiring only binned data.
+Conventional polynomial bunching estimators (Saez 2010; Chetty et al. 2011) ignore or only approximately handle how the iso-elastic response to a kink reshapes the density *above* the cutoff, leading to bias. `polbunch` implements an estimator that is consistent and efficient under the iso-elastic model and a well-specified counterfactual density and excluded region, as well as the existing estimators from the literature, requiring only binned data.
 
 <img src="polbunchex.png" alt="Bunching plot" width="600"/>
 
