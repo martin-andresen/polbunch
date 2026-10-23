@@ -115,6 +115,7 @@ program define polbunch_contrast, rclass
 		local lo`tag'     = e(lower_limit)
 		local hi`tag'     = e(upper_limit)
 		local con`tag'    = e(constant)
+		local la`tag'     = (e(logapprox) == 1)
 		local nsp`tag'    = e(nosplit)
 		local t0`tag'     = e(t0)
 		local t1`tag'     = e(t1)
@@ -257,6 +258,7 @@ program define polbunch_contrast, rclass
 	 * ------------------------------------------------------------------ */
 	foreach tag in A B {
 		local inv`tag'  = cond(`con`tag'',"constant","exact")
+		local laopt`tag' = cond(`la`tag'',"logapprox","exactlog")
 		local mass`tag' = cond(`nsp`tag'',"poolmass","splitmass")
 		local lg`tag'   = cond(`islog`tag'',"log","")
 		local nn`tag'   = cond(`nonorm`tag'',"nonormalize","")
@@ -268,7 +270,7 @@ program define polbunch_contrast, rclass
 		   specification. */
 		local spec`tag' estimator(`est`tag'') polynomial(`k`tag'') cutoff(`cut`tag'') ///
 			t0(`t0`tag'') t1(`t1`tag'') limits(`L_`tag'' `H_`tag'') ///
-			`inv`tag'' `mass`tag'' `lg`tag'' `nn`tag'' ///
+			`inv`tag'' `laopt`tag'' `mass`tag'' `lg`tag'' `nn`tag'' ///
 			norankcheck vce(none) nobias test(none)
 
 		if `est`tag'' == 4      local lab`tag' "est 4 (Saez trapezoid)"

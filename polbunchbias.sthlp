@@ -63,6 +63,8 @@ override the counterfactual read from {cmd:e(b)}.
 {synopt :{cmd:log}}calculate in log z rather than level z (post-estimation mode reads this from {cmd:e(log)}){p_end}
 {synopt :{cmd:constant}}invert bunching mass to the response with the constant-density shortcut (default for estimators 1 and 2){p_end}
 {synopt :{cmd:exact}}invert bunching mass to the response by solving the density integral (default for estimators 0 and 3){p_end}
+{synopt :{cmd:logapprox}}convert the response to an elasticity with the log approximation, (Delta/z*)/ln((1-t0)/(1-t1)); post-estimation mode reads {cmd:e(logapprox)}{p_end}
+{synopt :{cmd:exactlog}}convert the response to an elasticity exactly, ln(1+Delta/z*)/ln((1-t0)/(1-t1)); default for all estimators{p_end}
 {synopt :{cmd:poolmass}}back out bunching mass by pooling the fitted counterfactual over the whole excluded window (Chetty 2011 eq. 16; default for estimators 1 and 2){p_end}
 {synopt :{cmd:splitmass}}back out bunching mass by splitting at the kink (default for estimators 0 and 3){p_end}
 {synopt :{cmd:bw(}{it:#}{cmd:)}}bin width used to scale bunching mass; default {cmd:e(bw_orig)} post-estimation, {cmd:bw(1)} standalone{p_end}
@@ -247,6 +249,16 @@ marginal response: {cmd:constant} divides the mass by the fitted density at
 z*; {cmd:exact} solves int_0^r h0hat(s) ds = Bhat*bw.  Default: {cmd:constant}
 for estimators 1 and 2, {cmd:exact} for 0 and 3.  Match this to how
 {cmd:polbunch} was run.
+
+{phang}
+{cmd:logapprox} / {cmd:exactlog} choose how the response is turned into an
+elasticity: {cmd:exactlog} uses ln(1+Delta/z*)/ln((1-t0)/(1-t1)), {cmd:logapprox}
+uses (Delta/z*)/ln((1-t0)/(1-t1)).  The reported elasticity bias is measured
+against the structural elasticity, so with {cmd:logapprox} it includes the
+linearisation error.  This is why estimators 0 and 3 under {cmd:exact} and
+{cmd:splitmass}, and estimator 4 with {cmd:constant}, are accepted with
+{cmd:logapprox} but refused without it.  With {cmd:log} it has no effect.
+Match this to how {cmd:polbunch} was run.
 
 {phang}
 {cmd:poolmass} / {cmd:splitmass} choose how bunching mass is backed out:
@@ -450,6 +462,7 @@ Iterated (self-consistent) bias correction:
 {synopt :{cmd:r(bias_shift)}}bias in the proportional level shift; missing in logs{p_end}
 {synopt :{cmd:r(bias_elasticity)}}bias in the elasticity estimate{p_end}
 {synopt :{cmd:r(constant)}}1 if the constant-density inversion was used{p_end}
+{synopt :{cmd:r(logapprox)}}1 if the log-approximation elasticity was used{p_end}
 {synopt :{cmd:r(nosplit)}}1 if {cmd:poolmass} was used{p_end}
 {synopt :{cmd:r(input_elasticity)}}elasticity supplied to the command{p_end}
 {synopt :{cmd:r(corrected_elasticity)}}elasticity after {cmd:iterate}, else the input value{p_end}

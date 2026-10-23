@@ -39,6 +39,8 @@ from the bin spacing and {opt bw()} may not be specified.
 {synopt:{opt notransform}}report raw estimating-equation coefficients rather than transformed bunching parameters{p_end}
 {synopt:{opt constant}}use the constant-density approximation when turning bunching into a response and elasticity; default for estimators 1 and 2{p_end}
 {synopt:{opt exact}}invert the counterfactual-density integral exactly when turning bunching into a response and elasticity; default for estimators 0 and 3{p_end}
+{synopt:{opt logapprox}}convert the marginal response to an elasticity with the log approximation, {it:e} = (Delta/z*)/ln((1-t0)/(1-t1)), instead of the exact {it:e} = ln(1+Delta/z*)/ln((1-t0)/(1-t1)); default {opt exactlog} for all estimators{p_end}
+{synopt:{opt exactlog}}convert the marginal response to an elasticity exactly (Saez 2010, eq. 3 solved for {it:e}); the default for all estimators{p_end}
 {synopt:{opt poolmass}}form the bunching mass as M minus the integral of {cmd:h0} over the whole excluded region; default for estimators 1 and 2{p_end}
 {synopt:{opt splitmass}}form the bunching mass as M minus the integral of {cmd:h0} up to the cutoff and of {cmd:h1} above it; default for estimators 0 and 3{p_end}
 
@@ -163,6 +165,9 @@ For estimator 4, the Saez transformation first computes excess mass using the av
 
 {pstd}
 The {opt constant} / {opt exact} pair controls how bunching is converted to a response and elasticity. {opt constant} uses a constant-density approximation (the marginal response is the bunching mass divided by the counterfactual height at the cutoff); it can be useful for comparison with older procedures but may be biased when the density changes substantially over the response region. {opt exact} instead solves the counterfactual-density integral equation for the response. If neither is given, {cmd:polbunch} uses {opt constant} for estimators 1 and 2 and {opt exact} for estimators 0 and 3. The two are mutually exclusive.
+
+{pstd}
+The {opt logapprox} / {opt exactlog} pair is a second, separate approximation. Applied work typically makes two: (1) solve for the marginal response Delta as B/h(z*), which is the {opt constant} option; and (2) turn Delta into an elasticity with the log approximation {it:e} = (Delta/z*)/ln((1-t0)/(1-t1)) rather than {it:e} = ln(1+Delta/z*)/ln((1-t0)/(1-t1)). Option {opt logapprox} makes the second approximation. {opt constant} together with {opt logapprox} gives the textbook estimator {it:e} = B/(h(z*) ln((1-t0)/(1-t1))); {opt logapprox} alone approximates only the elasticity step. The default is {opt exactlog} for every estimator. When the running variable is in logs ({opt log}) the elasticity is already linear in the response, so {opt logapprox} changes nothing. The option only matters when {opt t0()} and {opt t1()} are given. They are mutually exclusive. With {opt logapprox}, estimators 0 and 3 under {opt exact} and {opt splitmass} are no longer internally consistent, so the analytical bias is reported for them.
 
 {pstd}
 The {opt poolmass} / {opt splitmass} pair controls how the bunching mass B is formed from the observed mass M in the excluded region. {opt poolmass} sets B = M minus the integral of the estimated counterfactual density {cmd:h0} over the entire excluded region. {opt splitmass} sets B = M minus the integral of {cmd:h0} from the lower limit to the cutoff, minus the integral of the post-tax density {cmd:h1} from the cutoff to the upper limit; this is the theoretically grounded calculation. If neither is given, {cmd:polbunch} uses {opt poolmass} for estimators 1 and 2 and {opt splitmass} for estimators 0 and 3. The choice has no effect for estimator 1 (where {cmd:h0} equals {cmd:h1}) and is ignored for estimator 4. The two are mutually exclusive.
@@ -484,6 +489,7 @@ Collapse to binned data and use polbunch with bin counts {cmd:freq} and bin midp
 {synopt:{cmd:e(zhi)}}top of the highest bin in the estimation window (original scale){p_end}
 {synopt:{cmd:e(log)}}1 if {opt log} was specified, 0 otherwise{p_end}
 {synopt:{cmd:e(constant)}}1 if the constant-density response inversion was used, 0 if the exact inversion was used{p_end}
+{synopt:{cmd:e(logapprox)}}1 if the elasticity used the log approximation, 0 if the exact conversion was used{p_end}
 {synopt:{cmd:e(nosplit)}}1 if the bunching mass used the {opt poolmass} calculation, 0 if it used {opt splitmass}{p_end}
 {synopt:{cmd:e(chi2_omnibus)}}omnibus (this estimator's own nested-restriction test -- {cmd:wald} for 1/4, {cmd:minimumdistance} for 2/3) chi-squared statistic, when computed{p_end}
 {synopt:{cmd:e(p_omnibus)}}omnibus test p-value, when computed{p_end}

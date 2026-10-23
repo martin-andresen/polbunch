@@ -316,6 +316,7 @@ program define polbunch_permute, rclass
 	local cut0       = e(cutoff_orig)
 	local bw0        = e(bw)
 	local con0       = e(constant)
+	local la0        = (e(logapprox) == 1)
 	local nsp0       = e(nosplit)
 	local islog0     = (e(log) == 1)
 	local nonorm0    = ("`e(normalize)'" == "nonormalize")
@@ -428,6 +429,7 @@ program define polbunch_permute, rclass
 	local rightdist0 = `zhi0' - `cut0'
 
 	local inv0  = cond(`con0',"constant","exact")
+	local la0opt = cond(`la0',"logapprox","exactlog")
 	local mass0 = cond(`nsp0',"poolmass","splitmass")
 	local lg0   = cond(`islog0',"log","")
 	local nn0   = cond(`nonorm0',"nonormalize","")
@@ -461,7 +463,7 @@ program define polbunch_permute, rclass
 	 * deviance_below need no test() at all, vce(conventional) alone       *
 	 * already posts them.                                                 */
 	local basespec estimator(`estimator0') polynomial(`k0') `bwopt' ///
-		limits(`L0' `Hlim0') `inv0' `mass0' `lg0' `nn0' allownegative ///
+		limits(`L0' `Hlim0') `inv0' `la0opt' `mass0' `lg0' `nn0' allownegative ///
 		deltamax(`deltamax') `rankopt' vce(conventional) nobias `spectestopt' nodrop
 
 	/* every refit's window is inrange(zvar,lo,hi) from e(zlo)/e(zhi) --     *

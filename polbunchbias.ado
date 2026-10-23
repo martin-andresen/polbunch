@@ -1,5 +1,12 @@
 *! polbunchbias -- analytical bias of polynomial bunching estimators
-*! version 2.10.0  09oct2026
+*! version 2.11.0  23oct2026
+*!
+*! 2.11.0: new logapprox / exactlog axis (elasticity = (Delta/z*)/A vs ln(1+Delta/z*)/A,
+*!         A = ln((1-t0)/(1-t1))); read from e(logapprox), r(logapprox) returned,
+*!         threaded through pbx_bias_core_ws and the solvers via uselogapprox
+*!         (pbx_bias_core() direct callers get exactlog).  Estimators 0/3 under
+*!         exact+splitmass and estimator(4)+constant are accepted with logapprox
+*!         (pure linearisation bias).  Per-estimator defaults: _logapprox_default.
 *!
 *! 2.10.0: estimator numbers 2 and 5 SWAPPED (pure relabelling, no numerical change):
 *!         estimator(2) is now the faithful Chetty (2011) replication (formerly 5),
@@ -340,7 +347,7 @@ program define polbunchbias, rclass
         LOG ///
         BW(numlist max=1) ITERate TOLerance(real 1e-10) ///
         MAXITER(integer 1000) UNDERRELAX(real 0.5) ///
-        CONstant EXACT SPLITmass POOLmass NOFALLback NOPROMOTE ///
+        CONstant EXACT LOGAPPROX EXACTLOG SPLITmass POOLmass NOFALLback NOPROMOTE ///
         PROMOTEtol(real 0.3) ALLOWNEGATIVE H0check ]
 
     // window()/support(): primary names (2.7.0+). zl()/zh()/zlo()/zhi() are
@@ -381,6 +388,10 @@ program define polbunchbias, rclass
         di as error "polbunchbias: specify at most one of constant / exact"
         exit 198
     }
+    if "`logapprox'" != "" & "`exactlog'" != "" {
+        di as error "polbunchbias: specify at most one of logapprox / exactlog"
+        exit 198
+    }
     if "`poolmass'" != "" & "`splitmass'" != "" {
         di as error "polbunchbias: specify at most one of poolmass / splitmass"
         exit 198
@@ -395,6 +406,7 @@ program define polbunchbias, rclass
     tempname craw bcoef
     local _e_nosplit
     local _e_constant
+    local _e_logapprox
     // xscale: "what units is bcoef expressed in, relative to raw z?"  Only
     // the auto-extracted e(b) polynomial coefficients are in polbunch's own
     // normalised units (xscale = e(xscale)); h0poly()/relslope()/the Saez
@@ -454,6 +466,8 @@ program define polbunchbias, rclass
         if !_rc local _e_nosplit = e(nosplit)
         capture confirm scalar e(constant)
         if !_rc local _e_constant = e(constant)
+        capture confirm scalar e(logapprox)
+        if !_rc local _e_logapprox = e(logapprox)
 
         if missing(`zlo') | missing(`zhi') {
             di as error "e(zlo)/e(zhi) not found; re-run polbunch (updated version required)"
@@ -603,14 +617,23 @@ program define polbunchbias, rclass
     else if "`_e_constant'" != "" local useconstant = `_e_constant'
     else                          local useconstant = inlist(`estimator',1,2,5)
 
+    // Third axis: elasticity = ln(1+Delta/z*)/ln((1-t0)/(1-t1)) (exactlog) vs.
+    // (Delta/z*)/ln((1-t0)/(1-t1)) (logapprox).  Defaults per estimator
+    // 0..5 live in this one string (1 = logapprox) and must match polbunch.ado.
+    local _logapprox_default "0 0 0 0 0 0"
+    if "`logapprox'" != ""            local uselogapprox = 1
+    else if "`exactlog'" != ""        local uselogapprox = 0
+    else if "`_e_logapprox'" != ""    local uselogapprox = `_e_logapprox'
+    else                              local uselogapprox = real(word("`_logapprox_default'", `estimator'+1))
+
     if "`poolmass'" != ""         local nosplit = 1
     else if "`splitmass'" != ""   local nosplit = 0
     else if "`_e_nosplit'" != ""  local nosplit = `_e_nosplit'
     else                          local nosplit = inlist(`estimator',1,2,5)
     if `estimator' == 1 local nosplit = 1
 
-    if inlist(`estimator',0,3) & !`useconstant' & !`nosplit' {
-        di as error "polbunchbias: estimator(`estimator') is consistent under exact integration and a split mass calc -- zero bias by construction. Specify constant, poolmass, or both; or use estimator(1), estimator(2), or estimator(4)."
+    if inlist(`estimator',0,3) & !`useconstant' & !`nosplit' & !`uselogapprox' {
+        di as error "polbunchbias: estimator(`estimator') is consistent under exact integration and a split mass calc -- zero bias by construction. Specify constant, poolmass or logapprox (any combination); or use estimator(1), estimator(2), or estimator(4)."
         exit 198
     }
 
@@ -624,13 +647,14 @@ program define polbunchbias, rclass
     // internal check (the excess mass is built from a step counterfactual
     // but inverted against the implied line); a comparable bias across
     // estimators needs a common counterfactual, not this per-estimator one.
-    if `estimator' == 4 & `useconstant' {
+    if `estimator' == 4 & `useconstant' & !`uselogapprox' {
         di as error "polbunchbias: estimator(4) with constant has no internal-consistency bias -- Saez"
         di as error "             with a constant-density inversion applies a flat counterfactual in both"
         di as error "             the mass and the inversion step, so the bias is zero by construction."
         di as error "             This is NOT a statement that the Saez/constant estimator is unbiased"
         di as error "             (it is biased whenever the counterfactual slopes across the window)."
-        di as error "             Use estimator(4) with exact for the step-vs-line internal check, or"
+        di as error "             Add logapprox to measure the linearisation error alone, use"
+        di as error "             estimator(4) with exact for the step-vs-line internal check, or"
         di as error "             compare estimators against a common counterfactual density."
         exit 198
     }
@@ -689,7 +713,7 @@ program define polbunchbias, rclass
         }
         capture matrix drop _pbxs_core _pbxs_bbeta _pbxs_bcur
         capture scalar drop _pbxs_ecur _pbxs_iter _pbxs_conv _pbxs_diverged
-        mata: pbx_bias_solve_ws(`estimator', `bmodel', `islog_val', `useconstant', ///
+        mata: pbx_bias_solve_ws(`estimator', `bmodel', `islog_val', `useconstant', `uselogapprox', ///
             `nosplit', `_zstarw', `t0', `t1', st_matrix("`_bcuse'"), `elasticity', ///
             `_lo_w', `_hi_w', `_L_w', `_H_w', `_bw_w', `_xscale', `_doiter', ///
             `tolerance', `maxiter', `underrelax', `_allowneg', `_checkh0', "_pbxs")
@@ -740,7 +764,7 @@ program define polbunchbias, rclass
                 `_lo_w', `_L_w', `_H_w', `_hi_w', `_kk2'))
             capture matrix drop _pbxi_core _pbxi_bbeta _pbxi_bcur
             capture scalar drop _pbxi_ecur _pbxi_iter _pbxi_conv _pbxi_diverged
-            mata: pbx_bias_solve_ws(`estimator', `bmodel', `islog_val', `useconstant', ///
+            mata: pbx_bias_solve_ws(`estimator', `bmodel', `islog_val', `useconstant', `uselogapprox', ///
                 `nosplit', `_zstarw', `t0', `t1', st_matrix("`_bciter'"), `elasticity', ///
                 `_lo_w', `_hi_w', `_L_w', `_H_w', `_bw_w', `_xscale', 1, ///
                 `tolerance', `maxiter', `underrelax', `_allowneg', `_checkh0', "_pbxi")
@@ -893,6 +917,7 @@ program define polbunchbias, rclass
     return scalar bias_polyfull   = `_Kfull'
     return scalar bias_l2err      = `_bias_l2err'
     return scalar constant = `useconstant'
+    return scalar logapprox = `uselogapprox'
     return scalar nosplit = `nosplit'
     return scalar input_elasticity = `elasticity'
     if `_promoted' {
@@ -1741,6 +1766,7 @@ end
 capture mata: mata drop pbx_lambda_report()
 capture mata: mata drop pbx_bias_core()
 capture mata: mata drop pbx_bias_core_ws()
+capture mata: mata drop pbx_ehat()
 capture mata: mata drop pbx_bias_solve_ws()
 capture mata: mata drop pbx_bias_scres_ws()
 capture mata: mata drop pbx_bias_newton_ws()
@@ -1830,7 +1856,7 @@ real rowvector pbx_bias_core(
     real scalar bw)
 {
     real rowvector out
-    out = pbx_bias_core_ws(estimator, bmodel, islog, useconstant, nosplit,
+    out = pbx_bias_core_ws(estimator, bmodel, islog, useconstant, 0, nosplit,
         zstar, t0, t1, bcoef, elast, zlo - zstar, zhi - zstar, zL - zstar,
         zH - zstar, bw, 1)
     // pbx_bias_core_ws echoes columns 13-16 as OFFSETS from the cutoff
@@ -2104,11 +2130,21 @@ void pbx_bias_e5_solve(real scalar nosplit,
 }
 
 // ===================================================================
+// Elasticity implied by a relative level shift Delta/z* (level case):
+// exact  -> ln(1 + shift)/Ltau   (Saez 2010 eq. 3 solved for e)
+// approx -> shift/Ltau           (log approximation, no ln(1+.))
+real scalar pbx_ehat(real scalar shift, real scalar Ltau, real scalar uselogapprox)
+{
+    if (uselogapprox) return(shift/Ltau)
+    return(ln(1 + shift)/Ltau)
+}
+
 real rowvector pbx_bias_core_ws(
     real scalar estimator,
     real scalar bmodel,
     real scalar islog,
     real scalar useconstant,
+    real scalar uselogapprox,
     real scalar nosplit,
     real scalar zstarw,
     real scalar t0,
@@ -2283,7 +2319,7 @@ real rowvector pbx_bias_core_ws(
         }
         else {
             bias_shift = rtilde/zstarw - Delta
-            bias_e     = ln(1 + rtilde/zstarw)/Ltau - elast
+            bias_e     = pbx_ehat(rtilde/zstarw, Ltau, uselogapprox) - elast
         }
     }
 
@@ -2446,7 +2482,7 @@ real rowvector pbx_bias_core_ws(
             bias_shift = delc - Delta
             bias_resp  = zstarw*bias_shift
             bias_B     = .
-            bias_e     = ln(1 + Delta + bias_shift)/Ltau - elast
+            bias_e     = pbx_ehat(Delta + bias_shift, Ltau, uselogapprox) - elast
         }
         else {
             // reduced-form Bhat = Hstar - int_E h0hat
@@ -2491,7 +2527,7 @@ real rowvector pbx_bias_core_ws(
             }
             else {
                 bias_shift = rtilde/zstarw - Delta
-                bias_e     = ln(1 + rtilde/zstarw)/Ltau - elast
+                bias_e     = pbx_ehat(rtilde/zstarw, Ltau, uselogapprox) - elast
             }
         }
     }
@@ -2523,7 +2559,7 @@ real rowvector pbx_bias_core_ws(
             if (!missing(rr)) rtilde = rr
         }
 
-        if (bias_B == 0 & !useconstant) {
+        if (bias_B == 0 & !useconstant & (islog | !uselogapprox)) {
             bias_resp  = 0
             bias_shift = 0
             bias_e     = 0
@@ -2536,7 +2572,7 @@ real rowvector pbx_bias_core_ws(
             }
             else {
                 bias_shift = rtilde/zstarw - Delta
-                bias_e     = ln(1 + rtilde/zstarw)/Ltau - elast
+                bias_e     = pbx_ehat(rtilde/zstarw, Ltau, uselogapprox) - elast
             }
         }
     }
@@ -2687,7 +2723,7 @@ real rowvector pbx_bias_core_ws(
         }
         else {
             bias_shift = rtilde/zstarw - Delta
-            bias_e     = ln(1 + rtilde/zstarw)/Ltau - elast
+            bias_e     = pbx_ehat(rtilde/zstarw, Ltau, uselogapprox) - elast
         }
     }
 
@@ -2752,7 +2788,7 @@ real rowvector pbx_bias_core_ws(
                     bias_B     = Bsaez - B
                     bias_resp  = zstarw*(xhat - x)
                     bias_shift = xhat - x
-                    bias_e     = ln(xhat)/Ltau - elast
+                    bias_e     = pbx_ehat(xhat - 1, Ltau, uselogapprox) - elast
                 }
                 else {
                     qsaez = hplus - hminus - Asaez
@@ -2763,7 +2799,7 @@ real rowvector pbx_bias_core_ws(
                             bias_B     = Bsaez - B
                             bias_resp  = zstarw*(xhat - x)
                             bias_shift = xhat - x
-                            bias_e     = ln(xhat)/Ltau - elast
+                            bias_e     = pbx_ehat(xhat - 1, Ltau, uselogapprox) - elast
                         }
                     }
                 }
@@ -2803,7 +2839,7 @@ real rowvector pbx_bias_core_ws(
 // -------------------------------------------------------------------
 real rowvector pbx_bias_scres_ws(real rowvector x, real rowvector tgt,
     real scalar estimator, real scalar bmodel, real scalar islog,
-    real scalar useconstant, real scalar nosplit, real scalar zstarw,
+    real scalar useconstant, real scalar uselogapprox, real scalar nosplit, real scalar zstarw,
     real scalar t0, real scalar t1, real scalar lo, real scalar hi,
     real scalar L, real scalar H, real scalar bw, real scalar xscale,
     real rowvector dsc)
@@ -2817,7 +2853,7 @@ real rowvector pbx_bias_scres_ws(real rowvector x, real rowvector tgt,
     e  = x[n]
     bp = (1, s)
     b  = bp :* dsc
-    res = pbx_bias_core_ws(estimator, bmodel, islog, useconstant, nosplit,
+    res = pbx_bias_core_ws(estimator, bmodel, islog, useconstant, uselogapprox, nosplit,
               zstarw, t0, t1, b, e, lo, hi, L, H, bw, xscale)
     out = J(1, n, .)
     if (missing(res[20]) | missing(res[24])) return(out)
@@ -2845,7 +2881,7 @@ real rowvector pbx_bias_scres_ws(real rowvector x, real rowvector tgt,
 // -------------------------------------------------------------------
 real scalar pbx_bias_newton_ws(
     real scalar estimator, real scalar bmodel, real scalar islog,
-    real scalar useconstant, real scalar nosplit, real scalar zstarw,
+    real scalar useconstant, real scalar uselogapprox, real scalar nosplit, real scalar zstarw,
     real scalar t0, real scalar t1, real rowvector bhat, real scalar ehat,
     real scalar lo, real scalar hi, real scalar L, real scalar H,
     real scalar bw, real scalar xscale, real rowvector dsc,
@@ -2869,7 +2905,7 @@ real scalar pbx_bias_newton_ws(
 
     for (it = 1; it <= 50; it++) {
         niter = it
-        Fx = pbx_bias_scres_ws(x, tgt, estimator, bmodel, islog, useconstant,
+        Fx = pbx_bias_scres_ws(x, tgt, estimator, bmodel, islog, useconstant, uselogapprox,
                  nosplit, zstarw, t0, t1, lo, hi, L, H, bw, xscale, dsc)
         if (hasmissing(Fx)) return(0)
         rn = sqrt(Fx * Fx')
@@ -2881,10 +2917,10 @@ real scalar pbx_bias_newton_ws(
             xp = x ; xp[i] = xp[i] + hstep
             xm = x ; xm[i] = xm[i] - hstep
             Fp = pbx_bias_scres_ws(xp, tgt, estimator, bmodel, islog,
-                     useconstant, nosplit, zstarw, t0, t1, lo, hi, L, H,
+                     useconstant, uselogapprox, nosplit, zstarw, t0, t1, lo, hi, L, H,
                      bw, xscale, dsc)
             Fm = pbx_bias_scres_ws(xm, tgt, estimator, bmodel, islog,
-                     useconstant, nosplit, zstarw, t0, t1, lo, hi, L, H,
+                     useconstant, uselogapprox, nosplit, zstarw, t0, t1, lo, hi, L, H,
                      bw, xscale, dsc)
             if (hasmissing(Fp) | hasmissing(Fm)) okj = 0
             if (okj) Jm[, i] = ((Fp - Fm) / (2 * hstep))'
@@ -2899,7 +2935,7 @@ real scalar pbx_bias_newton_ws(
             if (!done) {
                 xt = x - alpha * dxv'
                 Rt = pbx_bias_scres_ws(xt, tgt, estimator, bmodel, islog,
-                         useconstant, nosplit, zstarw, t0, t1, lo, hi, L, H,
+                         useconstant, uselogapprox, nosplit, zstarw, t0, t1, lo, hi, L, H,
                          bw, xscale, dsc)
                 if (!hasmissing(Rt) & sqrt(Rt * Rt') < rn) done = 1
                 else alpha = alpha / 2
@@ -2909,7 +2945,7 @@ real scalar pbx_bias_newton_ws(
         x = xt
     }
 
-    Fx = pbx_bias_scres_ws(x, tgt, estimator, bmodel, islog, useconstant,
+    Fx = pbx_bias_scres_ws(x, tgt, estimator, bmodel, islog, useconstant, uselogapprox,
              nosplit, zstarw, t0, t1, lo, hi, L, H, bw, xscale, dsc)
     if (hasmissing(Fx) | sqrt(Fx * Fx') > 1e-6) return(0)
 
@@ -2934,7 +2970,7 @@ real scalar pbx_bias_newton_ws(
 // -------------------------------------------------------------------
 void pbx_bias_solve_ws(
     real scalar estimator, real scalar bmodel, real scalar islog,
-    real scalar useconstant, real scalar nosplit, real scalar zstarw,
+    real scalar useconstant, real scalar uselogapprox, real scalar nosplit, real scalar zstarw,
     real scalar t0, real scalar t1, real rowvector bhat, real scalar ehat,
     real scalar lo, real scalar hi, real scalar L, real scalar H,
     real scalar bw, real scalar xscale, real scalar doiter, real scalar tol,
@@ -2984,7 +3020,7 @@ void pbx_bias_solve_ws(
         // The damped loop stays as the fallback when Newton fails, and is
         // the only path for estimators 0/3/4.
         if (estimator == 1 | estimator == 5) {
-            newtok = pbx_bias_newton_ws(estimator, bmodel, islog, useconstant,
+            newtok = pbx_bias_newton_ws(estimator, bmodel, islog, useconstant, uselogapprox,
                 nosplit, zstarw, t0, t1, bhat, ehat, lo, hi, L, H, bw, xscale,
                 dsc, allowneg, checkh0, EBOUND, bnewt, enewt, nnewt)
             if (newtok) {
@@ -2997,7 +3033,7 @@ void pbx_bias_solve_ws(
         }
         if (!newtok)
         for (k = 1; k <= maxiter; k++) {
-            res    = pbx_bias_core_ws(estimator, bmodel, islog, useconstant,
+            res    = pbx_bias_core_ws(estimator, bmodel, islog, useconstant, uselogapprox,
                         nosplit, zstarw, t0, t1, bcur, ecur,
                         lo, hi, L, H, bw, xscale)
             bbeta  = res[|1, 27 \ 1, 26 + K1|]
@@ -3062,7 +3098,7 @@ void pbx_bias_solve_ws(
         }
     }
 
-    res   = pbx_bias_core_ws(estimator, bmodel, islog, useconstant, nosplit,
+    res   = pbx_bias_core_ws(estimator, bmodel, islog, useconstant, uselogapprox, nosplit,
                 zstarw, t0, t1, bcur, ecur, lo, hi, L, H, bw, xscale)
     if (missing(res[20]) | missing(res[24]) |
         (doiter & abs(ehat - res[24]) > EBOUND)) {
@@ -3072,7 +3108,7 @@ void pbx_bias_solve_ws(
         bcur = bhat
         ecur = ehat
         conv = 0
-        res  = pbx_bias_core_ws(estimator, bmodel, islog, useconstant, nosplit,
+        res  = pbx_bias_core_ws(estimator, bmodel, islog, useconstant, uselogapprox, nosplit,
                     zstarw, t0, t1, bcur, ecur, lo, hi, L, H, bw, xscale)
     }
     bbeta = res[|1, 27 \ 1, 26 + K1|]

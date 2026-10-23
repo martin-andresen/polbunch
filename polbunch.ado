@@ -1,4 +1,4 @@
-				*! polbunch version date 20261009
+				*! polbunch version date 20261023  (adds logapprox / exactlog)
 				* Author: Martin Eckhoff Andresen
 				* This program is part of the polbunch package.
 				
@@ -24,6 +24,8 @@
 					log ///
 					constant ///
 					EXACT ///
+					LOGAPPROX ///
+					EXACTLOG ///
 					POOLmass ///
 					SPLITmass ///
 					nodots /// suppress dots for bootstrap progress
@@ -123,6 +125,10 @@
 							noi di as error "Specify at most one of poolmass / splitmass."
 							exit 198
 						}
+						if "`logapprox'" != "" & "`exactlog'" != "" {
+							noi di as error "Specify at most one of logapprox / exactlog."
+							exit 198
+						}
 
 						/*
 							Sign of the structural shift.  polbunch supports only
@@ -152,6 +158,27 @@
 						if `estimator' == 1        loc nosplit = 1
 
 						loc constant = cond(`useconstant',"constant","")
+
+						/*
+							Third toggle axis: how the marginal response is turned
+							into an elasticity (the second approximation most
+							applied work makes after constant-density).
+							  exactlog  : e = ln(1 + Delta/z*) / ln((1-t0)/(1-t1))
+							  logapprox : e = (Delta/z*)      / ln((1-t0)/(1-t1))
+							logapprox together with constant is the textbook
+							e = B / (h0(z*) * ln((1-t0)/(1-t1))).  With a log
+							running variable the formula is already linear in the
+							response, so logapprox is a no-op.
+
+							Per-estimator defaults, estimators 0..5 in order
+							(1 = logapprox, 0 = exactlog).  Edit this one line to
+							change a default.
+						*/
+						local _logapprox_default "0 0 0 0 0 0"
+						if "`logapprox'" != ""      loc uselogapprox = 1
+						else if "`exactlog'" != ""  loc uselogapprox = 0
+						else                        loc uselogapprox = real(word("`_logapprox_default'", `estimator'+1))
+						loc logapprox = cond(`uselogapprox',"logapprox","")
 
 						/*
 							test(NAME [, boot [reps(#)] [wild|residual] [wildweights(...)]])
@@ -392,9 +419,9 @@
 								noi di as error "contrast is incompatible with notransform (it needs the elasticity)."
 								exit 198
 							}
-							if `estimator'==3 & `useconstant'==0 & `nosplit'==0 {
+							if `estimator'==3 & `useconstant'==0 & `nosplit'==0 & `uselogapprox'==0 {
 								noi di as error "the reported estimate already IS the reference (estimator(3), exact, splitmass) -- nothing to contrast."
-								noi di as error "Use estimator(3) with constant or poolmass, or estimator(1), to contrast against it."
+								noi di as error "Use estimator(3) with constant, poolmass or logapprox, or estimator(1), to contrast against it."
 								exit 198
 							}
 						}
@@ -1378,6 +1405,7 @@
 										zhexclest(`zH_excl_est') ///
 										`log' ///
 										`constant' ///
+										`logapprox' ///
 										`taxopts' ///
 										`grad' ///
 										`normalize' ///
@@ -1387,7 +1415,7 @@
 										weakid(`weakid_main')
 								}
 								else {
-									saez_transform, zstarorig(`cutoff_orig') bworig(`bw_orig') t0(`t0') t1(`t1') `log' `grad' `constant'
+									saez_transform, zstarorig(`cutoff_orig') bworig(`bw_orig') t0(`t0') t1(`t1') `log' `grad' `constant' `logapprox'
 									}
 
 								/* estimator(0) buncher-ATE lower bound (Goff) is
@@ -2437,6 +2465,7 @@
 							and mass calculation this estimate used.
 						*/
 						ereturn scalar constant = `useconstant'
+						ereturn scalar logapprox = `uselogapprox'
 						ereturn scalar nosplit  = `nosplit'
 						/*
 							e(cmd) used to be set only when vce()!="none",
@@ -2811,18 +2840,21 @@
 							// polynomial, tax rates, window and elasticity from
 							// e(); we pass the response-inversion and mass axes
 							// explicitly so they match how this estimate was run.
-							// Estimators 0/3 are consistent under exact+splitmass,
-							// and estimator 4 (Saez) with constant applies a flat
-							// counterfactual in both the mass and inversion steps
-							// -- both are zero-bias by construction, polbunchbias
-							// errors there, and the capture swallows it silently.
+							// Estimators 0/3 are consistent under exact+splitmass+
+							// exactlog, and estimator 4 (Saez) with constant+exactlog
+							// applies a flat counterfactual in both the mass and
+							// inversion steps -- both are zero-bias by construction,
+							// polbunchbias errors there, and the capture swallows it
+							// silently.  logapprox adds a linearisation bias, so
+							// it lifts that restriction.
 							if "`nobias'" == "" & inlist(`estimator', 0, 1, 2, 3, 4, 5) & ///
 									"`transform'" != "notransform" & "`t0'" != "" & "`t1'" != "" {
 								local _binvopt = cond(`useconstant',"constant","exact")
 								local _bmassopt = cond(`nosplit',"poolmass","splitmass")
+								local _blaopt   = cond(`uselogapprox',"logapprox","exactlog")
 								local _biteropt "iterate"
 								if "`noiterate'" != "" local _biteropt ""
-								capture quietly polbunchbias, `_binvopt' `_bmassopt' `_biteropt'
+								capture quietly polbunchbias, `_binvopt' `_bmassopt' `_blaopt' `_biteropt'
 								local _pbbias_ok = (_rc == 0)
 								capture confirm number 1   // clear _rc left by a failed polbunchbias (it exits 198 on the zero-bias axes for estimators 0/3)
 								if `_pbbias_ok' {
@@ -3329,7 +3361,7 @@
 				ZHEXCLEST(real) ///
 				LOW(integer) ///
 				HIGH(integer) ///
-				[ LOG CONSTANT T0(numlist min=1 max=1) T1(numlist min=1 max=1) nograd nonormalize ZBAR(real 0) MASSOBS(real 0) NOSPLIT(integer 0) WEAKid(integer 0) ]
+				[ LOG CONSTANT LOGAPPROX T0(numlist min=1 max=1) T1(numlist min=1 max=1) nograd nonormalize ZBAR(real 0) MASSOBS(real 0) NOSPLIT(integer 0) WEAKid(integer 0) ]
 
 				loc z `varlist'
 				
@@ -3364,6 +3396,7 @@
 			/* Flags */
 			local islog       = ("`log'"      != "")
 			local constant0   = ("`constant'" != "")
+			local logapprox0  = ("`logapprox'" != "")
 			/*
 				nosplit0: 1 = poolmass  (B = M - int_{zL}^{zH} h0)
 				          0 = splitmass (B = M - int_{zL}^{z*} h0
@@ -3407,6 +3440,7 @@
 				`xscale', ///
 				`islog', ///
 				`constant0', ///
+				`logapprox0', ///
 				`hastax0', ///
 				`t0', ///
 				`t1', ///
@@ -3590,6 +3624,7 @@
 			ereturn scalar H           = `high'
 			ereturn scalar islog       = `islog'
 			ereturn scalar constant    = `constant0'
+			ereturn scalar logapprox   = `logapprox0'
 			ereturn scalar nosplit     = `nosplit0'
 			ereturn scalar hastax      = `hastax0'
 
@@ -3605,7 +3640,7 @@ program define saez_transform, eclass
     version 16.0
 
     syntax , ZSTAROrig(numlist max=1) BWOrig(numlist max=1) ///
-        [T0(numlist max=1) T1(numlist max=1) log nograd constant]
+        [T0(numlist max=1) T1(numlist max=1) log nograd constant logapprox]
 
     tempname b0 V0 theta Vtheta b G V
 
@@ -3628,6 +3663,7 @@ program define saez_transform, eclass
         if (_rc) local dograd = 0
     }
     local useconstant = ("`constant'" != "")
+    local uselogapprox = ("`logapprox'" != "")
 
     local zstarorig : word 1 of `zstarorig'
     local bworig    : word 1 of `bworig'
@@ -3670,7 +3706,7 @@ program define saez_transform, eclass
     mata: st_matrix("`b'", saez_transform( ///
         st_matrix("`theta'"), ///
         `zstarorig', `bworig', `t0', `t1', ///
-        `islog', `hastax', `dograd', `useconstant', "`G'" ///
+        `islog', `hastax', `dograd', `useconstant', `uselogapprox', "`G'" ///
     ))
 
     local outnames h0:_cons h1:_cons bunching:number_bunchers ///
@@ -6188,6 +6224,7 @@ cap program drop bunch_saez
 			real scalar xscale,
 			real scalar islog,
 			real scalar constant,
+			real scalar logapprox,
 			real scalar hastax,
 			real scalar t0,
 			real scalar t1,
@@ -6586,11 +6623,22 @@ cap program drop bunch_saez
 			}
 
 			if (hastax) {
-				elast = ln(1+shift)/A
-				b[1,oe] = elast
+				if (logapprox & !islog) {
+					// log approximation: e = shift/A, no ln(1+shift)
+					elast = shift/A
+					b[1,oe] = elast
 
-				if (dograd) {
-					G[oe,.] = G[oshift,.] / ((1+shift)*A)
+					if (dograd) {
+						G[oe,.] = G[oshift,.] / A
+					}
+				}
+				else {
+					elast = ln(1+shift)/A
+					b[1,oe] = elast
+
+					if (dograd) {
+						G[oe,.] = G[oshift,.] / ((1+shift)*A)
+					}
 				}
 			}
 
@@ -8831,6 +8879,7 @@ real rowvector saez_transform(
     real scalar hastax,
     real scalar dograd,
     real scalar useconstant,
+    real scalar uselogapprox,
     string scalar Gname
 )
 {
@@ -8945,8 +8994,9 @@ real rowvector saez_transform(
 
         if (taxratio > 0 & taxratio != 1) {
             L = ln(taxratio)
-            if (islog) elasticity = marginal_response / L
-            else       elasticity = ln(x) / L
+            if (islog)           elasticity = marginal_response / L
+            else if (uselogapprox) elasticity = shift / L
+            else                 elasticity = ln(x) / L
         }
 
         out = (hminus, hplus, B, excess_mass, shift, marginal_response, elasticity)
@@ -8974,8 +9024,9 @@ real rowvector saez_transform(
                 G[7,.] = J(1,3,.)
             }
             else {
-                if (islog) G[7,.] = dmr / L
-                else       G[7,.] = dshift / (x * L)
+                if (islog)             G[7,.] = dmr / L
+                else if (uselogapprox) G[7,.] = dshift / L
+                else                   G[7,.] = dshift / (x * L)
             }
         }
 
