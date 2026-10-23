@@ -6,7 +6,8 @@
 *!         threaded through pbx_bias_core_ws and the solvers via uselogapprox
 *!         (pbx_bias_core() direct callers get exactlog).  Estimators 0/3 under
 *!         exact+splitmass and estimator(4)+constant are accepted with logapprox
-*!         (pure linearisation bias).  Per-estimator defaults: _logapprox_default.
+*!         (pure linearisation bias).  The estimator(4)+constant refusal is REMOVED: it
+*!         is biased whenever h0 slopes across the window.  Per-estimator defaults: _logapprox_default.
 *!
 *! 2.10.0: estimator numbers 2 and 5 SWAPPED (pure relabelling, no numerical change):
 *!         estimator(2) is now the faithful Chetty (2011) replication (formerly 5),
@@ -634,28 +635,6 @@ program define polbunchbias, rclass
 
     if inlist(`estimator',0,3) & !`useconstant' & !`nosplit' & !`uselogapprox' {
         di as error "polbunchbias: estimator(`estimator') is consistent under exact integration and a split mass calc -- zero bias by construction. Specify constant, poolmass or logapprox (any combination); or use estimator(1), estimator(2), or estimator(4)."
-        exit 198
-    }
-
-    // Saez (estimator 4) with a constant-density inversion uses a FLAT
-    // counterfactual both to form the excess mass and to invert it into a
-    // response -- the two stages agree, so the internal-consistency bias
-    // this command reports is zero by construction (same situation as
-    // estimators 0/3 above).  This is NOT a claim that Saez/constant is
-    // unbiased: it is biased whenever the true counterfactual slopes over
-    // the excluded window.  estimator(4) + exact keeps a non-trivial
-    // internal check (the excess mass is built from a step counterfactual
-    // but inverted against the implied line); a comparable bias across
-    // estimators needs a common counterfactual, not this per-estimator one.
-    if `estimator' == 4 & `useconstant' & !`uselogapprox' {
-        di as error "polbunchbias: estimator(4) with constant has no internal-consistency bias -- Saez"
-        di as error "             with a constant-density inversion applies a flat counterfactual in both"
-        di as error "             the mass and the inversion step, so the bias is zero by construction."
-        di as error "             This is NOT a statement that the Saez/constant estimator is unbiased"
-        di as error "             (it is biased whenever the counterfactual slopes across the window)."
-        di as error "             Add logapprox to measure the linearisation error alone, use"
-        di as error "             estimator(4) with exact for the step-vs-line internal check, or"
-        di as error "             compare estimators against a common counterfactual density."
         exit 198
     }
 

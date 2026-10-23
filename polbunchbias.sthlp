@@ -198,10 +198,8 @@ so its bias against a curved h0 comes from evaluating the exact h0 over the
 reference regions.  With {cmd:exact} the reported bias is the internal
 inconsistency between the step-function counterfactual used to form the
 excess mass and the linear counterfactual it is then inverted against.
-{cmd:estimator(4)} with {cmd:constant} is refused: a flat counterfactual is
-then used in both stages, so the internal bias is zero by construction --
-which does {it:not} mean Saez/constant is unbiased (it is biased whenever
-the counterfactual slopes over the window).
+{cmd:estimator(4)} with {cmd:constant} is allowed: Saez/constant is biased whenever
+the counterfactual slopes over the window, and the reported bias measures that.
 
 {phang}
 {cmd:zstar(}{it:#}{cmd:)} is the kink point z*; all endpoints are centred on it.
@@ -256,8 +254,7 @@ elasticity: {cmd:exactlog} uses ln(1+Delta/z*)/ln((1-t0)/(1-t1)), {cmd:logapprox
 uses (Delta/z*)/ln((1-t0)/(1-t1)).  The reported elasticity bias is measured
 against the structural elasticity, so with {cmd:logapprox} it includes the
 linearisation error.  This is why estimators 0 and 3 under {cmd:exact} and
-{cmd:splitmass}, and estimator 4 with {cmd:constant}, are accepted with
-{cmd:logapprox} but refused without it.  With {cmd:log} it has no effect.
+{cmd:splitmass} are accepted with {cmd:logapprox} but refused without it.  With {cmd:log} it has no effect.
 Match this to how {cmd:polbunch} was run.
 
 {phang}

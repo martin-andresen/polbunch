@@ -2841,12 +2841,10 @@
 							// e(); we pass the response-inversion and mass axes
 							// explicitly so they match how this estimate was run.
 							// Estimators 0/3 are consistent under exact+splitmass+
-							// exactlog, and estimator 4 (Saez) with constant+exactlog
-							// applies a flat counterfactual in both the mass and
-							// inversion steps -- both are zero-bias by construction,
-							// polbunchbias errors there, and the capture swallows it
-							// silently.  logapprox adds a linearisation bias, so
-							// it lifts that restriction.
+							// exactlog -- zero-bias by construction, polbunchbias
+							// errors there, and the capture swallows it silently.
+							// logapprox adds a linearisation bias, so it lifts
+							// that restriction.
 							if "`nobias'" == "" & inlist(`estimator', 0, 1, 2, 3, 4, 5) & ///
 									"`transform'" != "notransform" & "`t0'" != "" & "`t1'" != "" {
 								local _binvopt = cond(`useconstant',"constant","exact")
