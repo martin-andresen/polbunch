@@ -174,7 +174,7 @@
 							(1 = logapprox, 0 = exactlog).  Edit this one line to
 							change a default.
 						*/
-						local _logapprox_default "0 0 1 0 0 0"
+						local _logapprox_default "0 1 1 0 0 0"
 						if "`logapprox'" != ""      loc uselogapprox = 1
 						else if "`exactlog'" != ""  loc uselogapprox = 0
 						else                        loc uselogapprox = real(word("`_logapprox_default'", `estimator'+1))

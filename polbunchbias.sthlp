@@ -63,8 +63,8 @@ override the counterfactual read from {cmd:e(b)}.
 {synopt :{cmd:log}}calculate in log z rather than level z (post-estimation mode reads this from {cmd:e(log)}){p_end}
 {synopt :{cmd:constant}}invert bunching mass to the response with the constant-density shortcut (default for estimators 1 and 2){p_end}
 {synopt :{cmd:exact}}invert bunching mass to the response by solving the density integral (default for estimators 0 and 3){p_end}
-{synopt :{cmd:logapprox}}convert the response to an elasticity with the log approximation, (Delta/z*)/ln((1-t0)/(1-t1)); default for estimator 2; post-estimation mode reads {cmd:e(logapprox)}{p_end}
-{synopt :{cmd:exactlog}}convert the response to an elasticity exactly, ln(1+Delta/z*)/ln((1-t0)/(1-t1)); default except for estimator 2{p_end}
+{synopt :{cmd:logapprox}}convert the response to an elasticity with the log approximation, (Delta/z*)/ln((1-t0)/(1-t1)); default for estimators 1 and 2; post-estimation mode reads {cmd:e(logapprox)}{p_end}
+{synopt :{cmd:exactlog}}convert the response to an elasticity exactly, ln(1+Delta/z*)/ln((1-t0)/(1-t1)); default except for estimators 1 and 2{p_end}
 {synopt :{cmd:poolmass}}back out bunching mass by pooling the fitted counterfactual over the whole excluded window (Chetty 2011 eq. 16; default for estimators 1 and 2){p_end}
 {synopt :{cmd:splitmass}}back out bunching mass by splitting at the kink (default for estimators 0 and 3){p_end}
 {synopt :{cmd:bw(}{it:#}{cmd:)}}bin width used to scale bunching mass; default {cmd:e(bw_orig)} post-estimation, {cmd:bw(1)} standalone{p_end}

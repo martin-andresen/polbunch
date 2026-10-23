@@ -8,7 +8,7 @@
 *!         exact+splitmass and estimator(4)+constant are accepted with logapprox
 *!         (pure linearisation bias).  The estimator(4)+constant refusal is REMOVED: it
 *!         is biased whenever h0 slopes across the window.  Per-estimator defaults: _logapprox_default
-*!         (logapprox for estimator 2 = Chetty et al. eq. 6; exactlog otherwise).
+*!         (logapprox for estimators 1 and 2; exactlog otherwise).
 *!
 *! 2.10.0: estimator numbers 2 and 5 SWAPPED (pure relabelling, no numerical change):
 *!         estimator(2) is now the faithful Chetty (2011) replication (formerly 5),
@@ -622,7 +622,7 @@ program define polbunchbias, rclass
     // Third axis: elasticity = ln(1+Delta/z*)/ln((1-t0)/(1-t1)) (exactlog) vs.
     // (Delta/z*)/ln((1-t0)/(1-t1)) (logapprox).  Defaults per estimator
     // 0..5 live in this one string (1 = logapprox) and must match polbunch.ado.
-    local _logapprox_default "0 0 1 0 0 0"
+    local _logapprox_default "0 1 1 0 0 0"
     if "`logapprox'" != ""            local uselogapprox = 1
     else if "`exactlog'" != ""        local uselogapprox = 0
     else if "`_e_logapprox'" != ""    local uselogapprox = `_e_logapprox'
