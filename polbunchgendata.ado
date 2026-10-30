@@ -215,29 +215,9 @@ program polbunchgendata, rclass
 		}
 
 		// -------- validation --------
-		if !inrange(`t0',0,1) | !inrange(`t1',0,1) | `t1'==`t0' {
-			noi di as error "tax rates t0, t1 must be in [0,1] and differ."
+		if !inrange(`t0',0,1) | !inrange(`t1',0,1) | `t1'<`t0' {
+			noi di as error "tax rates t0, t1 must be in [0,1] with t1>t0."
 			exit 198
-		}
-		// t1<t0: the mirror image of the convex kink.  The marginal buncher
-		// comes from BELOW the cutoff and the response compresses the density
-		// below it (z0 = x*z1 with x = ((1-t0)/(1-t1))^e < 1); the density
-		// above the cutoff is untouched.  Only the baseline iso-elastic
-		// response is implemented for this orientation.
-		local concave = (`t1' < `t0')
-		if `concave' {
-			local _unsup ""
-			if "`incomeeffect'"!="" & "`incomeeffect'"!="0"   local _unsup "incomeeffect()"
-			if `extensive' > 0                                local _unsup "extensive()"
-			if "`focal'" != ""                                local _unsup "focal()"
-			if "`heap'" != ""                                 local _unsup "heap()"
-			if `inattention' > 0                              local _unsup "inattention()"
-			if `welfriction' > 0                              local _unsup "welfriction()"
-			if `ispanel'                                      local _unsup "panel()"
-			if "`_unsup'" != "" {
-				noi di as error "`_unsup' is not supported with t1<t0 (concave kink)."
-				exit 198
-			}
 		}
 		if `elc'<. & `elc'<0 {
 			noi di as error "elasticity() must be nonnegative."
@@ -432,26 +412,7 @@ program polbunchgendata, rclass
 		tempvar z0
 		gen double `z0' = `varlist'
 
-		if `concave' & "`log'"=="log" {
-			// rho < 0: bunchers in [cutoff+rho, cutoff] move up to the cutoff,
-			// everyone below them moves up by -rho
-			tempvar rho
-			gen double `rho' = `ec' * (ln(1-`t0') - ln(1-`t1'))
-			gen byte `bunch' = inrange(`varlist', `cutoff' + `rho', `cutoff')
-			replace `varlist' = `varlist' - `rho' if `varlist' < `cutoff' + `rho'
-			replace `varlist' = `cutoff' if `bunch'
-		}
-		else if `concave' {
-			// x < 1: bunchers in [x*cutoff, cutoff]; z0 < x*cutoff scale up by 1/x
-			tempvar xx
-			gen double `xx' = ((1-`t0')/(1-`t1'))^`ec'
-			gen byte `bunch' = inrange(`varlist', `cutoff' * `xx', `cutoff')
-			tempvar frictionfail
-			gen byte `frictionfail' = 0
-			replace `varlist' = `varlist' / `xx' if `varlist' < `cutoff' * `xx'
-			replace `varlist' = `cutoff' if `bunch'
-		}
-		else if "`log'"=="log" {
+		if "`log'"=="log" {
 			tempvar rho
 			gen double `rho' = `ec' * (ln(1-`t0') - ln(1-`t1'))
 			gen byte `bunch' = inrange(`varlist', `cutoff', `cutoff' + `rho')

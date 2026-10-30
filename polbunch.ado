@@ -1,4 +1,4 @@
-				*! polbunch version date 20261029  (adds concave kinks: t1<t0 / bunchbelow)
+				*! polbunch version date 20261023  (adds logapprox / exactlog)
 				* Author: Martin Eckhoff Andresen
 				* This program is part of the polbunch package.
 				
@@ -34,7 +34,6 @@
 					norankred ///
 					noRANKcheck ///
 					NOBias ///
-					BUNCHBelow /// concave kink: the bunchers come from BELOW the cutoff (implied by t1<t0 when tax rates are given; needed to declare it for reduced-form runs)
 					NOITERate ///
 					SAVEbins(string) ///
 					CONTRAST ///
@@ -77,41 +76,10 @@
 								noi di as error "Tax rates t0 and t1 cannot be equal - no incentive! Estimate reduced form bunching by omitting tax rates."
 								exit 301
 							}
-						}
-
-						/*
-							Orientation.  t1<t0 (a concave kink: the marginal
-							buncher comes from BELOW the cutoff, the density
-							below it is the one that is compressed) is handled
-							by MIRRORING the problem, w = -z around a cutoff of
-							-cutoff, running the unchanged convex machinery and
-							mapping every user-facing result back to the
-							original coordinates before posting.  With a log
-							running variable the response is an additive shift,
-							so the mirror just swaps t0 and t1; in levels the
-							response z0 = x*z1 is multiplicative about z = 0,
-							which w = -z preserves, so the tax rates stay as
-							given and the structural shift of the multiplicative
-							estimator(3) is negative (-1 < delta < 0).
-						*/
-						local concave = 0
-						if "`t0'"!="" {
-							if `t1'<`t0' local concave = 1
-						}
-						if "`bunchbelow'" != "" {
-							if "`t0'"!="" {
-								if `t1'>`t0' {
-									noi di as error "bunchbelow contradicts t1>t0 (a convex kink has its bunchers above the cutoff)."
-									exit 198
-								}
+							if `t1'<`t0' {
+								noi di as error "Polbunch currently support only convex kinks, t1>t0."
+								exit 301
 							}
-							local concave = 1
-						}
-						local t0_user "`t0'"
-						local t1_user "`t1'"
-						if `concave' & "`log'"=="log" & "`t0'"!="" {
-							local t0 "`t1_user'"
-							local t1 "`t0_user'"
 						}
 						
 						
@@ -179,16 +147,6 @@
 							exit 198
 						}
 						if "`allownegative'" == "" local positive positive
-						/*
-							Mirrored level-mode estimator(3): the structural
-							shift is x - 1 with x = ((1-t0)/(1-t1))^e < 1, so
-							the search runs over (-1, 0) instead of (0, deltamax].
-							Estimators 2 and 5 scale the density vertically by
-							1/(1+delta) on the (mirrored) bunching side and keep
-							delta > 0.  Passed to the subprograms as the flag
-							option `negative' in place of `positive'.
-						*/
-						if `concave' & "`log'" == "" & `estimator' == 3 & "`positive'" != "" local positive negative
 
 						if "`constant'" != ""      loc useconstant = 1
 						else if "`exact'" != ""    loc useconstant = 0
@@ -588,18 +546,6 @@
 								exit 198
 							}
 						}
-						/*
-							Mirror (concave kink): w = -z, cutoff -> -cutoff.
-							Everything below -- binning, window, fits, bias --
-							then sees an ordinary convex-orientation problem;
-							the results are mapped back just before posting.
-						*/
-						if `concave' {
-							local _zmv : word `nvars' of `varlist'
-							replace `_zmv' = -`_zmv'
-							local cutoff = -`cutoff'
-						}
-
 						if `nvars'==2 { //find bw in pre-binned data
 							loc y: word 1 of `varlist'
 							loc z: word 2 of `varlist'
@@ -685,11 +631,6 @@
 							gettoken L H : limits
 							local L = real("`L'")
 							local H = real("`H'")
-							if `concave' {
-								local _Lt = `L'
-								local L = `H'
-								local H = `_Lt'
-							}
 						}
 
 						tempvar zleft zright relbin crossbin edgehit inbunch
@@ -893,9 +834,6 @@
 									local _mvars `_mvars' `clustvar'`_k'
 								}
 								mkmat `_mvars', matrix(`_Mraw')
-								/* rows follow the (mirrored) sort of the histogram; the
-								   stub columns are still in the user's bin order */
-								if `concave' mata: st_matrix("`_Mraw'", st_matrix("`_Mraw'")[., cols(st_matrix("`_Mraw'")) .. 1])
 								mata: pbx_covis_check("`_Mraw'", "`y'")
 								if r_pbx_covchk == 1 {
 									noi di as error "vce(cluster `clustvar'): the supplied co-visitation matrix is not symmetric."
@@ -1086,11 +1024,7 @@
 
 						scalar dstart = .
 						
-						if "`positive'" == "negative" {
-							local dstart_lower = -1
-							local dstart_default = -0.05
-							}
-						else if "`positive'" != "" {
+						if "`positive'" != "" {
 							local dstart_lower = 0
 							local dstart_default = 0.05
 							}
@@ -1124,7 +1058,7 @@
 								Use first usable polynomial coefficient, not the constant.
 							*/
 							forvalues j = 1/`polynomial' {
-								if missing(dstart) | (dstart <= 0 & "`positive'" != "negative") {
+								if missing(dstart) | dstart <= 0 {
 									if abs(`h0coefs'[1,`j']) > 1e-12 & ///
 									   `h1coefs'[1,`j'] / `h0coefs'[1,`j'] > 0 {
 										scalar dstart = ///
@@ -1152,22 +1086,12 @@
 						/*
 							Fallback / bounds.
 						*/
-						if "`positive'" == "negative" {
-							if missing(dstart) | dstart >= 0 | dstart <= -1 {
-								scalar dstart = -0.05
-							}
-							if dstart < -0.5 {
-								scalar dstart = -0.5
-							}
+						if missing(dstart) | dstart <= `dstart_lower' {
+							scalar dstart = 0.05
 						}
-						else {
-							if missing(dstart) | dstart <= `dstart_lower' {
-								scalar dstart = 0.05
-							}
 
-							if dstart > 0.5 {
-								scalar dstart = 0.5
-							}
+						if dstart > 0.5 {
+							scalar dstart = 0.5
 						}
 							
 						local dstart = scalar(dstart)
@@ -2243,7 +2167,7 @@
 												scalar r_pbx_bw_est       = `bw_est'
 												scalar r_pbx_zbar         = `zbar_est'
 												scalar r_pbx_islog        = ("`log'" != "")
-												scalar r_pbx_positive     = cond("`positive'" == "negative", -1, ("`positive'" != ""))
+												scalar r_pbx_positive     = ("`positive'" != "")
 												scalar r_pbx_init         = `init'
 												capture noisily mata: pbx_mdt_bootstat("`_mdb_b0s'", "`_mdb_V0copy'")
 												if !_rc local _mdboot_ok = 1
@@ -2440,51 +2364,6 @@
 						restore
 
 						/*
-							Mirror back (concave kink).  Everything above ran
-							on w = -z; map every user-facing result to the
-							original coordinates before it is posted, so that
-							e(), polbunchplot, polbunchbias etc. only ever see
-							the user's own orientation.  h0 stays the
-							counterfactual and h1 the distorted-side density.
-						*/
-						if `concave' {
-							foreach _mv in cutoff_orig cutoff_est {
-								local `_mv' = -``_mv''
-							}
-							local _tmv = `zL_excl_orig'
-							local zL_excl_orig = -`zH_excl_orig'
-							local zH_excl_orig = -`_tmv'
-							local _tmv = `zL_excl_est'
-							local zL_excl_est = -`zH_excl_est'
-							local zH_excl_est = -`_tmv'
-							local _tmv = `dL'
-							local dL = -`dR'
-							local dR = -`_tmv'
-							local _tmv = `_zlo_val'
-							local _zlo_val = -`_zhi_val'
-							local _zhi_val = -`_tmv'
-							local cutoff = -`cutoff'
-							local t0 "`t0_user'"
-							local t1 "`t1_user'"
-							polbunch_mirror_out, bmat(`bmain') vmat(`Vmain') table(`table') bins(`binsraw') ///
-								estimator(`estimator') `log'
-							foreach _gp in dispersion deviance gof_df {
-								local _ga "`gof_`_gp'_below'"
-								local _gb "`gof_`_gp'_above'"
-								local gof_`_gp'_below "`_gb'"
-								local gof_`_gp'_above "`_ga'"
-							}
-							local _ga "`gof_deviance_below_p'"
-							local gof_deviance_below_p "`gof_deviance_above_p'"
-							local gof_deviance_above_p "`_ga'"
-							// Goff's buncher-ATE bound is a bound on E[w0-w1] in the
-							// mirrored frame, i.e. an UPPER bound on E[z0-z1] here
-							local buncherlb_main  = .
-							local buncherz0_main  = .
-							local buncherz1_main  = .
-						}
-
-						/*
 							scale() -- glm-style overdispersion multiplier
 							(vce(conventional) only; validated at parse time).
 							scale(x2) uses the Pearson phi-hat from the reference
@@ -2576,7 +2455,6 @@
 							}
 						}
 						ereturn scalar polynomial=`polynomial'
-						ereturn scalar concave = `concave'
 						ereturn scalar lower_limit=`zL_excl_orig'
 						ereturn scalar upper_limit=`zH_excl_orig'
 						ereturn local normalize="`normalize'"
@@ -3129,11 +3007,6 @@
 					*/
 					if `"`savebins'"' != "" {
 						local _sbJ = rowsof(`_Mraw')
-						if `concave' {
-							/* write back in the user's orientation */
-							mata: pbx_sb_unmirror("`_sbhist'", "`_Mraw'")
-							local cutoff_orig = -`cutoff_orig'
-						}
 						tempname _sbfr
 						frame create `_sbfr'
 						frame `_sbfr' {
@@ -3229,7 +3102,7 @@
 				zh_excl_orig(real) ///
 				zl_excl_est(real) ///
 				zh_excl_est(real) ///
-				[ nonormalize LOG vce(string) initdelta(real 0.05) DELTAmax(real 1) positive NEGative HCType(real -1) MASScorr(real 1) COVis(name) NCLust(real 0) nosplit(integer 1) WVec(name) ]
+				[ nonormalize LOG vce(string) initdelta(real 0.05) DELTAmax(real 1) positive HCType(real -1) MASScorr(real 1) COVis(name) NCLust(real 0) nosplit(integer 1) WVec(name) ]
 
 			gettoken yvar rest : varlist
 			gettoken zvar rest : rest
@@ -3245,7 +3118,7 @@
 
 			local normalized0 = ("`normalize'" != "nonormalize")
 			local islog0      = ("`log'"        != "")
-			local positive0 = cond("`negative'" != "", -1, ("`positive'" != ""))
+			local positive0 = ("`positive'" != "")
 			local dovar0 = ("`vce'"=="analytic")
 			
 			tempvar y_t z_t side_t bunch_t
@@ -3793,10 +3666,8 @@ program define saez_transform, eclass
     local zstarorig : word 1 of `zstarorig'
     local bworig    : word 1 of `bworig'
 
-    // level mode needs a nonzero cutoff; a negative one is the mirrored
-    // image (w = -z) of a concave kink and is legitimate
-    if (`zstarorig' == 0 & "`log'" == "") {
-        di as err "zstarorig() must be nonzero"
+    if (`zstarorig' <= 0) {
+        di as err "zstarorig() must be positive"
         exit 198
     }
     if (`bworig' <= 0) {
@@ -3872,72 +3743,6 @@ program define saez_transform, eclass
     ereturn local cmd "saez_transform"
 	ereturn local properties "b V"
     ereturn display
-end
-
-cap program drop polbunch_mirror_out
-program define polbunch_mirror_out
-	version 16.0
-	/*
-		Map a fit made on the mirrored data w = -z back to the original
-		orientation, in place: odd-power polynomial coefficients flip sign;
-		marginal_response flips sign; in log mode the additive shift is
-		rho_w = -rho, so shift = exp(rho)-1 becomes 1/(1+shift)-1 (and the
-		multiplicative estimator(3)'s delta likewise).  In levels the shift
-		is x-1 on both sides of the mirror.  V -> J V J' with J the diagonal
-		derivative of the map.  e(table) and e(bins) hold the bin midpoints:
-		negate and reverse the row order so they stay ascending.
-	*/
-	syntax , BMAT(name) VMAT(name) TABLE(name) BINS(name) ESTimator(integer) [ LOG ]
-
-	local nc = colsof(`bmat')
-	local nm : colnames `bmat'
-	local eq : coleq `bmat'
-	tempname Jv
-	matrix `Jv' = J(1, `nc', 1)
-	forvalues j = 1/`nc' {
-		local c : word `j' of `nm'
-		local q : word `j' of `eq'
-		local v = `bmat'[1, `j']
-		if inlist("`q'", "h0", "h1") {
-			local pw = 0
-			if "`c'" != "_cons" {
-				local npound = length("`c'") - length(subinstr("`c'", "#", "", .))
-				local pw = `npound' + 1
-			}
-			if mod(`pw', 2) == 1 {
-				matrix `Jv'[1, `j'] = -1
-				if !missing(`v') matrix `bmat'[1, `j'] = -`v'
-			}
-		}
-		else if "`q'" == "bunching" {
-			if "`c'" == "marginal_response" {
-				matrix `Jv'[1, `j'] = -1
-				if !missing(`v') matrix `bmat'[1, `j'] = -`v'
-			}
-			else if ("`c'" == "shift" | ("`c'" == "delta" & `estimator' == 3)) & "`log'" == "log" {
-				if !missing(`v') & `v' > -1 {
-					matrix `Jv'[1, `j'] = -1 / (1 + `v')^2
-					matrix `bmat'[1, `j'] = 1 / (1 + `v') - 1
-				}
-			}
-		}
-	}
-	capture confirm matrix `vmat'
-	if !_rc {
-		tempname Dg
-		matrix `Dg' = diag(`Jv')
-		matrix `vmat' = `Dg' * `vmat' * `Dg''
-	}
-	foreach m in `table' `bins' {
-		local nr = rowsof(`m')
-		tempname M2
-		matrix `M2' = `m'
-		forvalues i = 1/`nr' {
-			local k = `nr' - `i' + 1
-			matrix `m'[`i', 1] = `M2'[`k', 1]
-			matrix `m'[`i', 2] = -`M2'[`k', 2]
-		}
-	}
 end
 
 cap program drop bunch_saez
@@ -4223,7 +4028,7 @@ cap program drop bunch_saez
 			BWORIG(real) ///
 			BWEST(real) ///
 			ZBAR(real) ///
-			[ NONORMALIZE LOG POSitive NEGative INITDELTA(real 0.05) ]
+			[ NONORMALIZE LOG POSitive INITDELTA(real 0.05) ]
 
 		if !inlist(`estimator', 1, 2, 3, 5) {
 			di as err "polbunch_minimumdistancetest only handles estimator(1), estimator(2), estimator(3), or estimator(5)"
@@ -4262,7 +4067,7 @@ cap program drop bunch_saez
 		matrix `V' = e(V)
 
 		local islog0   = ("`log'" != "")
-		local positive0 = cond("`negative'" != "", -1, ("`positive'" != ""))
+		local positive0 = ("`positive'" != "")
 
 		capture noisily mata: polbunch_mdt_mata( ///
 			"`b'", ///
@@ -5603,9 +5408,6 @@ cap program drop bunch_saez
 			if (positive == 1) {
 				if (delta <= 0) return(1e300)
 			}
-			else if (positive == -1) {
-				if (delta >= 0 | 1 + delta <= 1e-8) return(1e300)
-			}
 			else {
 				if (1 + delta <= 1e-8) return(1e300)
 			}
@@ -6166,24 +5968,6 @@ cap program drop bunch_saez
 
 	/* Stash the individual (cluster id, bin id) pairs before polbunch
 	   collapses the data to a histogram. */
-	/* savebins() for concave kinks: reverse bin order (rows of the
-	   histogram, rows and columns of M_raw) and negate the midpoints */
-	void pbx_sb_unmirror(string scalar histname, string scalar Mname)
-	{
-		real matrix H, M
-		real colvector p
-
-		H = st_matrix(histname)
-		M = st_matrix(Mname)
-		p = (rows(H)..1)'
-		H = H[p, .]
-		H[., 2] = -H[., 2]
-		M = M[p, p]
-		st_matrix(histname, H)
-		st_matrix(Mname, M)
-		st_matrixcolstripe(histname, (J(2, 1, ""), ("freq" \ "midpoint")))
-	}
-
 	void pbx_cluster_stash(string scalar idv, string scalar binv)
 	{
 		external real colvector pbx_CLID
@@ -6955,12 +6739,6 @@ cap program drop bunch_saez
 				        0.05 \ 0.075 \ 0.10 \ 0.15 \ 0.20 \ 0.30 \ 0.50 \
 				        0.75 \ 1 \ 1.5 \ 2 \ 3 \ 5)
 			}
-			else if (positive == -1) {
-				// mirrored multiplicative response, x = 1+delta in (0,1)
-				grid = (-0.99 \ -0.95 \ -0.90 \ -0.80 \ -0.70 \ -0.60 \ -0.50 \
-				        -0.40 \ -0.30 \ -0.20 \ -0.15 \ -0.10 \ -0.075 \ -0.05 \
-				        -0.025 \ -0.01 \ -0.005 \ -1e-3 \ -1e-4 \ -1e-6 \ -1e-8)
-			}
 			else {
 				grid = (-0.99 \ -0.95 \ -0.90 \ -0.80 \ -0.70 \ -0.60 \ -0.50 \
 				        -0.40 \ -0.30 \ -0.20 \ -0.15 \ -0.10 \ -0.075 \ -0.05 \
@@ -7203,7 +6981,7 @@ cap program drop bunch_saez
 
 			Hstar_obs = sum(select(y, bunch :> 0))
 
-			if (positive != -1 & (initdelta <= 0 | initdelta >= .)) {
+			if (initdelta <= 0 | initdelta >= .) {
 				initdelta = 0.05
 			}
 
@@ -7237,25 +7015,15 @@ cap program drop bunch_saez
 
 				if (positive == 1) lb = 1e-8
 				else               lb = -1 + 1e-8
-				if (positive == -1) {
-					// mirrored level estimator(3): 1/(1+deltamax) <= x < 1
-					dhi = deltamax
-					if (dhi >= . | dhi <= 0) dhi = 1
-					lb = 1/(1 + dhi) - 1 + 1e-8
-					dhi = -1e-8
-					if (initdelta >= 0 | initdelta <= lb | initdelta >= .) initdelta = -0.05
-				}
-				else {
-					if (initdelta <= lb | initdelta >= .) initdelta = 0.05
+				if (initdelta <= lb | initdelta >= .) initdelta = 0.05
 
-					/*
-						Economic upper bound on the structural delta: deltamax
-						(default 1 -- a 100% earnings response at the kink).
-					*/
-					dhi = deltamax
-					if (dhi >= . | dhi <= 0)  dhi = 1
-					if (dhi <= lb)            dhi = lb + 1e-6
-				}
+				/*
+					Economic upper bound on the structural delta: deltamax
+					(default 1 -- a 100% earnings response at the kink).
+				*/
+				dhi = deltamax
+				if (dhi >= . | dhi <= 0)  dhi = 1
+				if (dhi <= lb)            dhi = lb + 1e-6
 
 				bestQ     = .
 				nbasin    = .
@@ -8048,9 +7816,6 @@ cap program drop bunch_saez
 			if (positive == 1) {
 				if (delta <= 1e-8) return(J(0,0,.))
 			}
-			else if (positive == -1) {
-				if (delta >= -1e-8 | 1 + delta <= 1e-8) return(J(0,0,.))
-			}
 			else {
 				if (1 + delta <= 1e-8) return(J(0,0,.))
 			}
@@ -8288,16 +8053,6 @@ cap program drop bunch_saez
 				1e-8, 1e-6, 1e-4, 1e-3, 0.005, 0.01, 0.025,
 				0.05, 0.075, 0.10, 0.15, 0.20, 0.30, 0.50,
 				0.75, 1, 1.5, 2
-			)
-		}
-		else if (positive == -1) {
-			lo = -1 + 1e-8
-			if (initdelta >= -1e-8 | initdelta <= lo | initdelta >= .) initdelta = -0.05
-
-			grid = (
-				-0.99, -0.95, -0.90, -0.80, -0.70, -0.60, -0.50, -0.40,
-				-0.30, -0.20, -0.15, -0.10, -0.075, -0.05, -0.025, -0.01,
-				-0.005, -1e-3, -1e-4, -1e-6
 			)
 		}
 		else {
@@ -9143,9 +8898,7 @@ real rowvector saez_transform(
 
     s = hminus + hplus
     if (hminus <= 0 | hplus <= 0 | s <= 0) return(out)
-    // zstarorig is only used in levels, where a negative value is the
-    // mirror image (w = -z) of a concave kink
-    if (bworig <= 0 | (!islog & zstarorig == 0)) return(out)
+    if (zstarorig <= 0 | bworig <= 0) return(out)
 
     // excess mass is in bins
     excess_mass = 2 * B / s

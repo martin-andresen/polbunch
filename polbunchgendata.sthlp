@@ -30,7 +30,7 @@ relocated according to the model.  The behavioural response is written into
 {synopt:{opt obs(#)}}Number of observations.  Default 5000.{p_end}
 {synopt:{opt cutoff(#)}}Kink point (in levels, or in logs with {opt log}).  Default 1.{p_end}
 {synopt:{opt t0(#)}}Marginal tax rate below the kink.  Default 0.2.{p_end}
-{synopt:{opt t1(#)}}Marginal tax rate above the kink.  Default 0.6.  {cmd:t1()<t0()} generates the mirror-image kink in which the bunchers come from {it:below} the cutoff (z0 in [x*cutoff, cutoff] with x = ((1-t0)/(1-t1))^e < 1, or [cutoff+rho, cutoff] in logs, move up to the cutoff and the density below them is shifted up); only the baseline iso-elastic response is implemented for this orientation (not {opt incomeeffect()}, {opt heap()}, {opt inattention()}, {opt welfriction()}, {opt focal()}, {opt extensive()}, {opt panel()}).{p_end}
+{synopt:{opt t1(#)}}Marginal tax rate above the kink.  Default 0.6.{p_end}
 {synopt:{opt el:asticity(spec)}}Compensated elasticity.  {it:spec} is {bf:either} a
 nonnegative number (homogeneous elasticity) {bf:or} any Stata expression,
 evaluated per observation, that draws an individual elasticity -- e.g.
