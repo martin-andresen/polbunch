@@ -1,5 +1,18 @@
 *! polbunchbias -- analytical bias of polynomial bunching estimators
-*! version 2.11.0  23oct2026
+*! version 2.12.0  29oct2026
+*!
+*! 2.12.0: concave kinks (t1<t0; bunchers from BELOW the cutoff).  e()-mode reads
+*!         e(concave) (set by polbunch, which posts e() in the user's own
+*!         orientation); explicit mode infers it from t1<t0.  The engine itself is
+*!         unchanged: the problem is mirrored, w = -z (odd powers of the centred
+*!         counterfactual flip, cutoff and window/support bounds are negated and
+*!         swapped), solved as an ordinary convex-orientation problem, and every
+*!         result is mapped back (pbx_unmirror_row).  In levels the response
+*!         z0 = x*z1 is multiplicative about z = 0, which w = -z preserves, so t0/t1
+*!         are kept (x < 1, zstar < 0, r = zstar*(x-1) > 0); in logs the response is
+*!         an additive shift, so t0 and t1 are swapped.  Convex output is
+*!         bit-identical.  Validated by Monte Carlo against a concave DGP (level and
+*!         log; estimators 1, 3 and 5 bias-corrected to the true elasticity).
 *!
 *! 2.11.0: new logapprox / exactlog axis (elasticity = (Delta/z*)/A vs ln(1+Delta/z*)/A,
 *!         A = ln((1-t0)/(1-t1))); read from e(logapprox), r(logapprox) returned,
@@ -440,6 +453,18 @@ program define polbunchbias, rclass
     // units the user's z happens to be in, exactly mirroring how e()-mode
     // already avoids this by construction via polbunch's own xscale choice.
     local _rawcoef = 0
+    // concave kink (t1<t0): the engine works on the mirror image w = -z, where
+    // it is an ordinary convex-orientation problem; the originals are kept
+    // for mapping the results back
+    local _mirror = 0
+    local _bcoef_w = 0
+    local _zstar0 = .
+    local _zlo0 = .
+    local _zhi0 = .
+    local _zl0 = .
+    local _zh0 = .
+    local _t0o = .
+    local _t1o = .
 
     if `ncore' == 0 {
         // ================= e() MODE =================
@@ -492,6 +517,29 @@ program define polbunchbias, rclass
         }
         local elasticity = `_elast'
 
+        // concave kink: polbunch posts e() in the user's own orientation and
+        // flags it; work in the mirrored (w = -z) frame from here on
+        capture local _conc = e(concave)
+        if !_rc & "`_conc'" == "1" {
+            local _mirror = 1
+            local _zstar0 = `zstar'
+            local _zlo0 = `zlo'
+            local _zhi0 = `zhi'
+            local _zl0 = `zl'
+            local _zh0 = `zh'
+            local _t0o = `t0'
+            local _t1o = `t1'
+            _pbx_mirror_in, zstar(`zstar') zlo(`zlo') zhi(`zhi') zl(`zl') zh(`zh') ///
+                t0(`t0') t1(`t1') islog(`islog_val')
+            local zstar = r(zstar)
+            local zlo = r(zlo)
+            local zhi = r(zhi)
+            local zl  = r(zl)
+            local zh  = r(zh)
+            local t0  = r(t0)
+            local t1  = r(t1)
+        }
+
         if "`bw'" == "" local bw = `_bw'
 
         // ---- build the counterfactual polynomial bcoef ----
@@ -541,6 +589,7 @@ program define polbunchbias, rclass
                 local _m0 = cond(`_a' > 0, `_m'/`_a', 0)
             }
             matrix `bcoef' = (1, `_m0')
+            local _bcoef_w = 1
         }
         else {
             // Polynomial estimator: pull all h0 coefficients from e(b) and
@@ -567,6 +616,25 @@ program define polbunchbias, rclass
         // ================= EXPLICIT MODE =================
         local islog_val = ("`log'" != "")
         local _rawcoef = 1
+        if `t1' < `t0' {
+            local _mirror = 1
+            local _zstar0 = `zstar'
+            local _zlo0 = `zlo'
+            local _zhi0 = `zhi'
+            local _zl0 = `zl'
+            local _zh0 = `zh'
+            local _t0o = `t0'
+            local _t1o = `t1'
+            _pbx_mirror_in, zstar(`zstar') zlo(`zlo') zhi(`zhi') zl(`zl') zh(`zh') ///
+                t0(`t0') t1(`t1') islog(`islog_val')
+            local zstar = r(zstar)
+            local zlo = r(zlo)
+            local zhi = r(zhi)
+            local zl  = r(zl)
+            local zh  = r(zh)
+            local t0  = r(t0)
+            local t1  = r(t1)
+        }
         if "`bw'" == "" local bw = 1
         if "`h0poly'" != "" {
             local _nb : word count `h0poly'
@@ -594,6 +662,12 @@ program define polbunchbias, rclass
     if !inlist(`estimator', 0, 1, 2, 3, 4, 5) {
         di as error "polbunchbias: estimator must be 0, 1, 2, 3, 4 or 5"
         exit 198
+    }
+
+    // mirror the supplied/fitted counterfactual: s -> -s flips odd powers
+    // (the Saez reconstruction above was already built in the mirrored frame)
+    if `_mirror' & !`_bcoef_w' {
+        mata: st_matrix("`bcoef'", pbx_polmirror(st_matrix("`bcoef'")))
     }
 
     // renormalise a raw-z-unit bcoef (h0poly/relslope/Saez) onto the fitting
@@ -826,6 +900,27 @@ program define polbunchbias, rclass
     local _K  = `_Kused'
     local _K1 = `_Kused' + 1
 
+    // ---- concave kink: map every result back to the user's orientation ----
+    if `_mirror' {
+        mata: st_matrix("`out'", pbx_unmirror_row(st_matrix("`out'"), `islog_val', ///
+            `_zstar0', `_t0o', `_t1o'))
+        mata: st_matrix("`bbeta'", pbx_polmirror(st_matrix("`bbeta'")))
+        mata: st_matrix("`bcur'", pbx_polmirror(st_matrix("`bcur'")))
+        capture confirm matrix `_uout'
+        if !_rc mata: st_matrix("`_uout'", pbx_unmirror_row(st_matrix("`_uout'"), `islog_val', ///
+            `_zstar0', `_t0o', `_t1o'))
+        capture confirm matrix `_iterout'
+        if !_rc mata: st_matrix("`_iterout'", pbx_unmirror_row(st_matrix("`_iterout'"), `islog_val', ///
+            `_zstar0', `_t0o', `_t1o'))
+        local zstar = `_zstar0'
+        local zlo = `_zlo0'
+        local zhi = `_zhi0'
+        local zl  = `_zl0'
+        local zh  = `_zh0'
+        local t0  = `_t0o'
+        local t1  = `_t1o'
+    }
+
     // pbx_bias_core_ws echoes columns 13-16 as offsets from the cutoff (its
     // own native w-space convention); r(zlo)/r(zhi)/r(zL)/r(zH) have always
     // meant the ABSOLUTE window bounds (matching explicit mode's own
@@ -968,6 +1063,83 @@ program define polbunchbias, rclass
 
     capture matrix drop _pbxs_core _pbxs_bbeta _pbxs_bcur
     capture scalar drop _pbxs_ecur _pbxs_iter _pbxs_conv _pbxs_diverged
+end
+
+* ====================================================================
+* Concave-kink mirror (w = -z)
+*
+* Mirroring the running variable around the cutoff turns a kink whose
+* bunchers come from BELOW into the ordinary convex-orientation problem
+* the engine solves: odd powers of the centred counterfactual flip sign,
+* the cutoff and the window/support bounds are negated and swapped.  In
+* levels the response z0 = x*z1 is multiplicative about z = 0, which
+* z -> -z preserves, so t0/t1 are kept (x < 1, cutoff < 0, and the
+* engine's r = zstar*(x-1) is positive).  In logs the response is an
+* additive shift, so t0 and t1 are swapped.
+* ====================================================================
+
+capture program drop _pbx_mirror_in
+program define _pbx_mirror_in, rclass
+    version 16.0
+    syntax , ZSTAR(real) ZLO(real) ZHI(real) ZL(real) ZH(real) T0(real) T1(real) ISLOG(integer)
+    return scalar zstar = -`zstar'
+    return scalar zlo   = -`zhi'
+    return scalar zhi   = -`zlo'
+    return scalar zl    = -`zh'
+    return scalar zh    = -`zl'
+    if `islog' {
+        return scalar t0 = `t1'
+        return scalar t1 = `t0'
+    }
+    else {
+        return scalar t0 = `t0'
+        return scalar t1 = `t1'
+    }
+end
+
+capture mata: mata drop pbx_polmirror()
+capture mata: mata drop pbx_unmirror_row()
+
+mata:
+// s -> -s on a polynomial row (b0, b1, ..., bK): odd powers change sign
+real rowvector pbx_polmirror(real rowvector b)
+{
+    real rowvector c
+    real scalar k
+    c = b
+    for (k = 2; k <= cols(b); k = k + 2) c[k] = -b[k]
+    return(c)
+}
+
+// map one pbx_bias_core_ws result row (26 columns, see names in polbunchbias)
+// from the mirrored frame back to the user's orientation
+real rowvector pbx_unmirror_row(real rowvector o, real scalar islog,
+    real scalar zstar0, real scalar t0o, real scalar t1o)
+{
+    real rowvector m
+    real scalar tmp
+    m = o
+    m[4] = zstar0
+    m[5] = t0o
+    m[6] = t1o
+    m[7] = (1 - t0o) / (1 - t1o)
+    if (islog) {
+        // additive shift flips: rho -> -rho, x -> 1/x, lambda per unit ln z flips
+        m[8]  = -o[8]
+        m[10] = 1 / o[10]
+        m[11] = -o[11]
+        m[12] = m[10] - 1
+        m[26] = -o[26]
+    }
+    // dL/dR are distances from the cutoff to the centre of the left/right
+    // fitting region; the left region of the mirror image is the right one
+    tmp   = o[17]
+    m[17] = o[18]
+    m[18] = tmp
+    m[22] = -o[22]
+    m[25] = -o[25]
+    return(m)
+}
 end
 
 * ====================================================================

@@ -320,6 +320,7 @@ program define polbunch_permute, rclass
 	local nsp0       = e(nosplit)
 	local islog0     = (e(log) == 1)
 	local nonorm0    = ("`e(normalize)'" == "nonormalize")
+	local conc0      = (e(concave) == 1)
 
 	local lo0 = e(lower_limit)
 	local hi0 = e(upper_limit)
@@ -433,6 +434,7 @@ program define polbunch_permute, rclass
 	local mass0 = cond(`nsp0',"poolmass","splitmass")
 	local lg0   = cond(`islog0',"log","")
 	local nn0   = cond(`nonorm0',"nonormalize","")
+	local cc0   = cond(`conc0',"bunchbelow","")
 
 	/* nodrop forced on every reconstructed call (true cutoff AND placebos)  *
 	 * -- NOT because the target itself necessarily used nodrop, but        *
@@ -463,7 +465,7 @@ program define polbunch_permute, rclass
 	 * deviance_below need no test() at all, vce(conventional) alone       *
 	 * already posts them.                                                 */
 	local basespec estimator(`estimator0') polynomial(`k0') `bwopt' ///
-		limits(`L0' `Hlim0') `inv0' `la0opt' `mass0' `lg0' `nn0' allownegative ///
+		limits(`L0' `Hlim0') `inv0' `la0opt' `mass0' `lg0' `nn0' `cc0' allownegative ///
 		deltamax(`deltamax') `rankopt' vce(conventional) nobias `spectestopt' nodrop
 
 	/* every refit's window is inrange(zvar,lo,hi) from e(zlo)/e(zhi) --     *

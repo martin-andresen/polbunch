@@ -45,8 +45,8 @@ Standalone mode (all required options supplied explicitly):
 {syntab:Required (standalone mode only)}
 {synopt :{cmd:estimator(}{it:#}{cmd:)}}estimator whose bias is evaluated: 0, 1, 2, 3 or 4{p_end}
 {synopt :{cmd:zstar(}{it:#}{cmd:)}}bunching point or kink point, z*{p_end}
-{synopt :{cmd:t0(}{it:#}{cmd:)}}lower tax rate, t0{p_end}
-{synopt :{cmd:t1(}{it:#}{cmd:)}}higher tax rate, t1{p_end}
+{synopt :{cmd:t0(}{it:#}{cmd:)}}tax rate below the cutoff, t0{p_end}
+{synopt :{cmd:t1(}{it:#}{cmd:)}}tax rate above the cutoff, t1; {cmd:t1()<t0()} is the mirror-image (concave) kink with bunchers from below, handled by mirroring the problem and mapping the results back{p_end}
 {synopt :{cmd:elasticity(}{it:#}{cmd:)}}true elasticity against which bias is evaluated{p_end}
 {synopt :{cmd:support(}{it:zlo zhi}{cmd:)}}lower/upper bound of the estimation (fitting) window, in {it:z}-units (not bins){p_end}
 {synopt :{cmd:window(}{it:zl zh}{cmd:)}}lower/upper edge of the excluded / bunching region, in {it:z}-units (not bins){p_end}
@@ -205,8 +205,17 @@ the counterfactual slopes over the window, and the reported bias measures that.
 {cmd:zstar(}{it:#}{cmd:)} is the kink point z*; all endpoints are centred on it.
 
 {phang}
-{cmd:t0(}{it:#}{cmd:)} / {cmd:t1(}{it:#}{cmd:)} are the lower / higher tax
-rates; {it:tau = (1 - t0)/(1 - t1)}.
+{cmd:t0(}{it:#}{cmd:)} / {cmd:t1(}{it:#}{cmd:)} are the tax rates below / above
+the cutoff; {it:tau = (1 - t0)/(1 - t1)}.  With {cmd:t1()>t0()} the bunchers
+come from above the cutoff.  With {cmd:t1()<t0()} (a concave kink, bunchers from
+{it:below}; in post-estimation mode flagged by {cmd:e(concave)}) the problem is
+mirrored around the cutoff ({it:w} = -{it:z}: odd powers of the centred
+counterfactual flip sign, the cutoff and the window/support bounds are negated and
+swapped), solved with the unchanged engine and mapped back, so {cmd:relslope()},
+{cmd:h0poly()}, {cmd:window()}, {cmd:support()} and every {cmd:r()} result are in
+the user's own orientation.  In levels the multiplicative response about z = 0
+survives the mirror, so t0 and t1 are kept (x = tau^e < 1, Delta < 0); in logs
+the response is an additive shift and the mirror swaps t0 and t1.
 
 {phang}
 {cmd:relslope(}{it:#}{cmd:)} -- degree-1 counterfactual: h0(z*) = 1 and

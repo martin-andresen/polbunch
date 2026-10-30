@@ -34,6 +34,7 @@ from the bin spacing and {opt bw()} may not be specified.
 {synopt:{opt log}}specifies that the running variable is in logs{p_end}
 {synopt:{opt t0(#)}}linear tax rate below the cutoff{p_end}
 {synopt:{opt t1(#)}}linear tax rate above the cutoff{p_end}
+{synopt:{opt bunchbelow}}the bunchers come from {it:below} the cutoff (concave kink); implied by {cmd:t1()<t0()}, needed only for runs without tax rates{p_end}
 
 {syntab:Reporting and transformations}
 {synopt:{opt notransform}}report raw estimating-equation coefficients rather than transformed bunching parameters{p_end}
@@ -126,7 +127,7 @@ As with any polynomial counterfactual, check the fitted {cmd:h0}/{cmd:h1} curve 
 
 {phang}
 {cmd:estimator(3)} is the default model-restricted polynomial bunching estimator. It imposes the density transformation implied by an isoelastic labor supply model. For level earnings, the right-side restriction is proportional in earnings;
-for log earnings, it is additive in log earnings. Because {cmd:polbunch} handles only convex kinks, the marginal buncher reduces earnings toward the cutoff and the structural shift {cmd:delta} is non-negative by construction; the profile search enforces {cmd:delta} >= 0. Specify {opt allownegative} to open the search back to {cmd:delta} > -1 (useful only when the true shift is ~0 and finite-sample noise pulls the profile minimum slightly below zero).
+for log earnings, it is additive in log earnings. For the standard kink ({cmd:t1()>t0()}) the marginal buncher reduces earnings toward the cutoff and the structural shift {cmd:delta} is non-negative by construction; the profile search enforces {cmd:delta} >= 0. For a concave kink ({cmd:t1()<t0()} or {opt bunchbelow}) in levels the shift is negative by construction and the search enforces -1 < {cmd:delta} < 0. Specify {opt allownegative} to open the search back to {cmd:delta} > -1 (useful only when the true shift is ~0 and finite-sample noise pulls the profile minimum slightly below zero).
 
 {phang}
 {cmd:estimator(4)} implements a Saez-style trapezoid approximation. It estimates a left reference height, a right reference height, and the bunching mass directly. This estimator does not use the nonlinear profile restrictions and does
@@ -348,7 +349,10 @@ With {it:pre-binned} input, {it:clustvar} is instead a {it:stub} naming {bf:J} v
 {opt log} tells {cmd:polbunch} that the running variable is already in logs. It changes the model-implied response mapping and the elasticity transformation. It does not log-transform the variable for the user.
 
 {phang}
-{opt t0(#)} and {opt t1(#)} specify the tax rates below and above the cutoff. If one is specified, the other must also be specified. The rates must differ, and the current implementation requires {cmd:t1()>t0()} (a convex kink).
+{opt t0(#)} and {opt t1(#)} specify the tax rates below and above the cutoff. If one is specified, the other must also be specified. The rates must differ. {cmd:t1()>t0()} is the standard kink in which the marginal buncher comes from above the cutoff; {cmd:t1()<t0()} is its mirror image (see {opt bunchbelow}).
+
+{phang}
+{opt bunchbelow} declares that the bunchers come from {it:below} the cutoff, so the density that is distorted by the kink is the one below the excluded region and the counterfactual density is the one above it. It is implied by {cmd:t1()<t0()} and is only needed to declare this orientation in runs without tax rates. Internally the problem is mirrored around the cutoff ({it:w} = -{it:z}), estimated with the unchanged machinery and mapped back, so that every result in {cmd:e()}, {helpb polbunchplot} and {helpb polbunchbias} is expressed in the user's own orientation: {cmd:e(lower_limit)}/{cmd:e(upper_limit)}, {cmd:e(bins)}, the polynomial coefficients of {cmd:h0} (the counterfactual, now fitted above the excluded region) and {cmd:h1} (the distorted density, below it), and {cmd:marginal_response} (negative: the marginal buncher is below the cutoff) are all in the original coordinates, and {cmd:e(concave)} is 1. {opt window(L H)} keeps its literal meaning (L bins below and H bins above the cutoff); the default for a concave kink is {cmd:window(0 1)}, so the bunching bin is [{it:cutoff}, {it:cutoff}+{cmd:bw}) because bins are closed on the side facing the kink. In levels the response is multiplicative, z0 = x z1 with x = ((1-t0)/(1-t1))^e < 1, the shift {cmd:delta} = x-1 is negative and estimator 3 searches over -1 < {cmd:delta} < 0; with {opt log} the response is an additive shift and the mirror only swaps t0 and t1. {cmd:savebins()} writes the histogram and co-visitation matrix in the user's orientation (ascending {it:z}), and a pre-binned vce(cluster {it:stub}) matrix is read in that same orientation.
 
 {phang}
 {opt positive} restricts the estimator-3 structural shift to be positive. Without {opt positive}, estimator 3 allows negative shifts as long as {cmd:1 + delta > 0}.

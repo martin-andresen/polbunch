@@ -15,6 +15,7 @@ Conventional polynomial bunching estimators (Saez 2010; Chetty et al. 2011) igno
 - **Analytic standard errors.** Closed-form `vce(analytic)` works with pre-binned data, so no micro data are needed. Binned bootstrap variants (multinomial, residual, wild, Bayesian) also available. Analytic clustered standard errors when micro-data is available or the co-visitation matrix exist alongside the histogram for binned data.
 - **Specification tests.** Compare the restrictions your estimator imposes against an unrestricted two-sided fit (minimum-distance, omnibus, Hausman). `estat gof` gives reference-region goodness of fit, including separate fit below and above the cutoff.
 - **Permutation inference.** `polbunch_permute` runs a placebo-cutoff permutation test on the studentized excess mass.
+- **Bunching from below.** `t1<t0` (or `bunchbelow`) handles the mirror-image kink whose bunchers come from *below* the cutoff: the problem is mirrored around the cutoff, estimated with the same machinery, and every result (`e()`, `polbunchplot`, `polbunchbias`) is reported in your own orientation. See `tests/test_concave.do`.
 - **Plotting tools.** `polbunchplot` draws the observed and counterfactual densities for one or multiple polbunch estimateds, or a rootogram to show where the fit fails.
 
 ## Quick start

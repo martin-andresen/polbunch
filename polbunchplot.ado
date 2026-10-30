@@ -299,7 +299,159 @@ program define polbunchplot
                     max(`upper_plot', min(`xmax', `MR'))
             }
 
-            if e(estimator) == 4 {
+            /*
+                Concave kink (e(concave) == 1): the bunchers come from BELOW
+                the cutoff, so the counterfactual h0 is the density ABOVE the
+                excluded region (solid on [upper, xmax], extrapolated -- dashed
+                -- through the excluded region and down to the marginal buncher)
+                and the distorted h1 is the density below it (solid on
+                [xmin, lower], dashed on [lower, cutoff]).  e() is stored in
+                the user's own orientation, so only this layout differs.
+            */
+            local concave = 0
+            capture local concave = e(concave)
+            if missing(`concave') local concave = 0
+
+            if `concave' {
+                local zlhline
+                if `lower_plot' < `cutoff_plot' {
+                    local zlhline ///
+                        xline(`lower_plot', ///
+                            lcolor(black) ///
+                            lpattern(dash))
+                }
+                local zuhline ///
+                    xline(`upper_plot', ///
+                        lcolor(black) ///
+                        lpattern(dash))
+                local linemin = min(`lower_plot', `xmax')
+                capture local MR = ///
+                    `cutoff_plot' + _b[bunching:marginal_response]
+                if _rc == 0 & "`MR'" != "" {
+                    local linemin = min(`lower_plot', max(`xmin', `MR'))
+                }
+            }
+
+            if e(estimator) == 4 & `concave' {
+
+                local h0c = _b[h0:_cons]
+                local h1c = _b[h1:_cons]
+
+                local shift = _b[bunching:shift]
+                local mr    = _b[bunching:marginal_response]
+
+                local islog = 0
+                capture local islog = e(islog)
+                if missing(`islog') local islog = 0
+
+                local x0 = `cutoff_plot'
+                local x1 = `cutoff_plot' + `mr'
+
+                local y0 = `h0c'
+
+                if `islog' == 1 {
+                    local y1 = `h1c'
+                }
+                else {
+                    local y1 = `h1c'/(1 + `shift')
+                }
+
+                local linemin = max(`x1', `xmin')
+
+                local hsaez ///
+                    `y0' + ///
+                    ((`y1' - `y0') / (`x1' - `x0')) * ///
+                    (x - `x0')
+
+                twoway ///
+                    (bar freq `z_orig', ///
+                        barwidth(`bw_plot') ///
+                        color(navy%50) ///
+                        base(0)) ///
+                    (function y=`h0c', ///
+                        range(`upper_plot' `xmax') ///
+                        lcolor(maroon) ///
+                        lpattern(solid)) ///
+                    (function y=`h0c', ///
+                        range(`cutoff_plot' `upper_plot') ///
+                        lcolor(maroon) ///
+                        lpattern(shortdash)) ///
+                    (function y=`hsaez', ///
+                        range(`linemin' `cutoff_plot') ///
+                        lcolor(black) ///
+                        lpattern(solid)) ///
+                    (function y=`h1c', ///
+                        range(`lower_plot' `cutoff_plot') ///
+                        lcolor(navy) ///
+                        lpattern(shortdash)) ///
+                    (function y=`h1c', ///
+                        range(`xmin' `lower_plot') ///
+                        lcolor(navy) ///
+                        lpattern(solid)), ///
+                    xline(`cutoff_plot', ///
+                        lcolor(maroon) ///
+                        lpattern(dash)) ///
+                    `zlhline' `zuhline' ///
+                    `mrline' ///
+                    graphregion(color(white)) ///
+                    plotregion(lcolor(black)) ///
+                    ytitle("Frequency") ///
+                    xtitle("`zcol'") ///
+                    legend( ///
+                        label(1 "Frequency") ///
+                        label(2 "Estimated h0") ///
+                        label(6 "Estimated h1") ///
+                        label(4 "Implied counterfactual") ///
+                        `lg_cols4' ///
+                        `lg_ord4' ///
+                        `lg_pos1' ///
+                        `legend_opts') ///
+                    `yscale' `graph_opts'
+            }
+            else if `concave' {
+
+                twoway ///
+                    (bar freq `z_orig', ///
+                        barwidth(`bw_plot') ///
+                        color(navy%50) ///
+                        base(0)) ///
+                    (function y=`h0plot', ///
+                        range(`upper_plot' `xmax') ///
+                        lcolor(maroon) ///
+                        lpattern(solid)) ///
+                    (function y=`h0plot', ///
+                        range(`linemin' `upper_plot') ///
+                        lcolor(maroon) ///
+                        lpattern(shortdash)) ///
+                    (function y=`h1plot', ///
+                        range(`xmin' `lower_plot') ///
+                        lcolor(navy) ///
+                        lpattern(solid)) ///
+                    (function y=`h1plot', ///
+                        range(`lower_plot' `cutoff_plot') ///
+                        lcolor(navy) ///
+                        lpattern(shortdash)), ///
+                    xline(`cutoff_plot', ///
+                        lcolor(maroon) ///
+                        lpattern(dash)) ///
+                    `zuhline' ///
+                    `mrline' ///
+                    `zlhline' ///
+                    graphregion(color(white)) ///
+                    plotregion(lcolor(black)) ///
+                    ytitle("Frequency") ///
+                    xtitle("`zcol'") ///
+                    legend( ///
+                        label(1 "Frequency") ///
+                        label(2 "Estimated h0") ///
+                        label(4 "Estimated h1") ///
+                        `lg_cols3' ///
+                        `lg_ord3' ///
+                        `lg_pos1' ///
+                        `legend_opts') ///
+                    `yscale'  `graph_opts'
+            }
+            else if e(estimator) == 4 {
 
                 local h0c = _b[h0:_cons]
                 local h1c = _b[h1:_cons]
@@ -917,6 +1069,22 @@ program define polbunchplot
                     `"`h1plot_m' + (`h1coef_m')*(`xarg_m')^`j'"'
             }
 
+            /*
+                Concave kink: the layout below is drawn left to right as
+                [h0 solid | h0 dashed | h1 dashed | h1 solid].  With the
+                bunchers coming from below, the density to the LEFT of the
+                excluded region is the distorted h1 and the one to the right
+                is the counterfactual h0, so the two functions trade places.
+            */
+            local concave_m = 0
+            capture local concave_m = e(concave)
+            if missing(`concave_m') local concave_m = 0
+            if `concave_m' {
+                local _swap `"`h0plot_m'"'
+                local h0plot_m `"`h1plot_m'"'
+                local h1plot_m `"`_swap'"'
+            }
+
 
             /*
             ============================================================
@@ -1365,7 +1533,13 @@ program define _polbunchplot_rootogram
         }
 
         gen byte   `excl' = inrange(`zorig', `lo', `hi')
-        gen double `exp'  = cond(`zorig' <= `cut', `fit0', `fit1')
+        * concave kink: the distorted h1 is the density BELOW the excluded
+        * region, the counterfactual h0 the one above it
+        local _conc = 0
+        capture local _conc = e(concave)
+        if missing(`_conc') local _conc = 0
+        if `_conc' gen double `exp' = cond(`zorig' <= `cut', `fit1', `fit0')
+        else       gen double `exp' = cond(`zorig' <= `cut', `fit0', `fit1')
         replace    `exp'  = `fit0' if `excl'
 
         gen double `sqe' = sqrt(max(`exp', 0))

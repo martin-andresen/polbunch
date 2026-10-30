@@ -121,6 +121,7 @@ program define polbunch_contrast, rclass
 		local t1`tag'     = e(t1)
 		local islog`tag'  = (e(log) == 1)
 		local nonorm`tag' = ("`e(normalize)'" == "nonormalize")
+		local conc`tag'   = (e(concave) == 1)
 	}
 
 	/* ------------------------------------------------------------------ *
@@ -262,6 +263,7 @@ program define polbunch_contrast, rclass
 		local mass`tag' = cond(`nsp`tag'',"poolmass","splitmass")
 		local lg`tag'   = cond(`islog`tag'',"log","")
 		local nn`tag'   = cond(`nonorm`tag'',"nonormalize","")
+		local cc`tag'   = cond(`conc`tag'',"bunchbelow","")
 		local H_`tag'   = `Hlim_`tag''
 		/* norankcheck: hold the polynomial degree fixed at what the stored fit
 		   used (e(polynomial) already reflects any automatic reduction), so the
@@ -270,7 +272,7 @@ program define polbunch_contrast, rclass
 		   specification. */
 		local spec`tag' estimator(`est`tag'') polynomial(`k`tag'') cutoff(`cut`tag'') ///
 			t0(`t0`tag'') t1(`t1`tag'') limits(`L_`tag'' `H_`tag'') ///
-			`inv`tag'' `laopt`tag'' `mass`tag'' `lg`tag'' `nn`tag'' ///
+			`inv`tag'' `laopt`tag'' `mass`tag'' `lg`tag'' `nn`tag'' `cc`tag'' ///
 			norankcheck vce(none) nobias test(none)
 
 		if `est`tag'' == 4      local lab`tag' "est 4 (Saez trapezoid)"
