@@ -53,6 +53,12 @@ allowed, with {cmd:triangular(0,3,0)} the default.{p_end}
 bunchers, applied as {cmd:cutoff}{it: op expr}.  Give an operator followed by an
 expression, e.g. {cmd:buncherror(+rnormal(0,0.05))} or
 {cmd:buncherror(*exp(rnormal(0,0.1)))}.{p_end}
+{synopt:{opt notch}}Tax notch instead of a kink: {opt t1()} applies to all income above
+the cutoff (Kleven and Waseem 2013).  Needs a constant {opt elasticity()}; levels only.{p_end}
+{synopt:{opt dt(#)}}Lump-sum tax increase at the cutoff.  With {opt t1()} equal to
+{opt t0()} a pure notch; combines with {opt notch} or with a kink.{p_end}
+{synopt:{opt fri:ction(#)}}With {opt notch} or {opt dt()}: share of the population that is
+inert and stays at its counterfactual earnings.  Default 0.{p_end}
 {synoptline}
 
 
@@ -68,6 +74,9 @@ expression, e.g. {cmd:buncherror(+rnormal(0,0.05))} or
 {pstd}Heterogeneous income effects and an optimisation friction:{p_end}
 {phang2}{cmd:. polbunchgendata z, elasticity(0.5) incomeeffect(rbeta(2,3)*0.6) buncherror(+rnormal(0,0.03))}{p_end}
 
+{pstd}A proportional tax notch with 30% nonresponders:{p_end}
+{phang2}{cmd:. polbunchgendata z, obs(300000) t0(0.2) t1(0.25) notch friction(0.3) elasticity(0.3)}{p_end}
+
 
 {marker results}{...}
 {title:Stored results}
@@ -78,6 +87,9 @@ expression, e.g. {cmd:buncherror(+rnormal(0,0.05))} or
 {synopt:{cmd:r(share_bunching)}}{cmd:r(n_bunchers)} / {opt obs()}{p_end}
 {synopt:{cmd:r(el_mean)}}realised mean of the drawn compensated elasticity{p_end}
 {synopt:{cmd:r(incomeeffect)}}realised mean of the drawn income-effect parameter{p_end}
+{synopt:{cmd:r(delta_notch)}}notch: relative response of the marginal buncher{p_end}
+{synopt:{cmd:r(delta_kink)}}notch: relative intensive response above the notch{p_end}
+{synopt:{cmd:r(delta_dominated)}}notch: dominated range relative to the cutoff{p_end}
 {synoptline}
 
 

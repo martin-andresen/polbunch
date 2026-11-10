@@ -3,7 +3,23 @@ program polbunchgendata, rclass
 		t0(real 0.2) t1(real 0.6) distribution(string) log buncherror(string) ///
 		INCOMEeffect(string) PANel(numlist min=3 max=4) ///
 		HEAP(numlist min=2 max=3) INATTention(real 0) WELfriction(real 0) ///
-		FOCAL(numlist min=1 max=3) EXTensive(real 0) ]
+		FOCAL(numlist min=1 max=3) EXTensive(real 0) ///
+		NOTCH dt(real 0) FRIction(real 0) ]
+
+	/*
+		notch / dt(#) / friction(a) : a tax notch at the cutoff (Kleven &
+			Waseem 2013) instead of a kink.  notch makes t0 -> t1 a
+			proportional rate on ALL income (the average rate jumps); dt(#)
+			adds a lump-sum tax increase at the cutoff; either or both may be
+			given (dt() with t1 > t0 and no notch is a kink plus a lump sum;
+			set t1 = t0 for a pure notch).  Responders with counterfactual
+			earnings in (cutoff, cutoff*(1+delta)] bunch, delta solving
+			Kleven & Waseem's eq. (5); responders above that scale down by
+			((1-t1)/(1-t0))^e.  A share friction(a) of the population is
+			inert and stays at its counterfactual earnings.  Homogeneous
+			elasticity, levels, no income effects.  Returns r(delta_notch),
+			r(delta_kink), r(delta_dominated).
+	*/
 
 	/*
 		focal(share [width [both]]) : excess mass at the cutoff WITHOUT a
@@ -279,6 +295,26 @@ program polbunchgendata, rclass
 			exit 198
 		}
 
+		local notchmode = ("`notch'" != "" | `dt' != 0)
+		if `notchmode' {
+			if `dt' < 0 | `friction' < 0 | `friction' >= 1 {
+				noi di as error "dt() must be nonnegative and friction() in [0,1)."
+				exit 198
+			}
+			if "`notch'" != "" & `t1' == `t0' {
+				noi di as error "notch needs t1 > t0; for a pure lump-sum notch use dt() with t1 = t0."
+				exit 198
+			}
+			if `elc' >= . | "`log'"=="log" | `iec' != 0 | `ispanel' | `inattention' > 0 | `welfriction' > 0 {
+				noi di as error "notch/dt() need a constant elasticity() and are not supported with log, incomeeffect(), panel(), inattention() or welfriction()."
+				exit 198
+			}
+		}
+		else if `friction' != 0 {
+			noi di as error "friction() is only used with notch or dt(); see inattention() for kinks."
+			exit 198
+		}
+
 		if "`buncherror'" != "" {
 			// validate the expression without touching the (var-less) data
 			cap di as text 1*(`cutoff' `buncherror')
@@ -418,6 +454,18 @@ program polbunchgendata, rclass
 			gen byte `bunch' = inrange(`varlist', `cutoff', `cutoff' + `rho')
 			replace `varlist' = `cutoff' if `bunch'
 			replace `varlist' = `varlist' - `rho' if `varlist' > `cutoff' & !`bunch'
+		}
+		else if `notchmode' {
+			local _njump = `dt' + cond("`notch'" != "", (`t1'-`t0')*`cutoff', 0)
+			mata: st_local("_ndelta", strofreal(pbgd_notch_delta(`elc', `t0', `t1', `_njump'/`cutoff'), "%21.0g"))
+			local _ndk = ((1-`t0')/(1-`t1'))^`elc' - 1
+
+			tempvar frictionfail
+			gen byte `frictionfail' = runiform() < `friction'
+			gen byte `bunch' = `z0' > `cutoff' & `z0' <= `cutoff'*(1+`_ndelta') & !`frictionfail'
+			replace `varlist' = `cutoff' if `bunch'
+			replace `varlist' = `z0' / (1+`_ndk') ///
+				if `z0' > `cutoff'*(1+`_ndelta') & !`frictionfail'
 		}
 		else {
 			// bunching window: z0 in (cutoff, cutoff * ((1-t0)/(1-t1))^ec]
@@ -567,6 +615,11 @@ program polbunchgendata, rclass
 		su `etav', meanonly
 		return scalar incomeeffect   = r(mean)
 		return scalar obs            = `obs'
+		if `notchmode' {
+			return scalar delta_notch     = `_ndelta'
+			return scalar delta_kink      = `_ndk'
+			return scalar delta_dominated = `_njump' / ((1-`t1')*`cutoff')
+		}
 		if `ispanel' {
 			return scalar n_panel      = `np'
 			return scalar T_panel      = `Tp'
@@ -623,5 +676,45 @@ void pbgd_income(string scalar zv, string scalar ecv, string scalar etav,
 		}
 		z[i] = 0.5*(zlo+zhi) * z[i]
 	}
+}
+end
+
+// ---------------------------------------------------------------------
+//  Notch: the marginal buncher's response delta = Dz*/z* solving Kleven
+//  & Waseem (2013) eq. (5) for elasticity e,
+//
+//     c/(1+delta) - e/(1+e)*(1+delta)^-(1+1/e) - rho^(1+e)/(1+e) = 0,
+//
+//  rho = (1-t1)/(1-t0), c = rho + jrel/(1-t0), jrel = (jump in tax
+//  liability at the cutoff)/cutoff.  The left side is the utility gain
+//  from bunching: positive below the root, negative above.  The root
+//  lies above both the dominated range and the pure-kink response.
+// ---------------------------------------------------------------------
+capture mata: mata drop pbgd_notch_delta()
+mata:
+real scalar pbgd_notch_delta(real scalar e, real scalar t0, real scalar t1,
+                             real scalar jrel)
+{
+	real scalar rho, c, lo, hi, mid, s, f, it
+
+	rho = (1-t1)/(1-t0)
+	c   = rho + jrel/(1-t0)
+	lo  = max((jrel/(1-t1), rho^(-e) - 1))
+	if (e <= 1e-8) return(jrel/(1-t1))
+
+	hi = lo + 1
+	for (it=1; it<=60; it++) {
+		s = 1/(1+hi)
+		if (s*c - (e/(1+e))*s^(1+1/e) - rho^(1+e)/(1+e) < 0) break
+		hi = lo + 2*(hi-lo)
+	}
+	for (it=1; it<=200; it++) {
+		mid = 0.5*(lo+hi)
+		s   = 1/(1+mid)
+		f   = s*c - (e/(1+e))*s^(1+1/e) - rho^(1+e)/(1+e)
+		if (f > 0) lo = mid
+		else       hi = mid
+	}
+	return(0.5*(lo+hi))
 }
 end

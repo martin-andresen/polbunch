@@ -34,6 +34,8 @@ from the bin spacing and {opt bw()} may not be specified.
 {synopt:{opt log}}specifies that the running variable is in logs{p_end}
 {synopt:{opt t0(#)}}linear tax rate below the cutoff{p_end}
 {synopt:{opt t1(#)}}linear tax rate above the cutoff{p_end}
+{synopt:{opt notch}}{opt t0()}/{opt t1()} are proportional rates on all income, so the average tax rate jumps at the cutoff; see {help polbunch##notch:Notches}{p_end}
+{synopt:{opt dt(#)}}lump-sum tax increase at the cutoff, in units of the running variable; see {help polbunch##notch:Notches}{p_end}
 
 {syntab:Reporting and transformations}
 {synopt:{opt notransform}}report raw estimating-equation coefficients rather than transformed bunching parameters{p_end}
@@ -149,6 +151,43 @@ plausible; specify {opt allownegative} to search {bf:(-1, deltamax]} instead.
 If the profile minimizer lands on a bound of the search interval, or the profiled sum of squares has a second interior local minimum at a materially different {cmd:delta} whose fit is within 10% of the best, the structural shift is treated as weakly identified: {cmd:polbunch}
 reports the counterfactual density, number of bunchers and excess mass (and, for estimator 2, the {cmd:delta} column), but withholds the shift, marginal response and elasticity, sets {cmd:e(hasresp)} to 0 and {cmd:e(delta_weakid)} to 1, and displays a
 note. This most often means the excluded window is too narrow to pin down the response length or the level-shift restriction is rejected -- consult the minimum-distance or Hausman test and try a different {opt polynomial()} or {opt window()}.
+{p_end}
+
+{marker notch}{...}
+{title:Notches}
+
+{pstd}
+With {opt notch} and/or {opt dt(#)}, {cmd:polbunch} estimates the structural elasticity from a tax notch following Kleven and Waseem (2013). The tax schedule is
+T(z) = t0*z below the cutoff and, above it, t1*z (with {opt notch}: a proportional notch, the average rate jumps) or t0*z* + t1*(z-z*) (without {opt notch}: an ordinary kink),
+plus a lump-sum increase {opt dt(#)} (a pure notch when {opt t1()} is omitted or equals {opt t0()}). The cases can be combined freely; all reduce to the marginal rate above the cutoff
+and the jump in tax liability at it, stored in {cmd:e(jump)}. Only notches that raise tax liability at the cutoff are supported.
+{p_end}
+
+{pstd}
+The marginal buncher's relative response {it:delta} and the elasticity {it:e} are linked by Kleven and Waseem's indifference condition (their equation 5), solved numerically.
+A constant share {it:a} of the population is assumed to be inert: it does not react to the tax change at all. {it:a} is identified from the mass remaining in the strictly dominated range
+just above the cutoff, whose width jump/(1-t1) follows from the tax parameters alone ({cmd:e(dominated_range)}). The estimating equations are the reference-bin counts on both sides, the mass in the excluded bins
+at and below the cutoff (counterfactual mass plus (1-{it:a}) times the counterfactual mass on the bunching segment), and the mass in the whole bins inside the dominated range ({it:a} times the counterfactual mass there).
+Excluded bins above the dominated range are not used. {opt window(L H)} must have {it:L}>=1, and {it:H} must cover the dominated range; it should cover the whole hole.
+{p_end}
+
+{phang2}
+{cmd:estimator(1)} is the naive version: the density above the excluded region is taken to be the counterfactual. The model is then just identified and solved in closed form;
+this is Kleven and Waseem's bunching-hole method with a user-chosen excluded region.
+{p_end}
+
+{phang2}
+{cmd:estimator(3)} is the model-consistent version: above the hole the density is {it:a} times the counterfactual plus (1-{it:a}) times the counterfactual shifted by the responders'
+intensive response to the higher marginal rate, ((1-t0)/(1-t1))^{it:e}, exactly as for a kink. The sum of squares is profiled over {it:delta}, with {it:a} and the polynomial concentrated out.
+For a pure notch (no change in the marginal rate) the two estimators coincide.
+{p_end}
+
+{pstd}
+Reported in the {cmd:bunching} equation: {cmd:number_bunchers}, {cmd:excess_mass}, {cmd:nonresponders} ({it:a}), {cmd:shift} ({it:delta}), {cmd:marginal_response} and the structural {cmd:elasticity}.
+{cmd:e(elasticity_observed)} is the elasticity implied by the bunching mass without the 1/(1-{it:a}) friction adjustment, when one exists. No elasticity is reported ({cmd:e(hasresp)}=0) when the estimated
+response does not exceed the dominated range, lies at the {opt deltamax()} bound, or {it:a} is at its upper bound.
+Available with {cmd:vce(conventional)}, {cmd:vce(robust)} and {cmd:vce(bootstrap)} (multinomial or bayesian). Not yet available with a notch: {opt log}, {opt wls}, {opt contrast}, specification tests,
+the analytical bias, {cmd:vce(cluster)}, and the residual and wild bootstraps.
 {p_end}
 
 {marker transform}{...}
@@ -440,6 +479,18 @@ Test whether the naive estimate's elasticity differs significantly from the mode
 {phang2}{cmd:. polbunch z, cutoff(1) bw(0.01) polynomial(7) t0(0.2) t1(0.6) estimator(1) vce(bootstrap) reps(999) contrast}{p_end}
 
 {pstd}
+A proportional notch (the rate on all income rises from 20% to 25% at the cutoff) with 30% nonresponders, naive and model-consistent:{p_end}
+
+{phang2}{cmd:. polbunchgendata z, obs(300000) t0(0.2) t1(0.25) notch friction(0.3) elasticity(0.3)}{p_end}
+{phang2}{cmd:. polbunch z, cutoff(1) bw(0.01) polynomial(3) t0(0.2) t1(0.25) notch window(2 30) estimator(1)}{p_end}
+{phang2}{cmd:. polbunch z, cutoff(1) bw(0.01) polynomial(3) t0(0.2) t1(0.25) notch window(2 30) estimator(3)}{p_end}
+
+{pstd}
+A pure notch: a lump-sum tax of 0.02 above the cutoff:{p_end}
+
+{phang2}{cmd:. polbunch z, cutoff(1) bw(0.01) polynomial(3) t0(0.2) dt(0.02) window(2 25)}{p_end}
+
+{pstd}
 Suppress internal variance estimation, for example when using Stata's bootstrap prefix:{p_end}
 
 {phang2}{cmd:. bootstrap, reps(200): polbunch z, cutoff(1) bw(0.01) polynomial(1) vce(none)}{p_end}
@@ -519,6 +570,14 @@ Collapse to binned data and use polbunch with bin counts {cmd:freq} and bin midp
 {synopt:{cmd:e(bootreps)}}number of bootstrap repetitions, for {cmd:vce(bootstrap)}{p_end}
 {synopt:{cmd:e(N_clust)}}number of clusters, for {cmd:vce(cluster)}{p_end}
 {synopt:{cmd:e(hasresp)}}1 if the shift, marginal response and elasticity are identified and reported; 0 if they were withheld{p_end}
+{synopt:{cmd:e(notch)}}1 if a notch was estimated ({opt notch} and/or {opt dt()}){p_end}
+{synopt:{cmd:e(jump)}}jump in tax liability at the cutoff (notch){p_end}
+{synopt:{cmd:e(dt)}}lump-sum component of the notch{p_end}
+{synopt:{cmd:e(dominated_range)}}width of the strictly dominated range above the notch{p_end}
+{synopt:{cmd:e(delta_dominated)}}dominated range relative to the cutoff: the lower bound on {cmd:shift}{p_end}
+{synopt:{cmd:e(dominated_bins)}}number of whole bins in the dominated range, used to identify the nonresponder share{p_end}
+{synopt:{cmd:e(elasticity_observed)}}notch elasticity without the friction adjustment, when it exists{p_end}
+{synopt:{cmd:e(hole_upper)}}upper edge of the hole implied by the fit ({cmd:estimator(3)} with a notch){p_end}
 {synopt:{cmd:e(delta_weakid)}}estimators 2/3: 1 if the structural shift {cmd:delta} was weakly identified (search bound hit, or multi-modal profile); 0 otherwise{p_end}
 {synopt:{cmd:e(delta_nbasin)}}estimators 2/3: number of competing interior basins in the profile (1 = well identified; >= 2 triggers {cmd:e(delta_weakid)}){p_end}
 {synopt:{cmd:e(delta_nonneg)}}estimators 2/3: 1 if the profile search was restricted to {cmd:delta} >= 0 (the default), 0 if {opt allownegative} was specified{p_end}
@@ -593,6 +652,9 @@ Cameron, A. Colin, and Frank A. G. Windmeijer (1997). "An R-squared measure of g
 
 {phang}
 Kleven, Henrik Jacobsen (2016). "Bunching", {it:Annual Review of Economics}.
+
+{phang}
+Kleven, Henrik J., and Mazhar Waseem (2013). "Using Notches to Uncover Optimization Frictions and Structural Elasticities: Theory and Evidence from Pakistan", {it:Quarterly Journal of Economics}.
 
 {phang}
 Saez, Emmanuel (2010). "Do Taxpayers Bunch at Kink Points?", {it:American Economic Journal: Economic Policy}.
