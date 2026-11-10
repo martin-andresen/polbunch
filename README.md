@@ -9,7 +9,7 @@ Conventional polynomial bunching estimators (Saez 2010; Chetty et al. 2011) igno
 ## Features
 
 - **Consistent and efficient estimator.** The default `estimator(3)` imposes the density transformation implied by the iso-elastic model and estimates elasticity, excess mass and counterfactual jointly, exploiting all the restrictions of the assumed model.
-- **Existing estimators.** Saez-style (`estimator(4)`), Chetty-style (`estimator(5)`, and the naive estimator (`estimator(1)`) run through the same interface, on the same bins, so results are directly comparable. 
+- **Existing estimators.** Saez-style (`estimator(4)`), Chetty-style (`estimator(2)`, and the naive estimator (`estimator(1)`) run through the same interface, on the same bins, so results are directly comparable. 
 - **Notches.** With `notch` (a jump in the average tax rate) and/or `dt()` (a lump-sum tax increase), `estimator(1)` and `estimator(3)` estimate the structural elasticity of Kleven and Waseem (2013), with a constant share of nonresponders identified from the dominated range.
 - **Contrast results** `polbunch_contrast` tests whether two specifications really give different elasticities, accounting for their dependence.
 - **Bias characterization.** `polbunchbias` computes the asymptotic bias of a conventional estimator for a given true elasticity, tax change and counterfactual density, without simulation. With already biased inputs, iterate the procedure for a fixed point.
