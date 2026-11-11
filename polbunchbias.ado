@@ -1,5 +1,18 @@
 *! polbunchbias -- analytical bias of polynomial bunching estimators
-*! version 2.11.0  23oct2026
+*! version 2.12.0  10nov2026
+*!
+*! 2.12.0: notches (Kleven & Waseem 2013).  notch / dt() / nonresponders() in
+*!         explicit mode, read from e(notch)/e(jump)/e(dominated_bins) after
+*!         polbunch.  Bias of the naive notch estimator (estimator 1) against
+*!         the inert-share model estimator 3 imposes: estimator 1's fitting
+*!         stage with contamination (1-a)*(1(s>sI)*h1 - h0), then the
+*!         nonresponder share, the below-cutoff bunching mass, the 1/(1-a)
+*!         inflated response and the eq. (5) inversion.  estimator 3 is
+*!         refused (zero by construction).  pbx_bias_core_ws and the solvers
+*!         take an optional trailing notch vector; `iterate' carries the
+*!         nonresponder share in its state.  Kink results unchanged.
+*!         Validated against polbunch on noise-free histograms (bias in e,
+*!         a, shift and B agree to ~1e-6).
 *!
 *! 2.11.0: new logapprox / exactlog axis (elasticity = (Delta/z*)/A vs ln(1+Delta/z*)/A,
 *!         A = ln((1-t0)/(1-t1))); read from e(logapprox), r(logapprox) returned,
@@ -350,7 +363,12 @@ program define polbunchbias, rclass
         BW(numlist max=1) ITERate TOLerance(real 1e-10) ///
         MAXITER(integer 1000) UNDERRELAX(real 0.5) ///
         CONstant EXACT LOGAPPROX EXACTLOG SPLITmass POOLmass NOFALLback NOPROMOTE ///
-        PROMOTEtol(real 0.3) ALLOWNEGATIVE H0check ]
+        PROMOTEtol(real 0.3) ALLOWNEGATIVE H0check ///
+        NOTCH dt(real 0) NONRESPonders(numlist max=1) ]
+
+    // whether bw() was typed: in explicit notch mode it decides whether the
+    // dominated range is cut to whole bins (as polbunch does) or used exactly
+    local _bwgiven = ("`bw'" != "")
 
     // window()/support(): primary names (2.7.0+). zl()/zh()/zlo()/zhi() are
     // kept as undocumented backward-compatible synonyms -- window() is the
@@ -484,6 +502,27 @@ program define polbunchbias, rclass
         local t0 = `_t0'
         local t1 = `_t1'
 
+        // notch fit: tax jump, dominated bins and the fitted nonresponder share
+        local _notchmode = 0
+        capture confirm scalar e(notch)
+        if !_rc {
+            if e(notch) == 1 local _notchmode = 1
+        }
+        if "`notch'" != "" | `dt' != 0 {
+            di as error "polbunchbias: notch and dt() are for explicit mode; after polbunch the notch is read from e()"
+            exit 198
+        }
+        if `_notchmode' {
+            local _njump = e(jump)
+            local _nD    = e(dominated_bins)*e(bw_orig)
+            capture local _na = _b[bunching:nonresponders]
+            if _rc | missing(`_na') {
+                di as error "bunching:nonresponders not found in e(b)"
+                exit 111
+            }
+            if "`nonresponders'" != "" local _na `nonresponders'
+        }
+
         capture local _elast = _b[bunching:elasticity]
         if _rc | missing(`_elast') {
             di as error "bunching:elasticity not found in e(b)"
@@ -580,6 +619,32 @@ program define polbunchbias, rclass
         else {
             matrix `bcoef' = (1, `relslope')
         }
+
+        // notch: jump in tax liability at the cutoff, true nonresponder share
+        // and the range the share is identified from -- the whole bins in the
+        // dominated range when bw() is given (as polbunch), else the range itself
+        local _notchmode = ("`notch'" != "" | `dt' != 0)
+        if `_notchmode' {
+            if `dt' < 0 | `t1' < `t0' | ("`notch'" != "" & `t1' == `t0') {
+                di as error "polbunchbias: a notch needs dt()>=0 and t1()>=t0() (t1()>t0() with notch)"
+                exit 198
+            }
+            local _njump = `dt' + cond("`notch'" != "", (`t1'-`t0')*`zstar', 0)
+            local _nD    = `_njump'/(1-`t1')
+            if `_bwgiven' {
+                local _nD = floor(`_nD'/`bw' + 1e-8)*`bw'
+                if `_nD' <= 0 {
+                    di as error "polbunchbias: the dominated range above the notch is narrower than one bin"
+                    exit 198
+                }
+            }
+            local _na 0
+            if "`nonresponders'" != "" local _na `nonresponders'
+        }
+        else if "`nonresponders'" != "" {
+            di as error "polbunchbias: nonresponders() requires notch or dt()"
+            exit 198
+        }
     }
     else {
         local missing_opts
@@ -594,6 +659,34 @@ program define polbunchbias, rclass
     if !inlist(`estimator', 0, 1, 2, 3, 4, 5) {
         di as error "polbunchbias: estimator must be 0, 1, 2, 3, 4 or 5"
         exit 198
+    }
+
+    // ---- notch: only the naive estimator has a bias to report ----
+    if `_notchmode' {
+        if !inlist(`estimator', 1, 3) {
+            di as error "polbunchbias: notches are supported for estimator(1) and estimator(3) only"
+            exit 198
+        }
+        if `estimator' == 3 {
+            di as error "polbunchbias: estimator(3) is consistent for a notch under its own model -- zero bias by construction. Use estimator(1) for the bias of the naive notch estimator."
+            exit 198
+        }
+        if `islog_val' {
+            di as error "polbunchbias: notches are not supported with a log running variable"
+            exit 198
+        }
+        if "`constant'`poolmass'`splitmass'`logapprox'" != "" {
+            di as error "polbunchbias: constant, poolmass, splitmass and logapprox do not apply to a notch"
+            exit 198
+        }
+        if `_na' < 0 | `_na' >= 1 {
+            di as error "polbunchbias: the nonresponder share must be in [0,1)"
+            exit 198
+        }
+        if `zl' >= `zstar' | `zh' < `zstar' + `_nD' - 1e-8*abs(`zstar') {
+            di as error "polbunchbias: the window must start below the cutoff and cover the dominated range above it"
+            exit 198
+        }
     }
 
     // renormalise a raw-z-unit bcoef (h0poly/relslope/Saez) onto the fitting
@@ -668,6 +761,11 @@ program define polbunchbias, rclass
     local _H_w    = (`zh' -`zstar')/`_xscale'
     local _bw_w   = `bw'/`_xscale'
 
+    // Mata notch argument (jump/cutoff, nonresponder share, dominated-range
+    // edge in w-units); empty for a kink
+    local _nvec "J(1,0,.)"
+    if `_notchmode' local _nvec "(`=`_njump'/`zstar'', `_na', `=`_nD'/`_xscale'')"
+
     // ---- run (optionally iterated), with polynomial-order fallback ------
     // The fitting-stage bias (estimators 1, 5) inverts a degree-K monomial
     // Gram on the fitting window.  On a wide / off-centre window at a high
@@ -691,12 +789,12 @@ program define polbunchbias, rclass
                 st_matrix("`_bcuse'"), `_lo_w', `_L_w', `_H_w', `_hi_w'))
             local _bias_l2err = _pbx_l2
         }
-        capture matrix drop _pbxs_core _pbxs_bbeta _pbxs_bcur
-        capture scalar drop _pbxs_ecur _pbxs_iter _pbxs_conv _pbxs_diverged
+        capture matrix drop _pbxs_core _pbxs_bbeta _pbxs_bcur _pbxs_nx
+        capture scalar drop _pbxs_ecur _pbxs_iter _pbxs_conv _pbxs_diverged _pbxs_acur
         mata: pbx_bias_solve_ws(`estimator', `bmodel', `islog_val', `useconstant', `uselogapprox', ///
             `nosplit', `_zstarw', `t0', `t1', st_matrix("`_bcuse'"), `elasticity', ///
             `_lo_w', `_hi_w', `_L_w', `_H_w', `_bw_w', `_xscale', `_doiter', ///
-            `tolerance', `maxiter', `underrelax', `_allowneg', `_checkh0', "_pbxs")
+            `tolerance', `maxiter', `underrelax', `_allowneg', `_checkh0', "_pbxs", `_nvec')
         local _Kused = `_kk'
         if !inlist(`estimator',1,2,5)        continue, break
         if "`nofallback'" != ""              continue, break
@@ -715,6 +813,11 @@ program define polbunchbias, rclass
     matrix `out'   = _pbxs_core
     matrix `bbeta' = _pbxs_bbeta
     matrix `bcur'  = _pbxs_bcur
+    tempname nx
+    if `_notchmode' {
+        matrix `nx'  = _pbxs_nx
+        local _acur  = _pbxs_acur
+    }
 
     // ---- diverged iterate: is there a LOWER order where it converges? ----
     // The un-iterated bias above plugs the fitted (biased) h0/elasticity in
@@ -742,12 +845,12 @@ program define polbunchbias, rclass
         forvalues _kk2 = `=`_Kused'-1'(-1)1 {
             mata: st_matrix("`_bciter'", pbx_polreduce(st_matrix("`bcoef'"), ///
                 `_lo_w', `_L_w', `_H_w', `_hi_w', `_kk2'))
-            capture matrix drop _pbxi_core _pbxi_bbeta _pbxi_bcur
-            capture scalar drop _pbxi_ecur _pbxi_iter _pbxi_conv _pbxi_diverged
+            capture matrix drop _pbxi_core _pbxi_bbeta _pbxi_bcur _pbxi_nx
+            capture scalar drop _pbxi_ecur _pbxi_iter _pbxi_conv _pbxi_diverged _pbxi_acur
             mata: pbx_bias_solve_ws(`estimator', `bmodel', `islog_val', `useconstant', `uselogapprox', ///
                 `nosplit', `_zstarw', `t0', `t1', st_matrix("`_bciter'"), `elasticity', ///
                 `_lo_w', `_hi_w', `_L_w', `_H_w', `_bw_w', `_xscale', 1, ///
-                `tolerance', `maxiter', `underrelax', `_allowneg', `_checkh0', "_pbxi")
+                `tolerance', `maxiter', `underrelax', `_allowneg', `_checkh0', "_pbxi", `_nvec')
             if _pbxi_conv == 1 & _pbxi_diverged == 0 & ///
                     !missing(el(_pbxi_core,1,20)) & !missing(el(_pbxi_core,1,24)) {
                 local _iterK = `_kk2'
@@ -760,12 +863,17 @@ program define polbunchbias, rclass
                 local _iterconv = _pbxi_conv
                 local _iteriter = _pbxi_iter
                 local _iterecur = _pbxi_ecur
+                if `_notchmode' {
+                    tempname _iternx
+                    matrix `_iternx' = _pbxi_nx
+                    local _iteracur  = _pbxi_acur
+                }
                 continue, break
             }
         }
         capture scalar drop _pbx_l2b
-        capture matrix drop _pbxi_core _pbxi_bbeta _pbxi_bcur
-        capture scalar drop _pbxi_ecur _pbxi_iter _pbxi_conv _pbxi_diverged
+        capture matrix drop _pbxi_core _pbxi_bbeta _pbxi_bcur _pbxi_nx
+        capture scalar drop _pbxi_ecur _pbxi_iter _pbxi_conv _pbxi_diverged _pbxi_acur
     }
 
     // ---- promote the converged lower-order fit to the primary result -----
@@ -794,13 +902,22 @@ program define polbunchbias, rclass
         matrix `bcur'  = `_iterbcur'
         local _Kused   = `_iterK'
         local _promoted = 1
+        if `_notchmode' {
+            matrix `nx' = `_iternx'
+            local _acur = `_iteracur'
+        }
     }
 
     // fitting estimators always carry a fitting-stage bias; a missing bias_h
     // (or elasticity bias) means the design was singular / ill-conditioned on
     // the fitted window at every order down to 1 (estimator 5: or the right
     // window [`zh',`zhi'] alone is too short to identify Chetty's delta)
-    if inlist(`estimator',1,2,5) & (missing(el(`out',1,20)) | missing(el(`out',1,24))) {
+    if `_notchmode' & !missing(el(`out',1,20)) & missing(el(`out',1,24)) {
+        di as error "polbunchbias: the naive notch estimator has no elasticity at these inputs -- its implied response does not exceed the dominated range, or its nonresponder share is not below 1."
+        matrix `nx'[1,1] = .
+    }
+    else if inlist(`estimator',1,2,5) & (missing(el(`out',1,20)) | missing(el(`out',1,24))) {
+        if `_notchmode' matrix `nx'[1,1] = .
         di as error "polbunchbias: the counterfactual polynomial is not identified on the fitted window [`zlo',`zl'] u [`zh',`zhi'] at any order down to 1 -- window too short, or too collinear, for a bias estimate. Change the estimation window."
         // the fallback failed: report the full order, all-missing, so nothing
         // downstream shows a partial (degree-1) number
@@ -858,6 +975,13 @@ program define polbunchbias, rclass
     matrix `rb' = `bbeta' , `tail'
     matrix colnames `rb' = `betanames' relative_slope number_bunchers ///
         marginal_response shift elasticity
+    if `_notchmode' {
+        // nonresponder share right after the bunching mass, as in polbunch
+        matrix `rb' = `bbeta' , ( el(`out',1,26), el(`out',1,21), el(`nx',1,1), ///
+            el(`out',1,22), el(`out',1,23), el(`out',1,24) )
+        matrix colnames `rb' = `betanames' relative_slope number_bunchers ///
+            nonresponders marginal_response shift elasticity
+    }
 
     if `_promoted'          local _ordertxt "polynomial order `_Kused' (converged iterate; degree-`_uKused' plug-in did not converge)"
     else if `_Kused' < `_Kfull' local _ordertxt "polynomial order `_Kused' (fallback from `_Kfull')"
@@ -900,6 +1024,15 @@ program define polbunchbias, rclass
     return scalar logapprox = `uselogapprox'
     return scalar nosplit = `nosplit'
     return scalar input_elasticity = `elasticity'
+    return scalar notch = `_notchmode'
+    if `_notchmode' {
+        return scalar jump                    = `_njump'
+        return scalar nonresponders           = `_na'
+        return scalar bias_nonresponders      = el(`nx',1,1)
+        return scalar corrected_nonresponders = `_acur'
+        return scalar delta_notch             = el(`nx',1,2)
+        return scalar delta_dominated         = el(`nx',1,3)
+    }
     if `_promoted' {
         return scalar corrected_elasticity = `_iterecur'
         return scalar iterations = `_iteriter'
@@ -966,8 +1099,8 @@ program define polbunchbias, rclass
         return scalar bias_iter_elasticity = `_iter_be'
     }
 
-    capture matrix drop _pbxs_core _pbxs_bbeta _pbxs_bcur
-    capture scalar drop _pbxs_ecur _pbxs_iter _pbxs_conv _pbxs_diverged
+    capture matrix drop _pbxs_core _pbxs_bbeta _pbxs_bcur _pbxs_nx
+    capture scalar drop _pbxs_ecur _pbxs_iter _pbxs_conv _pbxs_diverged _pbxs_acur
 end
 
 * ====================================================================
@@ -1747,6 +1880,9 @@ capture mata: mata drop pbx_lambda_report()
 capture mata: mata drop pbx_bias_core()
 capture mata: mata drop pbx_bias_core_ws()
 capture mata: mata drop pbx_ehat()
+capture mata: mata drop pbx_notch_F()
+capture mata: mata drop pbx_notch_delta()
+capture mata: mata drop pbx_notch_e()
 capture mata: mata drop pbx_bias_solve_ws()
 capture mata: mata drop pbx_bias_scres_ws()
 capture mata: mata drop pbx_bias_newton_ws()
@@ -2113,6 +2249,78 @@ void pbx_bias_e5_solve(real scalar nosplit,
 // Elasticity implied by a relative level shift Delta/z* (level case):
 // exact  -> ln(1 + shift)/Ltau   (Saez 2010 eq. 3 solved for e)
 // approx -> shift/Ltau           (log approximation, no ln(1+.))
+// -------------------------------------------------------------------
+// Notch (Kleven & Waseem 2013, eq. 5).  The marginal buncher's relative
+// response delta and the elasticity e satisfy
+//
+//   F = c/(1+delta) - e/(1+e)*(1+delta)^-(1+1/e) - rho^(1+e)/(1+e) = 0,
+//
+// rho = (1-t1)/(1-t0), c = rho + jrel/(1-t0), jrel = (jump in tax
+// liability at the cutoff)/cutoff.  F is the utility gain from bunching:
+// positive below the root in delta, negative above.  The dominated range
+// jrel/(1-t1) is the e -> 0 limit.  Same algorithms as notch_e_from_delta()
+// in polbunch.ado and pbgd_notch_delta() in polbunchgendata.ado.
+// -------------------------------------------------------------------
+real scalar pbx_notch_F(real scalar delta, real scalar e, real scalar t0,
+                        real scalar t1, real scalar jrel)
+{
+    real scalar s, rho
+    s   = 1/(1 + delta)
+    rho = (1 - t1)/(1 - t0)
+    return(s*(rho + jrel/(1 - t0)) - (e/(1 + e))*s^(1 + 1/e) - rho^(1 + e)/(1 + e))
+}
+
+// forward: delta given e.  The root lies above both the dominated range
+// and the pure-kink response.
+real scalar pbx_notch_delta(real scalar e, real scalar t0, real scalar t1,
+                            real scalar jrel)
+{
+    real scalar lo, hi, mid, it
+
+    if (missing(e)) return(.)
+    lo = max((jrel/(1 - t1), ((1 - t0)/(1 - t1))^e - 1))
+    if (e <= 1e-8) return(jrel/(1 - t1))
+
+    hi = lo + 1
+    for (it = 1; it <= 60; it++) {
+        if (pbx_notch_F(hi, e, t0, t1, jrel) < 0) break
+        hi = lo + 2*(hi - lo)
+    }
+    for (it = 1; it <= 200; it++) {
+        mid = 0.5*(lo + hi)
+        if (pbx_notch_F(mid, e, t0, t1, jrel) > 0) lo = mid
+        else                                       hi = mid
+    }
+    return(0.5*(lo + hi))
+}
+
+// inverse: e given delta; missing inside the dominated range.  With
+// t1 > t0 the root lies below the pure-kink elasticity (F > 0 there).
+real scalar pbx_notch_e(real scalar delta, real scalar t0, real scalar t1,
+                        real scalar jrel)
+{
+    real scalar lo, hi, mid, it
+
+    if (missing(delta) | delta <= jrel/(1 - t1)) return(.)
+
+    lo = 1e-12
+    if (t1 > t0) {
+        hi = ln(1 + delta)/ln((1 - t0)/(1 - t1))
+    }
+    else {
+        hi = 1
+        while (pbx_notch_F(delta, hi, t0, t1, jrel) <= 0 & hi < 1e8) hi = 2*hi
+    }
+    if (!(pbx_notch_F(delta, hi, t0, t1, jrel) > 0)) return(.)
+
+    for (it = 1; it <= 200; it++) {
+        mid = 0.5*(lo + hi)
+        if (pbx_notch_F(delta, mid, t0, t1, jrel) > 0) hi = mid
+        else                                           lo = mid
+    }
+    return(0.5*(lo + hi))
+}
+
 real scalar pbx_ehat(real scalar shift, real scalar Ltau, real scalar uselogapprox)
 {
     if (uselogapprox) return(shift/Ltau)
@@ -2136,9 +2344,12 @@ real rowvector pbx_bias_core_ws(
     real scalar L,
     real scalar H,
     real scalar bw,
-    real scalar xscale
+    real scalar xscale,
+    | real rowvector notch
 )
 {
+    real scalar isnotch, jrel, na, Dw, dn, rn, sI, ahat, bias_a, den
+    real rowvector nx
     real scalar tau, Ltau, x, rho, rhow, Delta, r, B, K, a0, m0
     real scalar dL, dR, lambda_rep, pref
     real scalar bias_h, bias_B, bias_resp, bias_shift, bias_e
@@ -2192,6 +2403,24 @@ real rowvector pbx_bias_core_ws(
 
     B = pbx_polint(bcoef, 0, r)/bw
 
+    // notch = (jump/cutoff, nonresponder share, upper edge of the dominated
+    // bins in w-units); absent or empty for a kink.  x, rho, Delta and r
+    // keep their kink meaning (the intensive shift above the notch); the
+    // bunching mass B is the notch's.  nx = (bias_a, delta_notch,
+    // delta_dominated) is appended after biasbeta in the return vector.
+    isnotch = 0
+    nx = J(1, 0, .)
+    if (args() >= 18) isnotch = (cols(notch) >= 3)
+    if (isnotch) {
+        jrel = notch[1]
+        na   = notch[2]
+        Dw   = notch[3]
+        dn   = pbx_notch_delta(elast, t0, t1, jrel)
+        rn   = zstarw*dn
+        B    = (1 - na)*pbx_polint(bcoef, 0, rn)/bw
+        nx   = (., dn, jrel/(1 - t1))
+    }
+
     // dL/dR are shift-invariant (their z/zL/zlo coefficients sum to 0), so
     // the cutoff's ABSOLUTE position can be set to 0 here (w-space is
     // already centred there) without needing zstarw at all; convert the
@@ -2205,7 +2434,61 @@ real rowvector pbx_bias_core_ws(
     bias_slope = bias_lambda = .
     biasbeta = J(1, K + 1, .)
 
-    if (estimator == 1) {
+    if (estimator == 1 & isnotch) {
+        // Naive notch estimator.  Fitting stage as estimator 1, with the
+        // true density above the window a*h0 + (1-a)*h1*1(s > sI), sI the
+        // upper edge of the hole: contamination (1-a)*(1(s>sI)*h1 - h0).
+        dsc = pbx_monoscale(lo, hi, L, H, K)
+        M   = (dsc * dsc') :* (pbx_polgram(lo, L, K) + pbx_polgram(H, hi, K))
+        if (pbx_illcond(M)) {
+            return((estimator, bmodel, islog, zstar_out, t0, t1, tau, lambda_rep,
+                elast, x, rho, Delta, lo_out, hi_out, L_out, H_out, dL, dR, B,
+                J(1, 7, .), J(1, K+1, .), nx))
+        }
+
+        sI  = (rn - r)/x
+        Gtu = -pbx_polmoment(bcoef, H, hi, K)
+        if (max((H, sI)) < hi) {
+            Gtu = Gtu + pbx_polmoment(pbx_polaffine(bcoef, x, r), max((H, sI)), hi, K)
+        }
+        Gtu     = (1 - na) :* Gtu
+        biaspar = dsc :* (invsym(M) * (dsc :* Gtu))
+
+        // plausibility guard, as for the kink
+        if (abs(a0) <= 1e-14 | abs(biaspar[1]) > abs(a0)) {
+            return((estimator, bmodel, islog, zstar_out, t0, t1, tau, lambda_rep,
+                elast, x, rho, Delta, lo_out, hi_out, L_out, H_out, dL, dR, B,
+                J(1, 7, .), J(1, K+1, .), nx))
+        }
+
+        biasbeta = biaspar[|1 \ K+1|]'
+        bias_h = biaspar[1]
+        if (K >= 1) {
+            bias_slope  = biaspar[2]
+            bias_lambda = zstarw * (bias_slope/a0 - (m0/a0)*(bias_h/a0))
+        }
+        bhat = bcoef + biaspar'
+
+        // nonresponder share: dominated-bin mass a*int h0 over the fitted int h0hat
+        den  = pbx_polint(bhat, 0, Dw)
+        ahat = .
+        if (den > 0) ahat = na*pbx_polint(bcoef, 0, Dw)/den
+        bias_a = ahat - na
+        nx[1]  = bias_a
+
+        // bunching mass: excess over h0hat in the excluded bins below the cutoff
+        bias_B = -pbx_polint(biaspar', L, 0)/bw
+        Btilde = B + bias_B
+
+        // response: int_0^r h0hat = Bhat*bw/(1-ahat), then eq. (5)
+        rtilde = .
+        if (ahat < 1 & Btilde > 0) rtilde = pbx_polroot(bhat, Btilde*bw/(1 - ahat), rn)
+        bias_resp  = rtilde - rn
+        bias_shift = rtilde/zstarw - dn
+        bias_e     = pbx_notch_e(rtilde/zstarw, t0, t1, jrel) - elast
+    }
+
+    if (estimator == 1 & !isnotch) {
         // ---- fitting-stage bias -----------------------------------------
         // plim(betahat) - beta = (int_W P P')^{-1} int_right P (h1_true - h0)
         // W = [lo,L] u [H,hi] ; contamination is nonzero only on the right.
@@ -2806,7 +3089,7 @@ real rowvector pbx_bias_core_ws(
     // fitted polynomial bhat = bcoef + biasbeta.
     return((estimator, bmodel, islog, zstar_out, t0, t1, tau, lambda_rep, elast,
         x, rho, Delta, lo_out, hi_out, L_out, H_out, dL, dR, B, bias_h, bias_B, bias_resp,
-        bias_shift, bias_e, bias_slope, bias_lambda, biasbeta))
+        bias_shift, bias_e, bias_slope, bias_lambda, biasbeta, nx))
 }
 
 // -------------------------------------------------------------------
@@ -2822,19 +3105,24 @@ real rowvector pbx_bias_scres_ws(real rowvector x, real rowvector tgt,
     real scalar useconstant, real scalar uselogapprox, real scalar nosplit, real scalar zstarw,
     real scalar t0, real scalar t1, real scalar lo, real scalar hi,
     real scalar L, real scalar H, real scalar bw, real scalar xscale,
-    real rowvector dsc)
+    real rowvector dsc, | real rowvector notch)
 {
-    real scalar n, K1, e, lead
-    real rowvector s, bp, b, res, bbeta, bpred, out
+    real scalar n, K1, e, lead, isn
+    real rowvector s, bp, b, res, bbeta, bpred, out, nt
 
-    n  = cols(x)
-    K1 = n
-    s  = x[|1 \ n - 1|]
-    e  = x[n]
+    // notch: the state carries the nonresponder share as a last element
+    if (args() < 19) notch = J(1, 0, .)
+    isn = (cols(notch) >= 3)
+    nt  = notch
+    n   = cols(x)
+    K1  = n - isn
+    if (isn) nt[2] = x[n]
+    s  = x[|1 \ K1 - 1|]
+    e  = x[K1]
     bp = (1, s)
     b  = bp :* dsc
     res = pbx_bias_core_ws(estimator, bmodel, islog, useconstant, uselogapprox, nosplit,
-              zstarw, t0, t1, b, e, lo, hi, L, H, bw, xscale)
+              zstarw, t0, t1, b, e, lo, hi, L, H, bw, xscale, nt)
     out = J(1, n, .)
     if (missing(res[20]) | missing(res[24])) return(out)
     // biasbeta comes back /xscale^k unit-converted for reporting; undo
@@ -2845,6 +3133,7 @@ real rowvector pbx_bias_scres_ws(real rowvector x, real rowvector tgt,
     if (abs(lead) < 1e-14) return(out)
     bpred = bpred :/ lead
     out = (bpred[|2 \ K1|] :- tgt[|1 \ K1 - 1|], (e + res[24]) - tgt[K1])
+    if (isn) out = (out, (x[n] + res[27 + K1]) - tgt[n])
     return(out)
 }
 
@@ -2866,27 +3155,32 @@ real scalar pbx_bias_newton_ws(
     real scalar lo, real scalar hi, real scalar L, real scalar H,
     real scalar bw, real scalar xscale, real rowvector dsc,
     real scalar allowneg, real scalar checkh0, real scalar EBOUND,
-    real rowvector bout, real scalar eout, real scalar niter)
+    real rowvector bout, real scalar eout, real scalar niter,
+    | real rowvector notch, real scalar aout)
 {
+    real scalar isn
     real scalar n, K1, it, i, hstep, rn, alpha, ls, okj, done, mv
     real rowvector bhp, shp, tgt, x, Fx, xp, xm, Fp, Fm, xt, Rt, bp
     real matrix Jm
     real colvector dxv
 
+    if (args() < 25) notch = J(1, 0, .)
+    isn = (cols(notch) >= 3)
     K1 = cols(bhat)
-    n  = K1
+    n  = K1 + isn
     niter = 0
     bhp = bhat :/ dsc
     if (abs(bhp[1]) < 1e-14) return(0)
     bhp = bhp :/ bhp[1]
     shp = bhp[|2 \ K1|]
     tgt = (shp, ehat)
-    x   = (shp, ehat)                 // single start
+    if (isn) tgt = (tgt, notch[2])    // fitted nonresponder share
+    x   = tgt                         // single start
 
     for (it = 1; it <= 50; it++) {
         niter = it
         Fx = pbx_bias_scres_ws(x, tgt, estimator, bmodel, islog, useconstant, uselogapprox,
-                 nosplit, zstarw, t0, t1, lo, hi, L, H, bw, xscale, dsc)
+                 nosplit, zstarw, t0, t1, lo, hi, L, H, bw, xscale, dsc, notch)
         if (hasmissing(Fx)) return(0)
         rn = sqrt(Fx * Fx')
         if (rn < 1e-9) break
@@ -2898,10 +3192,10 @@ real scalar pbx_bias_newton_ws(
             xm = x ; xm[i] = xm[i] - hstep
             Fp = pbx_bias_scres_ws(xp, tgt, estimator, bmodel, islog,
                      useconstant, uselogapprox, nosplit, zstarw, t0, t1, lo, hi, L, H,
-                     bw, xscale, dsc)
+                     bw, xscale, dsc, notch)
             Fm = pbx_bias_scres_ws(xm, tgt, estimator, bmodel, islog,
                      useconstant, uselogapprox, nosplit, zstarw, t0, t1, lo, hi, L, H,
-                     bw, xscale, dsc)
+                     bw, xscale, dsc, notch)
             if (hasmissing(Fp) | hasmissing(Fm)) okj = 0
             if (okj) Jm[, i] = ((Fp - Fm) / (2 * hstep))'
         }
@@ -2916,7 +3210,7 @@ real scalar pbx_bias_newton_ws(
                 xt = x - alpha * dxv'
                 Rt = pbx_bias_scres_ws(xt, tgt, estimator, bmodel, islog,
                          useconstant, uselogapprox, nosplit, zstarw, t0, t1, lo, hi, L, H,
-                         bw, xscale, dsc)
+                         bw, xscale, dsc, notch)
                 if (!hasmissing(Rt) & sqrt(Rt * Rt') < rn) done = 1
                 else alpha = alpha / 2
             }
@@ -2926,13 +3220,17 @@ real scalar pbx_bias_newton_ws(
     }
 
     Fx = pbx_bias_scres_ws(x, tgt, estimator, bmodel, islog, useconstant, uselogapprox,
-             nosplit, zstarw, t0, t1, lo, hi, L, H, bw, xscale, dsc)
+             nosplit, zstarw, t0, t1, lo, hi, L, H, bw, xscale, dsc, notch)
     if (hasmissing(Fx) | sqrt(Fx * Fx') > 1e-6) return(0)
 
-    eout = x[n]
+    eout = x[K1]
     if (missing(eout) | abs(eout) > EBOUND) return(0)
     if (!allowneg & eout < 0) return(0)   // let the damped path apply the clamp
-    bp = (1, x[|1 \ n - 1|])
+    if (isn) {
+        aout = x[n]
+        if (missing(aout) | aout < 0 | aout >= 1) return(0)
+    }
+    bp = (1, x[|1 \ K1 - 1|])
     if (hasmissing(bp) | max(abs(bp)) > 1e6) return(0)
     bout = bp :* dsc
     if (checkh0) {
@@ -2955,8 +3253,10 @@ void pbx_bias_solve_ws(
     real scalar lo, real scalar hi, real scalar L, real scalar H,
     real scalar bw, real scalar xscale, real scalar doiter, real scalar tol,
     real scalar maxiter, real scalar urlx, real scalar allowneg,
-    real scalar checkh0, string scalar stub)
+    real scalar checkh0, string scalar stub, | real rowvector notch)
 {
+    real scalar isn, ahat, acur, anew, anewt
+    real rowvector nt
     real scalar K1, ecur, enew, iter, conv, dif, k
     real scalar diverged, EBOUND, newtok, enewt, nnewt
     real rowvector bcur, bnew, res, bbeta, bnewt
@@ -2966,6 +3266,15 @@ void pbx_bias_solve_ws(
     // has run away (for a steep/curved level h0 the recentre-and-re-pin map
     // is not a contraction); the iterate is unusable and we fall back.
     EBOUND = 5
+
+    // notch: the fitted nonresponder share is part of the self-consistency
+    // state, alongside the elasticity and the h0 shape
+    if (args() < 25) notch = J(1, 0, .)
+    isn  = (cols(notch) >= 3)
+    nt   = notch
+    ahat = .
+    if (isn) ahat = notch[2]
+    acur = ahat
 
     K1 = cols(bhat)
     ecur = ehat
@@ -3002,8 +3311,9 @@ void pbx_bias_solve_ws(
         if (estimator == 1 | estimator == 5) {
             newtok = pbx_bias_newton_ws(estimator, bmodel, islog, useconstant, uselogapprox,
                 nosplit, zstarw, t0, t1, bhat, ehat, lo, hi, L, H, bw, xscale,
-                dsc, allowneg, checkh0, EBOUND, bnewt, enewt, nnewt)
+                dsc, allowneg, checkh0, EBOUND, bnewt, enewt, nnewt, notch, anewt)
             if (newtok) {
+                if (isn) acur = anewt
                 bcur   = bnewt
                 bcur_p = bcur :/ dsc
                 ecur   = enewt
@@ -3013,9 +3323,10 @@ void pbx_bias_solve_ws(
         }
         if (!newtok)
         for (k = 1; k <= maxiter; k++) {
+            if (isn) nt[2] = acur
             res    = pbx_bias_core_ws(estimator, bmodel, islog, useconstant, uselogapprox,
                         nosplit, zstarw, t0, t1, bcur, ecur,
-                        lo, hi, L, H, bw, xscale)
+                        lo, hi, L, H, bw, xscale, nt)
             bbeta  = res[|1, 27 \ 1, 26 + K1|]
             if (missing(res[20])) {
                 iter = k
@@ -3035,6 +3346,12 @@ void pbx_bias_solve_ws(
             // occupy (same logic as polbunch's delta>=0 default for the
             // convex-kink profile).  allowneg opts out.
             if (!allowneg & enew < 0) enew = 0
+            anew = 0
+            if (isn) {
+                anew = ahat - res[27 + K1]
+                if (anew < 0)                anew = 0
+                if (anew > 0.999 & anew < .) anew = 0.999
+            }
             bnew_p = (bhat :/ dsc) - bbeta_p
             if (abs(bnew_p[1]) > 1e-14) bnew_p = bnew_p :/ bnew_p[1]   // re-pin height
             // divergence guard: a blown-up coefficient vector or an
@@ -3051,7 +3368,7 @@ void pbx_bias_solve_ws(
             // APPROXIMATION to a noisily estimated density, and such an
             // approximation can legitimately dip slightly negative in a
             // low-density region without the true h0 being invalid.
-            if (missing(enew) | hasmissing(bnew_p) | max(abs(bnew_p)) > 1e6
+            if (missing(enew) | missing(anew) | hasmissing(bnew_p) | max(abs(bnew_p)) > 1e6
                 | abs(enew) > EBOUND
                 | (checkh0 & min((pbx_polminval(bnew_p :* dsc, lo, L),
                     pbx_polminval(bnew_p :* dsc, H, hi))) < -1e-6)) {
@@ -3060,6 +3377,10 @@ void pbx_bias_solve_ws(
                 break
             }
             dif    = max((abs(enew - ecur), rowmax(abs(bnew_p - bcur_p))))
+            if (isn) {
+                dif  = max((dif, abs(anew - acur)))
+                acur = acur + urlx*(anew - acur)
+            }
             ecur   = ecur + urlx*(enew - ecur)
             bcur_p = bcur_p + urlx :* (bnew_p - bcur_p)
             bcur   = bcur_p :* dsc
@@ -3075,11 +3396,13 @@ void pbx_bias_solve_ws(
         if (diverged) {
             bcur = bhat
             ecur = ehat
+            acur = ahat
         }
     }
 
+    if (isn) nt[2] = acur
     res   = pbx_bias_core_ws(estimator, bmodel, islog, useconstant, uselogapprox, nosplit,
-                zstarw, t0, t1, bcur, ecur, lo, hi, L, H, bw, xscale)
+                zstarw, t0, t1, bcur, ecur, lo, hi, L, H, bw, xscale, nt)
     if (missing(res[20]) | missing(res[24]) |
         (doiter & abs(ehat - res[24]) > EBOUND)) {
         // the current point gives a missing or runaway bias -- fall back to
@@ -3087,9 +3410,10 @@ void pbx_bias_solve_ws(
         if (doiter & (bcur != bhat | ecur != ehat)) diverged = 1
         bcur = bhat
         ecur = ehat
+        acur = ahat
         conv = 0
         res  = pbx_bias_core_ws(estimator, bmodel, islog, useconstant, uselogapprox, nosplit,
-                    zstarw, t0, t1, bcur, ecur, lo, hi, L, H, bw, xscale)
+                    zstarw, t0, t1, bcur, ecur, lo, hi, L, H, bw, xscale, notch)
     }
     bbeta = res[|1, 27 \ 1, 26 + K1|]
 
@@ -3105,6 +3429,11 @@ void pbx_bias_solve_ws(
     st_numscalar(stub + "_iter", iter)
     st_numscalar(stub + "_conv", conv)
     st_numscalar(stub + "_diverged", diverged)
+    if (isn) {
+        // (bias_a, delta_notch, delta_dominated) and the accepted share
+        st_matrix(stub + "_nx", res[|1, 27 + K1 \ 1, 29 + K1|])
+        st_numscalar(stub + "_acur", acur)
+    }
 }
 
 end

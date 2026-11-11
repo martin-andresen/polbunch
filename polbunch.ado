@@ -113,8 +113,6 @@
 								exit 198
 							}
 							local notchjump = `dt' + cond("`notch'" != "", (`t1'-`t0')*`cutoff', 0)
-							/* no specification tests or analytical bias for notches yet */
-							local nobias nobias
 						}
 							if "`t0'"!="" & !`notchmode' {
 							if "`t1'"=="" {
@@ -3021,7 +3019,12 @@
 								local _blaopt   = cond(`uselogapprox',"logapprox","exactlog")
 								local _biteropt "iterate"
 								if "`noiterate'" != "" local _biteropt ""
-								capture quietly polbunchbias, `_binvopt' `_bmassopt' `_blaopt' `_biteropt'
+								/* notch: the inversion / mass / log axes do not apply.
+								   Only the naive estimator has a bias; polbunchbias
+								   refuses estimator 3 (zero by construction) and the
+								   capture swallows that, as for a kink. */
+								if `notchmode' capture quietly polbunchbias, `_biteropt'
+								else           capture quietly polbunchbias, `_binvopt' `_bmassopt' `_blaopt' `_biteropt'
 								local _pbbias_ok = (_rc == 0)
 								capture confirm number 1   // clear _rc left by a failed polbunchbias (it exits 198 on the zero-bias axes for estimators 0/3)
 								if `_pbbias_ok' {
@@ -3033,6 +3036,7 @@
 									local _br  = r(bias_response)
 									local _bs  = r(bias_shift)
 									local _be  = r(bias_elasticity)
+									local _bna = r(bias_nonresponders)
 									local _bK  = r(polynomial)
 									local _bKfull = r(bias_polyfull)
 									local _bl2 = r(bias_l2err)
@@ -3138,6 +3142,7 @@
 									ereturn scalar bias_response    = `_br'
 									ereturn scalar bias_shift       = `_bs'
 									ereturn scalar bias_elasticity  = `_be'
+									if `_bna' < . ereturn scalar bias_nonresponders = `_bna'
 									ereturn scalar bias_polynomial  = `_bK'
 									if `_bKfull' < . ereturn scalar bias_polyfull = `_bKfull'
 									if `_bl2' < .    ereturn scalar bias_l2err    = `_bl2'

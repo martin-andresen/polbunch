@@ -187,7 +187,12 @@ Reported in the {cmd:bunching} equation: {cmd:number_bunchers}, {cmd:excess_mass
 {cmd:e(elasticity_observed)} is the elasticity implied by the bunching mass without the 1/(1-{it:a}) friction adjustment, when one exists. No elasticity is reported ({cmd:e(hasresp)}=0) when the estimated
 response does not exceed the dominated range, lies at the {opt deltamax()} bound, or {it:a} is at its upper bound.
 Available with {cmd:vce(conventional)}, {cmd:vce(robust)} and {cmd:vce(bootstrap)} (multinomial or bayesian). Not yet available with a notch: {opt log}, {opt wls}, {opt contrast}, specification tests,
-the analytical bias, {cmd:vce(cluster)}, and the residual and wild bootstraps.
+{cmd:vce(cluster)}, and the residual and wild bootstraps.
+{p_end}
+
+{pstd}
+For the naive notch estimator the analytical bias is appended as for a kink (see {help polbunchbias##notch:polbunchbias}), including the bias in the nonresponder share, stored in {cmd:e(bias_nonresponders)};
+{cmd:estimator(3)} is consistent under the notch model and reports none.
 {p_end}
 
 {marker transform}{...}

@@ -77,6 +77,9 @@ override the counterfactual read from {cmd:e(b)}.
 {synopt :{cmd:promotetol(}{it:#}{cmd:)}}maximum relative L2 change in the counterfactual for promotion to accept a converged lower order; default {cmd:promotetol(0.3)}; see {help polbunchbias##fallback:below}{p_end}
 {synopt :{cmd:allownegative}}with {cmd:iterate}: let the self-consistency search find a negative corrected elasticity; by default it is floored at 0 (compensated elasticities are non-negative by Slutsky, mirroring {helpb polbunch}'s {opt delta}{cmd:>=0} default){p_end}
 {synopt :{cmd:h0check}}with {cmd:iterate}: ALSO reject a candidate self-consistent counterfactual that goes negative anywhere in the fitting region [zlo,zL] u [zH,zhi] (treated as diverged); OFF by default -- see {help polbunchbias##fallback:below}{p_end}
+{synopt :{cmd:notch}}standalone mode: {cmd:t0()}/{cmd:t1()} are proportional rates on all income, a tax notch (Kleven and Waseem 2013); see {help polbunchbias##notch:Notches}{p_end}
+{synopt :{cmd:dt(}{it:#}{cmd:)}}standalone mode: lump-sum tax increase at the cutoff, in {it:z}-units{p_end}
+{synopt :{cmd:nonresponders(}{it:#}{cmd:)}}with a notch: true share of nonresponders; default 0 standalone, the fitted share post-estimation{p_end}
 {synoptline}
 
 
@@ -381,6 +384,27 @@ Lower {cmd:promotetol()} to be more conservative about promoting; raise it
 (up to 1, unbounded acceptance) to promote even a drastic reduction.
 
 
+{marker notch}{...}
+{title:Notches}
+
+{pstd}
+For a tax notch ({cmd:notch} and/or {cmd:dt()}, or after {cmd:polbunch} with those options), {cmd:polbunchbias} reports the bias of the naive notch estimator, {cmd:estimator(1)}.
+The truth is the model {cmd:polbunch}'s {cmd:estimator(3)} imposes: a share {it:a} of the population is inert, responders with counterfactual earnings on the bunching segment move to the cutoff,
+and responders above it scale earnings down by ((1-t0)/(1-t1))^e, so the density above the hole is {it:a}*h0 + (1-{it:a})*h1. The naive estimator fits one polynomial through both sides as if
+that density were h0. The bias follows in closed form: the population least-squares fit gives the pseudo-true polynomial; the nonresponder share is the dominated-range mass over that polynomial's
+integral there; the bunching mass is measured in the excluded bins below the cutoff; the response solves the mass equation inflated by 1/(1-{it:a}); and Kleven and Waseem's equation (5) turns it into an elasticity.
+For a polynomial counterfactual the result is exact.
+{p_end}
+
+{pstd}
+The bias is zero for a pure notch whose window covers the hole (nothing above the window is distorted), and grows with the change in the marginal rate, the share of responders,
+and how far the counterfactual's shape is from the one where scaling and relocation cancel. A window that ends inside the hole produces a large bias, because the missing mass there is read as a low counterfactual.
+{cmd:estimator(3)} is consistent under this model, so {cmd:polbunchbias} refuses it. The {cmd:constant}/{cmd:exact}, {cmd:poolmass}/{cmd:splitmass} and {cmd:logapprox}/{cmd:exactlog} axes do not apply, and {cmd:log} is not supported.
+With {cmd:iterate} the self-consistent solution covers the elasticity, the counterfactual shape and the nonresponder share ({cmd:r(corrected_nonresponders)}).
+In standalone mode the share is identified from the whole bins inside the dominated range when {cmd:bw()} is given, and from the dominated range itself otherwise.
+{p_end}
+
+
 {marker examples}{...}
 {title:Examples}
 
@@ -419,6 +443,14 @@ Saez-style estimator:
 Iterated (self-consistent) bias correction:
 
 {phang2}{cmd:. polbunchbias, estimator(1) zstar(1) t0(0.2) t1(0.6) elasticity(0.4) support(0 2) window(0.99 1) relslope(0.5) iterate}
+
+
+{pstd}Naive notch estimator: rate on all income rises from 20% to 30% at z* = 1, 30% nonresponders, flat counterfactual{p_end}
+{phang2}{cmd:. polbunchbias, estimator(1) zstar(1) t0(0.2) t1(0.3) notch nonresponders(0.3) elasticity(0.3) window(0.98 1.4) support(0 2.6) relslope(0) bw(0.01)}{p_end}
+
+{pstd}After a naive notch fit, with the self-consistent correction{p_end}
+{phang2}{cmd:. polbunch z, cutoff(1) bw(0.01) polynomial(3) estimator(1) t0(0.2) t1(0.3) notch window(2 40)}{p_end}
+{phang2}{cmd:. polbunchbias, iterate}{p_end}
 
 
 {marker results}{...}
@@ -463,6 +495,13 @@ Iterated (self-consistent) bias correction:
 {synopt :{cmd:r(nosplit)}}1 if {cmd:poolmass} was used{p_end}
 {synopt :{cmd:r(input_elasticity)}}elasticity supplied to the command{p_end}
 {synopt :{cmd:r(corrected_elasticity)}}elasticity after {cmd:iterate}, else the input value{p_end}
+{synopt :{cmd:r(notch)}}1 if the bias is for a notch{p_end}
+{synopt :{cmd:r(jump)}}notch: jump in tax liability at the cutoff{p_end}
+{synopt :{cmd:r(delta_notch)}}notch: true relative response of the marginal buncher at the elasticity used{p_end}
+{synopt :{cmd:r(delta_dominated)}}notch: dominated range relative to the cutoff{p_end}
+{synopt :{cmd:r(nonresponders)}}notch: nonresponder share supplied to the command{p_end}
+{synopt :{cmd:r(bias_nonresponders)}}notch: bias in the estimated nonresponder share{p_end}
+{synopt :{cmd:r(corrected_nonresponders)}}notch: nonresponder share after {cmd:iterate}, else the input value{p_end}
 {synopt :{cmd:r(iterations)}}number of iterations performed{p_end}
 {synopt :{cmd:r(converged)}}1 if {cmd:iterate} converged; 0 if not; missing otherwise{p_end}
 {synopt :{cmd:r(bias_iterate_diverged)}}1 if the {cmd:iterate} self-consistency loop failed to converge and the un-iterated bias was reported instead; 0 otherwise{p_end}
@@ -522,6 +561,9 @@ Andresen, Martin E. (2026). "A better polynomial bunching estimator", working pa
 
 {phang}
 Kleven, Henrik Jacobsen (2016). "Bunching", {it:Annual Review of Economics}.
+
+{phang}
+Kleven, Henrik J., and Mazhar Waseem (2013). "Using Notches to Uncover Optimization Frictions and Structural Elasticities: Theory and Evidence from Pakistan", {it:Quarterly Journal of Economics}.
 
 {phang}
 Saez, Emmanuel (2010). "Do Taxpayers Bunch at Kink Points?", {it:American Economic Journal: Economic Policy}.
