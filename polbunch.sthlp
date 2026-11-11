@@ -63,7 +63,7 @@ from the bin spacing and {opt bw()} may not be specified.
 {synopt:{opt nomasscorr}}disable the reference-region overdispersion correction to the bunching-mass row under {cmd:vce(robust)}/{cmd:hc2}/{cmd:hc3}{p_end}
 {synopt:{opt nodots}}suppress bootstrap progress dots{p_end}
 {synopt:{it:vce(bootstrap) subopts}}{cmd:multinomial} (default) {c |} {cmd:residual} {c |} {cmd:wild}; {cmd:bayesian}; {cmd:normal} (default) {c |} {cmd:bc} {c |} {cmd:percentile}; {cmd:wildweights(rademacher|mammen|webb)}; {cmd:reps(#)}; {cmd:seed(#)}{p_end}
-{synopt:{opt savebins(file[, replace])}}with {cmd:vce(cluster} {it:clustvar}{cmd:)} on individual data: write the histogram + raw co-visitation matrix for later {cmd:vce(cluster} {it:stub}{cmd:)} use{p_end}
+{synopt:{cmd:savebins(}{it:file}[{cmd:, replace}]{cmd:)}}with {cmd:vce(cluster} {it:clustvar}{cmd:)} on individual data: write the histogram + raw co-visitation matrix for later {cmd:vce(cluster} {it:stub}{cmd:)} use{p_end}
 
 {syntab:Model-restriction test}
 {synopt:{opt test(string)}}which model-restriction test to report: {cmd:all} (default for estimators 1--3), {cmd:omnibus} (this estimator's own nested-restriction test -- {cmd:wald} for 1/4, {cmd:minimumdistance} for 2/3, chi2 K+1; default for estimator 4), {cmd:hausman} (focused on excess mass, chi2 1), {cmd:wald}/{cmd:minimumdistance} (name the mechanics directly; {cmd:wald} on estimator 2/3 is an off-label diagnostic, not that estimator's own omnibus test), or {cmd:none}{p_end}
@@ -168,7 +168,7 @@ The marginal buncher's relative response {it:delta} and the elasticity {it:e} ar
 A constant share {it:a} of the population is assumed to be inert: it does not react to the tax change at all. {it:a} is identified from the mass remaining in the strictly dominated range
 just above the cutoff, whose width jump/(1-t1) follows from the tax parameters alone ({cmd:e(dominated_range)}). The estimating equations are the reference-bin counts on both sides, the mass in the excluded bins
 at and below the cutoff (counterfactual mass plus (1-{it:a}) times the counterfactual mass on the bunching segment), and the mass in the whole bins inside the dominated range ({it:a} times the counterfactual mass there).
-Excluded bins above the dominated range are not used. {opt window(L H)} must have {it:L}>=1, and {it:H} must cover the dominated range; it should cover the whole hole.
+Excluded bins above the dominated range are not used. {opt window(L H)} must have {it:L}>=1, and {it:H} must cover the whole dominated range (a bin split by its upper edge is excluded, and left out of the nonresponder row); it should cover the whole hole.
 {p_end}
 
 {phang2}
@@ -186,8 +186,30 @@ For a pure notch (no change in the marginal rate) the two estimators coincide.
 Reported in the {cmd:bunching} equation: {cmd:number_bunchers}, {cmd:excess_mass}, {cmd:nonresponders} ({it:a}), {cmd:shift} ({it:delta}), {cmd:marginal_response} and the structural {cmd:elasticity}.
 {cmd:e(elasticity_observed)} is the elasticity implied by the bunching mass without the 1/(1-{it:a}) friction adjustment, when one exists. No elasticity is reported ({cmd:e(hasresp)}=0) when the estimated
 response does not exceed the dominated range, lies at the {opt deltamax()} bound, or {it:a} is at its upper bound.
-Available with {cmd:vce(conventional)}, {cmd:vce(robust)} and {cmd:vce(bootstrap)} (multinomial or bayesian). Not yet available with a notch: {opt log}, {opt wls}, {opt contrast}, specification tests,
+Available with {cmd:vce(conventional)}, {cmd:vce(robust)} and {cmd:vce(bootstrap)} (multinomial or bayesian). Not yet available with a notch: {opt log}, {opt wls}, {opt contrast}, the Hausman test, {cmd:test(}...{cmd:, boot)},
 {cmd:vce(cluster)}, and the residual and wild bootstraps.
+{p_end}
+
+{pstd}
+{it:Bounds on the nonresponder share.} {it:a} is a share and is estimated subject to 0 <= {it:a} <= 0.999 in both estimators. When the constraint binds, {it:a} is held fixed at the bound, the remaining
+standard errors are conditional on it, and {cmd:e(nonresponders_bound)} is -1 (lower) or 1 (upper). At the upper bound the dominated range holds at least its counterfactual mass, so there is no hole and no elasticity is reported.
+{p_end}
+
+{pstd}
+{it:Specification tests.} {cmd:test(omnibus)} (the default with a notch) compares the unrestricted fit -- free polynomials on each side, free bunching mass below the cutoff, free dominated-range mass --
+with the restrictions the estimator imposes. For {cmd:estimator(1)} that is the Wald test that the two polynomials coincide, exactly as for a kink. For {cmd:estimator(3)} it is a minimum-distance test:
+the dominated-range mass gives {it:a}, and the polynomial above the hole and the bunching mass must then match the model for some response {it:delta}, which is minimised over. Both have K+1 degrees of freedom,
+and for a pure notch they coincide. The estimator(3) test is not computed when the excluded region ends inside the fitted hole.
+{p_end}
+
+{pstd}
+These tests only look at the density above the hole. The {it:hole-mass test}, reported alongside whenever tests are on, covers the hole itself: it compares the observed mass in the excluded bins above the dominated range
+with the mass the fitted model predicts there (nonresponders only inside the hole; above its upper edge the counterfactual for {cmd:estimator(1)}, the nonresponder/responder mixture for {cmd:estimator(3)}).
+This is Kleven and Waseem's condition that bunching equals missing mass, used as a chi2(1) test rather than to choose the upper bound. It is an adding-up check: when the excluded region covers the whole hole,
+people who stay in the hole instead of bunching leave both sides of the comparison unchanged, so the test has {ul:no power} against frictions that vary with distance from the notch or against heterogeneous elasticities.
+It detects mass that is created or lost (for example extensive-margin responses), a counterfactual that extrapolates badly across the hole, and, for {cmd:estimator(1)} with a change in the marginal rate, the naive model itself,
+which ignores the responders' shift above the hole.
+Results are in {cmd:e(hole_mass)}, {cmd:e(hole_mass_pred)}, {cmd:e(hole_diff)}, {cmd:e(hole_se)}, {cmd:e(hole_chi2)} and {cmd:e(hole_p)}.
 {p_end}
 
 {pstd}
@@ -376,7 +398,7 @@ With {it:individual-level} input, {it:clustvar} is a cluster identifier and {bf:
 With {it:pre-binned} input, {it:clustvar} is instead a {it:stub} naming {bf:J} variables {it:stub}{cmd:1}..{it:stub}{cmd:J} that hold the {bf:J x J} bin co-visitation matrix, one column per bin, row-aligned with the histogram; the number of clusters must be given as {cmd:vce(cluster} {it:stub}{cmd:, nclusters(}{it:#}{cmd:))} (or carried in the dataset characteristic {cmd:_dta[polbunch_nclusters]}). The matrix must be symmetric with {bf:M[j,j] = sum_i c_ij^2 >= y_j}. Only the full matrix is accepted -- a diagonal-only {bf:M} does not give a valid covariance; use {cmd:vce(robust)} on the histogram as the per-bin-only hedge.{p_end}
 
 {phang}
-{opt savebins(filename[, replace])} (individual data, with {cmd:vce(cluster} {it:clustvar}{cmd:)}) writes the histogram and the raw {bf:J x J} co-visitation matrix to {it:filename}{cmd:.dta} as {cmd:freq}, {cmd:midpoint}, {cmd:cv1}..{cmd:cvJ}, with the cluster count, cutoff and bandwidth stored as dataset characteristics. The file is exactly the input {cmd:vce(cluster cv)} expects, so a panel can be reduced to a disclosable histogram-plus-matrix once and analysed later without the microdata.
+{cmd:savebins(}{it:filename}[{cmd:, replace}]{cmd:)} (individual data, with {cmd:vce(cluster} {it:clustvar}{cmd:)}) writes the histogram and the raw {bf:J x J} co-visitation matrix to {it:filename}{cmd:.dta} as {cmd:freq}, {cmd:midpoint}, {cmd:cv1}..{cmd:cvJ}, with the cluster count, cutoff and bandwidth stored as dataset characteristics. The file is exactly the input {cmd:vce(cluster cv)} expects, so a panel can be reduced to a disclosable histogram-plus-matrix once and analysed later without the microdata.
 
 {phang}
 {cmd:vce(none)} suppresses all internal variance estimation -- point estimates only. Useful in Monte Carlo work or under Stata's {cmd:bootstrap} prefix.
@@ -583,6 +605,10 @@ Collapse to binned data and use polbunch with bin counts {cmd:freq} and bin midp
 {synopt:{cmd:e(dominated_bins)}}number of whole bins in the dominated range, used to identify the nonresponder share{p_end}
 {synopt:{cmd:e(elasticity_observed)}}notch elasticity without the friction adjustment, when it exists{p_end}
 {synopt:{cmd:e(hole_upper)}}upper edge of the hole implied by the fit ({cmd:estimator(3)} with a notch){p_end}
+{synopt:{cmd:e(nonresponders_bound)}}notch: 0 if the nonresponder share is interior, -1 at its lower bound 0, 1 at its upper bound 0.999, 2 if undefined{p_end}
+{synopt:{cmd:e(hole_mass)}, {cmd:e(hole_mass_pred)}}notch: observed and model-predicted mass in the excluded bins above the dominated range{p_end}
+{synopt:{cmd:e(hole_diff)}, {cmd:e(hole_se)}}notch: their difference and its standard error{p_end}
+{synopt:{cmd:e(hole_chi2)}, {cmd:e(hole_p)}}notch: chi2(1) hole-mass test statistic and p-value{p_end}
 {synopt:{cmd:e(delta_weakid)}}estimators 2/3: 1 if the structural shift {cmd:delta} was weakly identified (search bound hit, or multi-modal profile); 0 otherwise{p_end}
 {synopt:{cmd:e(delta_nbasin)}}estimators 2/3: number of competing interior basins in the profile (1 = well identified; >= 2 triggers {cmd:e(delta_weakid)}){p_end}
 {synopt:{cmd:e(delta_nonneg)}}estimators 2/3: 1 if the profile search was restricted to {cmd:delta} >= 0 (the default), 0 if {opt allownegative} was specified{p_end}

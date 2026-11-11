@@ -683,7 +683,8 @@ program define polbunchbias, rclass
             di as error "polbunchbias: the nonresponder share must be in [0,1)"
             exit 198
         }
-        if `zl' >= `zstar' | `zh' < `zstar' + `_nD' - 1e-8*abs(`zstar') {
+        // the whole dominated range, not only the whole bins `_nD' counts
+        if `zl' >= `zstar' | `zh' < `zstar' + `_njump'/(1-`t1') - 1e-8*abs(`zstar') {
             di as error "polbunchbias: the window must start below the cutoff and cover the dominated range above it"
             exit 198
         }

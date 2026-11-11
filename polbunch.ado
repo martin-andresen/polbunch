@@ -269,12 +269,28 @@
 						if `_mdb_wanted' & "`mdbwildwt'"=="" local mdbwildwt "rademacher"
 						if `_mdb_wanted' & `mdbreps'<=1 local mdbreps = 199
 
+						/*
+							Notch: the omnibus test is the Wald test of gamma = beta
+							for the naive estimator (unchanged from a kink) and a
+							minimum-distance test over the response for estimator 3
+							(notch_mdt_qG).  The hole-mass test rides along whenever
+							tests are on.  No Hausman test or bootstrap of the
+							statistic yet.
+						*/
 						if `notchmode' {
-							if !inlist("`test'","","none") {
-								noi di as error "Specification tests are not yet available with a notch; use test(none)."
+							if `_mdb_wanted' {
+								noi di as error "test(..., boot) is not yet available with a notch."
 								exit 198
 							}
-							loc test none
+							if inlist("`test'","","all") loc test omnibus
+							if "`test'"=="hausman" {
+								noi di as error "The Hausman test is not yet available with a notch; use test(omnibus) or test(none)."
+								exit 198
+							}
+							if "`test'"=="wald" & `estimator'==3 {
+								noi di as error "With a notch, estimator(3) is tested with test(omnibus) (minimum distance)."
+								exit 198
+							}
 						}
 
 						if "`test'"=="" {
@@ -866,8 +882,12 @@
 								noi di as error "The dominated range above the notch (width " %9.0g `notch_dzD' ") is narrower than one bin; use a smaller bin width."
 								exit 198
 							}
-							if `H' < `notch_nD' {
-								noi di as error "The excluded region must cover the dominated range above the notch: use window(L H) with H >= `notch_nD'."
+							/* a bin split by the upper edge of the dominated range
+							   is left out of the dominated row but must still be
+							   excluded: it cannot serve as a reference bin */
+							local notch_nDcover = ceil(`notch_dzD' / `bw_orig' - 1e-8)
+							if `H' < `notch_nDcover' {
+								noi di as error "The excluded region must cover the whole dominated range above the notch: use window(L H) with H >= `notch_nDcover'."
 								exit 198
 							}
 							if `L' < 1 {
@@ -1381,9 +1401,15 @@
 										cutoff_est(`cutoff_est') bw_est(`bw_est') ///
 										t0(`t0') t1(`t1') jump(`notchjump') ///
 										zd_est(`notch_zD_est') zl_excl_est(`zL_excl_est') ///
+										zh_excl_est(`zH_excl_est') ///
 										`_vce_call' hctype(`hctype') masscorr(`masscorr') ///
-										deltamax(`deltamax')
+										deltamax(`deltamax') `=cond(`s'==0 & "`test'"!="none", "hole", "")'
 									if `s'==0 {
+										local notch_abound_main = e(nonresponders_bound)
+										tempname notch_hole_main
+										local notch_hashole = 0
+										capture matrix `notch_hole_main' = e(hole)
+										if !_rc local notch_hashole = 1
 										local notch_eobs_main = .
 										capture confirm scalar e(elasticity_observed)
 										if !_rc local notch_eobs_main = e(elasticity_observed)
@@ -1681,7 +1707,28 @@
 
 
 								//IF TESTING: ALSO ESTIMATE UNRESTRICTED MODEL
-								if `dotest'&`estimator'!=4 {
+								if `dotest' & `notchmode' & `estimator'==3 {
+									/* notch, estimator 3: unrestricted
+									   (beta, gamma, B, M_D) for the
+									   minimum-distance test */
+									bunch_notch `y' `z' `side' `bunch', ///
+										estimator(0) k(`polynomial') ///
+										cutoff_orig(`cutoff_orig') bw_orig(`bw_orig') ///
+										cutoff_est(`cutoff_est') bw_est(`bw_est') ///
+										t0(`t0') t1(`t1') jump(`notchjump') ///
+										zd_est(`notch_zD_est') zl_excl_est(`zL_excl_est') ///
+										zh_excl_est(`zH_excl_est') ///
+										vce(`vce') hctype(`hctype') masscorr(`masscorr')
+
+									if `s' == 0 {
+										matrix `b0' = e(b)
+										if "`vce'"=="analytic" matrix `V0' = e(V)
+									}
+									else if `bootreps' > 1 {
+										matrix `b0s' = nullmat(`b0s') \ e(b)
+									}
+								}
+								else if `dotest'&`estimator'!=4 {
 									bunch_profile `y' `z' `side' `bunch', ///
 										estimator(0) k(`polynomial') ///
 										cutoff_orig(`cutoff_orig') bw_orig(`bw_orig') ///
@@ -2033,6 +2080,19 @@
 									dovar block), so it is not consistent with a
 									weighted e(V) for the Hausman sandwich either.
 								*/
+								if `notchmode' & `estimator'==3 {
+									local _nskip ""
+									if "`hasresp_main'"=="0" local _nskip "the response is not identified"
+									else if !missing(`notch_zI_main') {
+										if `notch_zI_main' > `zH_excl_orig' + `bw_orig'*1e-6 ///
+											local _nskip "the excluded region ends inside the fitted hole"
+									}
+									if "`_nskip'" != "" {
+										noi di as text "Note: omnibus test not computed -- `_nskip'."
+										local _tests_to_run ""
+									}
+								}
+
 								if ("`vce'"!="analytic" | `estimator'==2 | "`wls'"!="") & strpos(" `_tests_to_run' "," hausman ") {
 									local _ttr2 ""
 									foreach _tt of local _tests_to_run {
@@ -2306,7 +2366,20 @@
 												capture noisily mata: pbx_mdt_bootstat("`_mdb_b0s'", "`_mdb_V0copy'")
 												if !_rc local _mdboot_ok = 1
 											}
-											capture noisily polbunch_minimumdistancetest, ///
+											if `notchmode' {
+												local init 0.05
+												capture local init = el(`bmain', 1, colnumb(`bmain', "bunching:shift"))
+												if _rc | missing(real("`init'")) local init 0.05
+												capture noisily polbunch_notchmdtest, ///
+													k(`polynomial') ///
+													cutofforig(`cutoff_orig') cutoffest(`cutoff_est') ///
+													bworig(`bw_orig') bwest(`bw_est') ///
+													t0(`t0') t1(`t1') jump(`notchjump') ///
+													zdest(`notch_zD_est') zlexclest(`zL_excl_est') ///
+													zhexclest(`zH_excl_est') ///
+													deltamax(`deltamax') initdelta(`init')
+											}
+											else capture noisily polbunch_minimumdistancetest, ///
 												estimator(`estimator') ///
 												k(`polynomial') ///
 												cutofforig(`cutoff_orig') ///
@@ -2715,6 +2788,15 @@
 						ereturn scalar dominated_bins     = `notch_nD'
 						if !missing(`notch_eobs_main') ereturn scalar elasticity_observed = `notch_eobs_main'
 						if !missing(`notch_zI_main')   ereturn scalar hole_upper = `notch_zI_main'
+						ereturn scalar nonresponders_bound = `notch_abound_main'
+						if `notch_hashole' {
+							ereturn scalar hole_mass      = `notch_hole_main'[1,1]
+							ereturn scalar hole_mass_pred = `notch_hole_main'[1,2]
+							ereturn scalar hole_diff      = `notch_hole_main'[1,3]
+							ereturn scalar hole_se        = `notch_hole_main'[1,4]
+							ereturn scalar hole_chi2      = `notch_hole_main'[1,5]
+							ereturn scalar hole_p         = `notch_hole_main'[1,6]
+						}
 					}
 						ereturn scalar zlo = `_zlo_val'
 						ereturn scalar zhi = `_zhi_val'
@@ -2803,6 +2885,24 @@
 										di as txt "      Reference bins inside the hole are fit as nonresponders only, so the sharp hole edge"
 										di as txt "      identifies the response and the analytic standard errors are unreliable. Widen window()."
 									}
+								}
+								if `notch_abound_main' == -1 {
+									di as txt "Note: the nonresponder share is at its lower bound 0 and is held fixed there;"
+									di as txt "      the other standard errors are conditional on it. See e(nonresponders_bound)."
+								}
+								else if `notch_abound_main' == 1 {
+									di as txt "Note: the nonresponder share is at its upper bound (0.999) and is held fixed there:"
+									di as txt "      the dominated range holds at least its counterfactual mass, so there is no hole."
+								}
+								else if `notch_abound_main' == 2 {
+									di as txt "Note: the fitted counterfactual is not positive over the dominated range, so the"
+									di as txt "      nonresponder share is undefined; it is shown at its upper bound."
+								}
+								if `notch_hashole' {
+									di as txt "Hole-mass test (excluded bins above the dominated range): observed " ///
+										as res %9.0g `notch_hole_main'[1,1] as txt "  predicted " as res %9.0g `notch_hole_main'[1,2]
+									di as txt "      chi2(1) = " as res %8.3f `notch_hole_main'[1,5] ///
+										as txt "   p = " as res %6.4f `notch_hole_main'[1,6]
 								}
 								if e(hasresp) == 0 {
 									di as txt "Note: no structural elasticity is reported -- the estimated response is not above"
@@ -3831,7 +3931,8 @@
 				JUMP(real) ///
 				zd_est(real) ///
 				zl_excl_est(real) ///
-				[ vce(string) HCType(real -1) MASScorr(real 1) DELTAmax(real 1) ]
+				zh_excl_est(real) ///
+				[ vce(string) HCType(real -1) MASScorr(real 1) DELTAmax(real 1) HOLE ]
 
 			gettoken yvar rest : varlist
 			gettoken zvar rest : rest
@@ -3852,13 +3953,8 @@
 
 			mata: notch_run("`y_t'", "`z_t'", "`side_t'", "`bunch_t'", ///
 				`estimator', `k', `cutoff_orig', `bw_orig', `cutoff_est', `bw_est', ///
-				`t0', `t1', `jump', `zd_est', `zl_excl_est', ///
-				`dovar0', `hctype', `masscorr', `deltamax')
-
-			tempname b V
-			local nkeep   = r_notch_nkeep
-			local hasresp = r_notch_hasresp
-			matrix `b' = r_b_notch[1, 1..`nkeep']
+				`t0', `t1', `jump', `zd_est', `zl_excl_est', `zh_excl_est', ///
+				`dovar0', `hctype', `masscorr', `deltamax', `=("`hole'" != "")')
 
 			local h0names
 			forvalues j = 1/`k' {
@@ -3867,6 +3963,43 @@
 				local h0names `h0names' `term'
 			}
 			local h0names `h0names' _cons
+
+			tempname b V
+
+			/* estimator(0): the unrestricted fit the specification test
+			   reads -- raw (beta, gamma, B, M_D), no transform. */
+			if `estimator' == 0 {
+				matrix `b' = r_b_notchU
+				local cnames `h0names' `h0names' B M_D
+				local eqnames
+				forvalues j = 1/`=`k'+1' {
+					local eqnames `eqnames' h0
+				}
+				forvalues j = 1/`=`k'+1' {
+					local eqnames `eqnames' h1
+				}
+				local eqnames `eqnames' bunching bunching
+				matrix colnames `b' = `cnames'
+				matrix coleq    `b' = `eqnames'
+				if `dovar0' {
+					matrix `V' = r_V_notchU
+					matrix rownames `V' = `cnames'
+					matrix colnames `V' = `cnames'
+					matrix roweq    `V' = `eqnames'
+					matrix coleq    `V' = `eqnames'
+					ereturn post `b' `V', esample(`touse')
+				}
+				else {
+					ereturn post `b', esample(`touse')
+				}
+				ereturn local cmd "bunch_notch"
+				ereturn scalar estimator = 0
+				exit
+			}
+
+			local nkeep   = r_notch_nkeep
+			local hasresp = r_notch_hasresp
+			matrix `b' = r_b_notch[1, 1..`nkeep']
 
 			local cnames `h0names' `h0names' number_bunchers excess_mass nonresponders
 			local eqnames
@@ -3913,6 +4046,49 @@
 			if !_rc ereturn scalar dispersion = r_phi_notch
 			if r_notch_eobs < . ereturn scalar elasticity_observed = r_notch_eobs
 			if r_notch_zI < .   ereturn scalar hole_upper = r_notch_zI
+			ereturn scalar nonresponders_bound = r_notch_abound
+			tempname holem
+			matrix `holem' = r_notch_hole
+			if !missing(`holem'[1,5]) ereturn matrix hole = `holem'
+		end
+
+		/*
+			Minimum-distance (omnibus) test of the structural notch
+			restrictions; reads the unrestricted bunch_notch estimator(0)
+			fit from e(b)/e(V).  See notch_mdt_qG().
+		*/
+		cap program drop polbunch_notchmdtest
+		program define polbunch_notchmdtest, rclass
+			version 16.0
+			syntax , K(integer) CUTOFFORIG(real) CUTOFFEST(real) BWORIG(real) BWEST(real) ///
+				T0(real) T1(real) JUMP(real) ZDEST(real) ZLEXCLEST(real) ZHEXCLEST(real) ///
+				[ DELTAmax(real 1) INITdelta(real 0.05) ]
+
+			capture confirm matrix e(b)
+			if _rc {
+				di as err "e(b) not found; post the unrestricted notch fit before calling polbunch_notchmdtest"
+				exit 301
+			}
+			capture confirm matrix e(V)
+			if _rc {
+				di as err "e(V) not found; post the unrestricted notch fit before calling polbunch_notchmdtest"
+				exit 301
+			}
+			tempname theta V
+			matrix `theta' = e(b)
+			matrix `V'     = e(V)
+
+			mata: notch_mdt_mata("`theta'", "`V'", `k', `cutofforig', `bworig', `cutoffest', `bwest', ///
+				`t0', `t1', `jump', `zdest', `zlexclest', `zhexclest', `deltamax', `initdelta')
+
+			return scalar failcode = r_nmd_fail
+			if r_nmd_fail == 0 {
+				return scalar chi2  = r_nmd_chi2
+				return scalar df    = r_nmd_df
+				return scalar p     = r_nmd_p
+				return scalar delta = r_nmd_delta
+				return scalar a     = r_nmd_a
+			}
 		end
 
 capture program drop saez_transform
@@ -9524,6 +9700,90 @@ cap program drop bunch_saez
 		return(Jm)
 	}
 
+	// tax and grid parameters shared by estimation and the specification test
+	struct notch_par scalar notch_setup(
+		real scalar estimator,
+		real scalar K,
+		real scalar cutoff_orig,
+		real scalar bw_orig,
+		real scalar cutoff_est,
+		real scalar bw_est,
+		real scalar t0,
+		real scalar t1,
+		real scalar jump,
+		real scalar zD_est,
+		real scalar zL_excl_est
+	)
+	{
+		struct notch_par scalar P
+
+		P.est         = estimator
+		P.K           = K
+		P.rho         = (1 - t1) / (1 - t0)
+		P.c           = P.rho + jump / (cutoff_orig * (1 - t0))
+		P.deltaD      = jump / ((1 - t1) * cutoff_orig)
+		P.cutoff_orig = cutoff_orig
+		P.bw_orig     = bw_orig
+		P.cutoff_est  = cutoff_est
+		P.bw_est      = bw_est
+		P.xscale      = bw_orig / bw_est
+		P.Rlo         = intbasis(zL_excl_est, cutoff_est, K) / bw_est
+		P.RD          = intbasis(cutoff_est, zD_est, K) / bw_est
+		P.zR          = J(0, 1, .)
+		P.X0L         = J(0, K + 1, .)
+		P.X0R         = J(0, K + 1, .)
+
+		return(P)
+	}
+
+	/*
+		Model-predicted mass in the excluded bins between the dominated
+		range and the window edge, (zD, zH], from the raw parameters
+		(see notch_transform() for theta).  Only nonresponders sit in the
+		hole; above its upper edge the density is h0 (naive) or the
+		a-mixture of h0 and the shifted h1 (structural).  Missing when
+		the response is not defined.
+	*/
+	real scalar notch_holepred(
+		real rowvector theta,
+		struct notch_par scalar P,
+		real scalar zD_est,
+		real scalar zH_est
+	)
+	{
+		real scalar Kb, a, B, delta, e, dk, r, zB, zI, pred
+		real rowvector beta, gam
+
+		Kb   = P.K + 1
+		beta = theta[1..Kb]
+		a    = theta[Kb + 2]
+
+		if (P.est == 1) {
+			B = theta[Kb + 1]
+			if (!(a < 1 & B > 0)) return(.)
+			r = eresp(B / (1 - a), P.cutoff_est, beta, P.bw_est, P.xscale)
+			if (r >= .) return(.)
+			zB = P.cutoff_est + r / P.xscale
+			if (zB < zD_est) zB = zD_est
+			if (zB > zH_est) zB = zH_est
+			return((a * intbasis(zD_est, zB, P.K) + intbasis(zB, zH_est, P.K)) * beta' / P.bw_est)
+		}
+
+		delta = theta[Kb + 1]
+		e     = notch_e_from_delta(delta, P)
+		if (e >= .) return(.)
+		dk    = P.rho^(-e) - 1
+		zI    = P.cutoff_est + P.cutoff_orig * ((1 + delta) / (1 + dk) - 1) * P.bw_est / P.bw_orig
+		if (zI < zD_est) zI = zD_est
+
+		pred = a * intbasis(zD_est, zH_est, P.K) * beta'
+		if (zI < zH_est) {
+			gam  = beta * h1_A_matrix(dk, 3, P.K, P.cutoff_orig, P.bw_orig, P.cutoff_est, P.bw_est, 0, 0)'
+			pred = pred + (1 - a) * intbasis(zI, zH_est, P.K) * gam'
+		}
+		return(pred / P.bw_est)
+	}
+
 	void notch_run(
 		string scalar yvar,
 		string scalar zvar,
@@ -9540,68 +9800,127 @@ cap program drop bunch_saez
 		real scalar jump,
 		real scalar zD_est,
 		real scalar zL_excl_est,
+		real scalar zH_excl_est,
 		real scalar dovar,
 		real scalar hctype,
 		real scalar masscorr,
-		real scalar deltamax
+		real scalar deltamax,
+		real scalar dohole
 	)
 	{
 		struct notch_par scalar P, P1
 
-		real colvector y, z, side, bunch, iL, iR, ystack, mu, dmu
-		real scalar Kb, nL, nref, Mb, MD, Ntot, B1, h0D, a1
-		real scalar delta, ahat, Q, lb, weakid, hasresp, nkeep, h, dm, eobs
-		real rowvector beta, theta, out, out1
-		real matrix C0, C1, Cp0, Cp1, Cm0, Cm1, X, G, Vm, bread, Vth, Jt, V
+		real colvector y, z, side, bunch, iL, iR, ystack, mu, dmu, ifree, cvec, yplus, gP
+		real scalar Kb, nL, nR, nref, Mb, MD, Mh, nhole, Ntot, B1, h0D, a1, amax
+		real scalar delta, ahat, Q, lb, weakid, hasresp, nkeep, h, dm, eobs, abound, p
+		real scalar j, hp, pp, pm, pred, dhole, vhole
+		real rowvector beta, gam, theta, out, out1, tp, tm
+		real matrix C0, C1, Cp0, Cp1, Cm0, Cm1, X, G, Gf, Vm, bread, Vf, Vth, Jt, V
 
-		Kb = K + 1
+		Kb   = K + 1
+		amax = 0.999
 
 		y     = st_data(., yvar)
 		z     = st_data(., zvar)
 		side  = st_data(., sidevar)
 		bunch = st_data(., bunchvar)
 
-		P.est         = estimator
-		P.K           = K
-		P.rho         = (1 - t1) / (1 - t0)
-		P.c           = P.rho + jump / (cutoff_orig * (1 - t0))
-		P.deltaD      = jump / ((1 - t1) * cutoff_orig)
-		P.cutoff_orig = cutoff_orig
-		P.bw_orig     = bw_orig
-		P.cutoff_est  = cutoff_est
-		P.bw_est      = bw_est
-		P.xscale      = bw_orig / bw_est
+		P = notch_setup(estimator, K, cutoff_orig, bw_orig, cutoff_est, bw_est,
+			t0, t1, jump, zD_est, zL_excl_est)
 
 		iL = selectindex((bunch :== 0) :& (side :== -1))
 		iR = selectindex((bunch :== 0) :& (side :==  1))
 		nL = rows(iL)
+		nR = rows(iR)
 
 		P.zR  = z[iR]
 		P.X0L = pbasis(z[iL], K)
 		P.X0R = pbasis(z[iR], K)
-		P.Rlo = intbasis(zL_excl_est, cutoff_est, K) / bw_est
-		P.RD  = intbasis(cutoff_est, zD_est, K) / bw_est
 
-		Mb   = sum(select(y, (bunch :> 0) :& (z :< cutoff_est)))
-		MD   = sum(select(y, (bunch :> 0) :& (z :> cutoff_est) :& (z :< zD_est)))
-		Ntot = sum(y)
+		Mb    = sum(select(y, (bunch :> 0) :& (z :< cutoff_est)))
+		MD    = sum(select(y, (bunch :> 0) :& (z :> cutoff_est) :& (z :< zD_est)))
+		Mh    = sum(select(y, (bunch :> 0) :& (z :> zD_est)))
+		nhole = sum((bunch :> 0) :& (z :> zD_est))
+		Ntot  = sum(y)
 
 		ystack = y[iL] \ y[iR] \ Mb \ MD
 		nref   = rows(ystack) - 2
 
-		// naive solution: also the starting point for the structural profile
-		X    = P.X0L \ P.X0R
-		beta = qrsolve(X, ystack[1::nref])'
-		B1   = Mb - P.Rlo * beta'
-		h0D  = P.RD * beta'
-		a1   = MD / h0D
+		/*
+			Unrestricted fit for the specification test:
+			theta_U = (beta, gamma, B, M_D) -- free polynomials on each side,
+			free excess mass below the cutoff, free dominated-range mass.
+		*/
+		if (estimator == 0) {
+			beta = qrsolve(P.X0L, ystack[1::nL])'
+			gam  = qrsolve(P.X0R, ystack[(nL+1)::nref])'
+			B1   = Mb - P.Rlo * beta'
+
+			theta = beta, gam, B1, MD
+			G = (P.X0L, J(nL, Kb + 2, 0)) \
+			    (J(nR, Kb, 0), P.X0R, J(nR, 2, 0)) \
+			    (P.Rlo, J(1, Kb, 0), 1, 0) \
+			    (J(1, 2*Kb + 1, 0), 1)
+			mu = P.X0L * beta' \ P.X0R * gam' \ Mb \ MD
+
+			if (dovar == 1) {
+				if (hctype >= 0) {
+					V = variance_robust(G, ystack, mu, hctype, 2, masscorr)
+				}
+				else {
+					Vm    = diag(ystack) - (ystack * ystack') / Ntot
+					bread = pbx_bread(G)
+					V     = bread * G' * Vm * G * bread
+					V     = (V + V') / 2
+				}
+			}
+			else {
+				V = J(cols(theta), cols(theta), .)
+			}
+
+			st_matrix("r_b_notchU", theta)
+			st_matrix("r_V_notchU", V)
+			return
+		}
+
+		/*
+			Naive solution, also the starting point for the structural
+			profile.  The nonresponder share is confined to [0, amax]: the
+			closed form M_D / int_D h0hat cannot be negative but can exceed
+			one.  When it does, a is fixed at amax and beta is re-solved by
+			least squares with the dominated row M_D = amax * int_D h0 added
+			(the same bounded problem estimator 3 solves).  abound: 0
+			interior, -1 at zero, 1 at amax, 2 if int_D h0hat <= 0.
+		*/
+		X      = P.X0L \ P.X0R
+		beta   = qrsolve(X, ystack[1::nref])'
+		h0D    = P.RD * beta'
+		abound = 0
+		if (!(h0D > 0)) {
+			a1     = amax
+			abound = 2
+		}
+		else {
+			a1 = MD / h0D
+			if (a1 > amax) {
+				a1     = amax
+				abound = 1
+				beta   = qrsolve(X \ (amax * P.RD), ystack[1::nref] \ MD)'
+				h0D    = P.RD * beta'
+			}
+			else if (a1 <= 0) {
+				a1     = 0
+				abound = -1
+			}
+		}
+		B1 = Mb - P.Rlo * beta'
 
 		weakid = 0
 
 		if (estimator == 1) {
 			theta = beta, B1, a1
 			G  = (X, J(nref, 2, 0)) \ (P.Rlo, 1, 0) \ (a1 * P.RD, 0, h0D)
-			mu = X * beta' \ Mb \ MD
+			mu = X * beta' \ Mb \ a1 * h0D
 		}
 		else {
 			P1     = P
@@ -9611,7 +9930,18 @@ cap program drop bunch_saez
 			lb = P.deltaD + 1e-9
 			delta = notch_delta_solve(P, ystack, lb, deltamax, out1[2*Kb + 4], ahat, Q)
 
-			if (delta <= lb + 1e-6 | delta >= deltamax - 1e-6 | ahat >= 0.999 - 1e-6) weakid = 1
+			// snap the bounded search to the bound it converged to
+			abound = 0
+			if (ahat < 1e-7) {
+				ahat   = 0
+				abound = -1
+			}
+			else if (ahat > amax - 1e-7) {
+				ahat   = amax
+				abound = 1
+			}
+
+			if (delta <= lb + 1e-6 | delta >= deltamax - 1e-6 | abound == 1) weakid = 1
 
 			notch_design_parts(delta, P, C0, C1)
 			X     = C0 + ahat * C1
@@ -9628,8 +9958,13 @@ cap program drop bunch_saez
 			G = X, dmu, C1 * beta'
 		}
 
+		// a at a bound is held fixed: its column leaves the Jacobian
+		p     = cols(G)
+		ifree = (abound == 0 ? (1::p) : (1::(p - 1)))
+		Gf    = G[., ifree]
+
 		out     = notch_transform(theta, P)
-		hasresp = (out[2*Kb + 6] < .) & !weakid
+		hasresp = (out[2*Kb + 6] < .) & !weakid & abound < 1
 		if (!hasresp) out[(2*Kb + 4)..(2*Kb + 6)] = J(1, 3, .)
 		nkeep   = (hasresp ? 2*Kb + 6 : 2*Kb + 3)
 
@@ -9642,23 +9977,25 @@ cap program drop bunch_saez
 
 		if (dovar == 1) {
 			if (hctype >= 0) {
-				Vth = variance_robust(G, ystack, mu, hctype, 2, masscorr)
+				Vf = variance_robust(Gf, ystack, mu, hctype, 2, masscorr)
 			}
 			else {
 				// multinomial covariance with the full-sample N: the stack
 				// leaves out the excluded bins above the dominated range
 				Vm    = diag(ystack) - (ystack * ystack') / Ntot
-				bread = pbx_bread(G)
-				Vth   = bread * G' * Vm * G * bread
-				Vth   = (Vth + Vth') / 2
+				bread = pbx_bread(Gf)
+				Vf    = bread * Gf' * Vm * Gf * bread
+				Vf    = (Vf + Vf') / 2
 			}
+			Vth = J(p, p, 0)
+			Vth[ifree, ifree] = Vf
 
 			Jt = notch_jac(theta, P, nkeep)
 			V  = Jt * Vth * Jt'
 			V  = (V + V') / 2
 
-			st_numscalar("r_phi_notch", pearson_phi(ystack[1::nref], mu[1::nref], cols(G)))
-			st_matrix("r_gof", pbx_gof(ystack[1::nref], mu[1::nref], cols(G)))
+			st_numscalar("r_phi_notch", pearson_phi(ystack[1::nref], mu[1::nref], cols(Gf)))
+			st_matrix("r_gof", pbx_gof(ystack[1::nref], mu[1::nref], cols(Gf)))
 			st_numscalar("r_gof_rmse", sqrt(mean((ystack[1::nref] :- mu[1::nref]):^2)))
 			st_numscalar("r_gof_massresid", .)
 			st_matrix("r_gof_below",
@@ -9670,11 +10007,50 @@ cap program drop bunch_saez
 			V = J(nkeep, nkeep, .)
 		}
 
+		/*
+			Hole-mass test: observed mass in the excluded bins above the
+			dominated range against the model's prediction, d = M_hole -
+			P(theta_hat).  theta_hat is least squares on the stack, so
+			d ~ c'e+ with c = (-Gf (Gf'Gf)^-1 dP/dtheta ; 1) on the stack
+			augmented by the hole row, and Var(d) = c' Vm+ c under the
+			multinomial covariance at the full-sample N.
+		*/
+		st_matrix("r_notch_hole", J(1, 6, .))
+		if (dohole == 1 & nhole >= 1) {
+			pred = notch_holepred(theta, P, zD_est, zH_excl_est)
+			if (pred < .) {
+				gP = J(rows(ifree), 1, 0)
+				for (j = 1; j <= rows(ifree); j++) {
+					if (ifree[j] <= Kb) hp = 1e-5 * max((max(abs(theta[1..Kb])), 1e-8))
+					else                hp = 1e-6 * max((abs(theta[ifree[j]]), 1))
+					tp = theta
+					tm = theta
+					tp[ifree[j]] = theta[ifree[j]] + hp
+					tm[ifree[j]] = theta[ifree[j]] - hp
+					pp = notch_holepred(tp, P, zD_est, zH_excl_est)
+					pm = notch_holepred(tm, P, zD_est, zH_excl_est)
+					if (pp < . & pm < .) gP[j] = (pp - pm) / (2*hp)
+					else if (pp < .)     gP[j] = (pp - pred) / hp
+					else if (pm < .)     gP[j] = (pred - pm) / hp
+				}
+				cvec  = (-Gf * (pbx_bread(Gf) * gP)) \ 1
+				yplus = ystack \ Mh
+				Vm    = diag(yplus) - (yplus * yplus') / Ntot
+				vhole = cvec' * Vm * cvec
+				dhole = Mh - pred
+				if (vhole > 0 & vhole < .) {
+					st_matrix("r_notch_hole", (Mh, pred, dhole, sqrt(vhole),
+						dhole^2 / vhole, chi2tail(1, dhole^2 / vhole)))
+				}
+			}
+		}
+
 		st_matrix("r_b_notch", out)
 		st_matrix("r_V_notch", V)
 		st_numscalar("r_notch_nkeep", nkeep)
 		st_numscalar("r_notch_hasresp", hasresp)
 		st_numscalar("r_notch_weakid", weakid)
+		st_numscalar("r_notch_abound", abound)
 		st_numscalar("r_notch_eobs", eobs)
 
 		// upper edge of the hole implied by the structural fit, original units
@@ -9685,6 +10061,231 @@ cap program drop bunch_saez
 		else {
 			st_numscalar("r_notch_zI", .)
 		}
+	}
+
+	/*
+		Minimum-distance test of the structural notch restrictions on the
+		unrestricted theta_U = (beta, gamma, B, M_D).  The dominated row
+		solves for the nonresponder share, a = M_D / int_D h0, which is
+		substituted into
+			shape:    gamma - [a*beta + (1-a)*beta*A(delta_k(delta))'] = 0
+			bunching: B - (1-a) * int_{z*}^{z*(1+delta)} h0          = 0
+		leaving delta as the only nuisance parameter: K+2 restrictions,
+		K+1 degrees of freedom.  Gq is the Jacobian in theta_U at fixed
+		delta, including da/dbeta and da/dM_D.
+	*/
+	real matrix notch_mdt_qG(
+		real rowvector thetaU,
+		real scalar delta,
+		struct notch_par scalar P
+	)
+	{
+		real scalar Kb, B, MD, h0D, a, e, dk, r
+		real rowvector beta, gam, R, dadb
+		real colvector q, bdiff
+		real matrix A, Gq
+
+		Kb   = P.K + 1
+		beta = thetaU[1..Kb]
+		gam  = thetaU[(Kb+1)..(2*Kb)]
+		B    = thetaU[2*Kb + 1]
+		MD   = thetaU[2*Kb + 2]
+
+		h0D = P.RD * beta'
+		a   = MD / h0D
+		e   = notch_e_from_delta(delta, P)
+		if (e >= . | !(h0D > 0)) return(J(0, 0, .))
+		dk  = P.rho^(-e) - 1
+
+		A = h1_A_matrix(dk, 3, P.K, P.cutoff_orig, P.bw_orig, P.cutoff_est, P.bw_est, 0, 0)
+		r = delta * P.cutoff_orig * P.bw_est / P.bw_orig
+		R = intbasis(P.cutoff_est, P.cutoff_est + r, P.K) / P.bw_est
+
+		bdiff = beta' - A * beta'
+		dadb  = -a * P.RD / h0D
+
+		q = (gam' - a * beta' - (1 - a) * A * beta') \ (B - (1 - a) * R * beta')
+
+		Gq = J(Kb + 1, 2*Kb + 2, 0)
+		Gq[1..Kb, 1..Kb]          = -a * I(Kb) - (1 - a) * A - bdiff * dadb
+		Gq[1..Kb, (Kb+1)..(2*Kb)] = I(Kb)
+		Gq[1..Kb, 2*Kb + 2]       = -bdiff / h0D
+		Gq[Kb+1, 1..Kb]           = -(1 - a) * R + (R * beta') * dadb
+		Gq[Kb+1, 2*Kb + 1]        = 1
+		Gq[Kb+1, 2*Kb + 2]        = (R * beta') / h0D
+
+		return((q, Gq))
+	}
+
+	real scalar notch_mdt_crit(
+		real scalar delta,
+		real rowvector thetaU,
+		real matrix V,
+		struct notch_par scalar P
+	)
+	{
+		real matrix qG, Gq
+		real colvector q
+		real scalar W
+
+		qG = notch_mdt_qG(thetaU, delta, P)
+		if (rows(qG) == 0) return(1e300)
+		q  = qG[., 1]
+		Gq = qG[., 2..cols(qG)]
+		W  = q' * qrinv(Gq * V * Gq') * q
+		if (W >= . | W < 0) return(1e300)
+		return(W)
+	}
+
+	/*
+		Runs the test from the posted unrestricted fit.  delta is searched
+		over (deltaD, dhi), dhi the smaller of deltamax and the response
+		at which the hole's upper edge reaches the window edge zH: beyond
+		it the density over the right reference bins is not a polynomial.
+		Writes r_nmd_chi2 / _df / _p / _delta / _a / _fail (fail: 1 share
+		outside [0, 0.999], 2 no admissible delta, 3 no finite statistic).
+	*/
+	void notch_mdt_mata(
+		string scalar bname,
+		string scalar Vname,
+		real scalar K,
+		real scalar cutoff_orig,
+		real scalar bw_orig,
+		real scalar cutoff_est,
+		real scalar bw_est,
+		real scalar t0,
+		real scalar t1,
+		real scalar jump,
+		real scalar zD_est,
+		real scalar zL_excl_est,
+		real scalar zH_excl_est,
+		real scalar deltamax,
+		real scalar init
+	)
+	{
+		struct notch_par scalar P
+
+		real rowvector thetaU
+		real matrix V
+		real colvector grid, gq
+		real scalar Kb, a, lo, hi, cap, e, zI, mid, it, ng, j
+		real scalar aa, bb, x1, x2, f1, f2, gr, rd, rQ, bd, bestW
+
+		st_numscalar("r_nmd_chi2", .)
+		st_numscalar("r_nmd_df", .)
+		st_numscalar("r_nmd_p", .)
+		st_numscalar("r_nmd_delta", .)
+		st_numscalar("r_nmd_a", .)
+
+		thetaU = st_matrix(bname)
+		V      = st_matrix(Vname)
+		Kb     = K + 1
+
+		P = notch_setup(3, K, cutoff_orig, bw_orig, cutoff_est, bw_est,
+			t0, t1, jump, zD_est, zL_excl_est)
+
+		a = thetaU[2*Kb + 2] / (P.RD * thetaU[1..Kb]')
+		if (!(a >= 0 & a <= 0.999)) {
+			st_numscalar("r_nmd_fail", 1)
+			return
+		}
+
+		// largest delta whose hole edge stays inside the excluded region
+		lo  = P.deltaD + 1e-9
+		hi  = deltamax
+		cap = (zH_excl_est - cutoff_est) * bw_orig / (bw_est * cutoff_orig)
+		e   = notch_e_from_delta(hi, P)
+		zI  = (e >= . ? . : (1 + hi) / P.rho^(-e) - 1)
+		if (zI > cap) {
+			aa = lo
+			bb = hi
+			for (it = 1; it <= 100; it++) {
+				mid = (aa + bb) / 2
+				e   = notch_e_from_delta(mid, P)
+				zI  = (e >= . ? . : (1 + mid) / P.rho^(-e) - 1)
+				if (zI > cap) bb = mid
+				else          aa = mid
+			}
+			hi = aa
+		}
+		if (hi <= lo + 1e-8) {
+			st_numscalar("r_nmd_fail", 2)
+			return
+		}
+
+		grid = P.deltaD :+ (1e-6 \ 1e-4 \ 1e-3 \ 0.0025 \ 0.005 \ 0.01 \ 0.02 \
+		        0.035 \ 0.05 \ 0.075 \ 0.10 \ 0.15 \ 0.20 \ 0.30 \ 0.50 \
+		        0.75 \ 1 \ 1.5 \ 2 \ 3 \ 5)
+		if (init < . & init > lo & init < hi) grid = grid \ init
+		grid = grid \ (hi - 1e-9)
+		grid = uniqrows(select(grid, (grid :> lo) :& (grid :< hi)))
+
+		ng = rows(grid)
+		gq = J(ng, 1, .)
+		for (j = 1; j <= ng; j++) gq[j] = notch_mdt_crit(grid[j], thetaU, V, P)
+
+		gr    = (sqrt(5) - 1) / 2
+		bestW = 1e300
+		bd    = .
+		for (j = 1; j <= ng; j++) {
+			if (j > 1) {
+				if (gq[j] > gq[j-1]) continue
+			}
+			if (j < ng) {
+				if (gq[j] > gq[j+1]) continue
+			}
+			aa = (j > 1  ? grid[j-1] : lo)
+			bb = (j < ng ? grid[j+1] : hi)
+			x1 = bb - gr * (bb - aa)
+			x2 = aa + gr * (bb - aa)
+			f1 = notch_mdt_crit(x1, thetaU, V, P)
+			f2 = notch_mdt_crit(x2, thetaU, V, P)
+			for (it = 1; it <= 100; it++) {
+				if (abs(bb - aa) < 1e-10 * max((1, abs(x1), abs(x2)))) break
+				if (f1 > f2) {
+					aa = x1
+					x1 = x2
+					f1 = f2
+					x2 = aa + gr * (bb - aa)
+					f2 = notch_mdt_crit(x2, thetaU, V, P)
+				}
+				else {
+					bb = x2
+					x2 = x1
+					f2 = f1
+					x1 = bb - gr * (bb - aa)
+					f1 = notch_mdt_crit(x1, thetaU, V, P)
+				}
+			}
+			if (f1 <= f2) {
+				rd = x1
+				rQ = f1
+			}
+			else {
+				rd = x2
+				rQ = f2
+			}
+			if (gq[j] < rQ) {
+				rd = grid[j]
+				rQ = gq[j]
+			}
+			if (rQ < bestW) {
+				bestW = rQ
+				bd    = rd
+			}
+		}
+
+		if (bd >= . | bestW >= 1e299) {
+			st_numscalar("r_nmd_fail", 3)
+			return
+		}
+
+		st_numscalar("r_nmd_chi2", bestW)
+		st_numscalar("r_nmd_df", Kb)
+		st_numscalar("r_nmd_p", chi2tail(Kb, bestW))
+		st_numscalar("r_nmd_delta", bd)
+		st_numscalar("r_nmd_a", a)
+		st_numscalar("r_nmd_fail", 0)
 	}
 
 real rowvector saez_transform(
