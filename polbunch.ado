@@ -10,6 +10,10 @@
 					t1(numlist min=1 max=1 <1) ///
 					NOTCH /// t0()/t1() are proportional rates on all income: the average tax rate jumps at the cutoff (Kleven & Waseem 2013 notch); estimators 1 and 3
 					dt(real 0) /// lump-sum tax increase at the cutoff, in units of the running variable (pure notch); combines with notch or with a kink
+					AUTOUpper /// notch, estimator(1): choose the upper bound of the excluded region by Kleven & Waseem's rule (bunching mass = missing mass); the default when window() is omitted
+					AUTOMargin(integer 1) /// bins added beyond the point where the mass balance closes
+					AUTOMax(integer -1) /// largest upper bound tried (default: leaves 2(K+1) reference bins above the window)
+					AUTOTol(real 1) /// the mass balance counts as closed once it is within autotol() standard errors of zero; autotol(0) is the literal first crossing
 					POLynomial(integer 7) ///
 					NOIsily ///
 					ESTimator(integer 3) /// Specify estimator - 3 = theoretically consistent efficient estimator, 2 = Chetty et al. (2011) faithful replication (bin-count gross-up + exact accounting identity; point estimate, closed-form vce(analytic)), 1 = no adjustment, 0=data to the left only, 4=Saez three-region trapezoid approximaton, (5 = undocumented backward-compatibility option: the former Chetty-style NLS recast, h1=h0/(1+delta) shape restriction)
@@ -113,6 +117,19 @@
 								exit 198
 							}
 							local notchjump = `dt' + cond("`notch'" != "", (`t1'-`t0')*`cutoff', 0)
+							if "`autoupper'" != "" & `estimator' == 3 {
+								noi di as error "autoupper is for estimator(1). estimator(3) imposes that bunching mass equals the model's missing mass"
+								noi di as error "at any window, estimates the upper edge of the hole itself (e(hole_upper)) and is consistent with a short window."
+								exit 198
+							}
+							if `automargin' < 0 | `autotol' < 0 {
+								noi di as error "automargin() and autotol() must be nonnegative."
+								exit 198
+							}
+						}
+						else if "`autoupper'" != "" {
+							noi di as error "autoupper requires a notch (notch and/or dt())."
+							exit 198
 						}
 							if "`t0'"!="" & !`notchmode' {
 							if "`t1'"=="" {
@@ -729,6 +746,7 @@
 
 						gen int `relbin' = .
 						gen byte `crossbin' = (`zleft' < `cutoff' & `zright' > `cutoff')
+						local autoupper_on = 0
 						
 						if `cutoff_on_edge' {
 							/*
@@ -742,6 +760,33 @@
 
 							replace `relbin' =  round((`zleft' - `cutoff')/`bw') + 1 ///
 								if `zleft' >= `cutoff' - 1e-8
+
+							/*
+								Notch, naive estimator: data-driven upper bound of
+								the excluded region (Kleven & Waseem 2013, sec.
+								II.C).  H is raised until the mass in the window
+								equals the fitted counterfactual's -- bunching mass
+								= missing mass -- see notch_autoH().  On by default
+								when window() is omitted and the marginal rate does
+								not change (a pure notch).  With t1 > t0 responders
+								above the hole shift down, missing mass is spread
+								over the whole upper bracket and the naive balance
+								does not close reliably, so the rule then runs only
+								on an explicit autoupper.
+							*/
+							if `notchmode' {
+								if `estimator' == 1 & ("`autoupper'" != "" | ("`limits'" == "" & `t1' == `t0')) local autoupper_on = 1
+							}
+							if `autoupper_on' {
+								if `L' < 1 local L = 1
+								local _au_Hmin = max(`H', ceil((`notchjump' / (1 - `t1')) / `bw' - 1e-8))
+								mata: notch_autoH("`y'", "`z'", "`relbin'", `L', `_au_Hmin', `automax', `automargin', `autotol', `polynomial', `bw')
+								local H               = r_au_H
+								local autoupper_closed = r_au_closed
+								local autoupper_Hc     = r_au_Hcross
+								tempname au_balance
+								matrix `au_balance' = r_au_profile
+							}
 
 							gen byte `inbunch' = ///
 								inrange(`relbin', -`L', -1) | ///
@@ -888,6 +933,7 @@
 							local notch_nDcover = ceil(`notch_dzD' / `bw_orig' - 1e-8)
 							if `H' < `notch_nDcover' {
 								noi di as error "The excluded region must cover the whole dominated range above the notch: use window(L H) with H >= `notch_nDcover'."
+								if `estimator' == 1 noi di as error "(For estimator(1), autoupper chooses H from the data; it is the default for a pure notch when window() is omitted.)"
 								exit 198
 							}
 							if `L' < 1 {
@@ -1330,6 +1376,14 @@
 						
 						if inlist("`vce'","none","analytic") loc stop=0
 						else loc stop=`bootreps'
+						if `autoupper_on' {
+							tempvar _au_bunch _au_side
+							gen double `_au_bunch' = `bunch'
+							gen double `_au_side'  = `side'
+							local _au_H_main   = `H'
+							local _au_zHo_main = `zH_excl_orig'
+							local _au_zHe_main = `zH_excl_est'
+						}
 						forvalues s=0/`stop' {
 							if `s'==1 & "`nodots'"=="" nois _dots 0, title("Performing bootstrap repetitions...") reps(`bootreps')
 							if `s'>0 { //resample outcome
@@ -1354,6 +1408,17 @@
 								}
 								else {
 									mata: pbx_resboot_draw("`y'", `_wildflag', `_wildcode')
+								}
+
+								/* autoupper: repeat the window selection on this
+								   resample, so the bootstrap carries its uncertainty */
+								if `autoupper_on' {
+									mata: notch_autoH("`y'", "`z'", "`relbin'", `L', `_au_Hmin', `automax', `automargin', `autotol', `polynomial', `bw_est')
+									local H = r_au_H
+									replace `bunch' = inrange(`relbin', -`L', -1) | inrange(`relbin', 1, `H')
+									replace `side'  = cond(`bunch' > 0, ., cond(`relbin' < 0, -1, 1))
+									local zH_excl_orig = `cutoff_orig' + `H' * `bw_orig'
+									local zH_excl_est  = `cutoff_est'  + `H' * `bw_est'
 								}
 
 							}
@@ -1814,6 +1879,15 @@
 							}
 							
 								
+							/* autoupper: back to the main fit's window */
+							if `autoupper_on' {
+								replace `bunch' = `_au_bunch'
+								replace `side'  = `_au_side'
+								local H            = `_au_H_main'
+								local zH_excl_orig = `_au_zHo_main'
+								local zH_excl_est  = `_au_zHe_main'
+							}
+
 							//bootstrap inference sunmmary & test
 							if "`vce'"=="bootstrap" {
 								/*
@@ -2789,6 +2863,24 @@
 						if !missing(`notch_eobs_main') ereturn scalar elasticity_observed = `notch_eobs_main'
 						if !missing(`notch_zI_main')   ereturn scalar hole_upper = `notch_zI_main'
 						ereturn scalar nonresponders_bound = `notch_abound_main'
+						ereturn scalar autoupper = `autoupper_on'
+						if `autoupper_on' {
+							ereturn scalar autoupper_H      = `H'
+							ereturn scalar autoupper_closed = `autoupper_closed'
+							mata: st_matrix("`au_balance'", (st_matrix("`au_balance'")[., 1], ///
+								`cutoff_orig' :+ `bw_orig' :* st_matrix("`au_balance'")[., 1], st_matrix("`au_balance'")[., (3, 4)]))
+							matrix colnames `au_balance' = H upper_limit balance se
+							ereturn matrix balance = `au_balance'
+							if `autoupper_closed' {
+								/* convergence method: the response at which the
+								   balance closes, and the elasticity it implies */
+								ereturn scalar delta_convergence = `autoupper_Hc' * `bw_orig' / `cutoff_orig'
+								mata: st_local("_au_econv", strofreal(notch_e_from_delta(`autoupper_Hc' * `bw_orig' / `cutoff_orig', ///
+									notch_setup(1, 1, `cutoff_orig', `bw_orig', `cutoff_orig', `bw_orig', `t0', `t1', `notchjump', ///
+									`cutoff_orig' + `bw_orig', `cutoff_orig' - `bw_orig')), "%21.0g"))
+								if "`_au_econv'" != "." ereturn scalar elasticity_convergence = `_au_econv'
+							}
+						}
 						if `notch_hashole' {
 							ereturn scalar hole_mass      = `notch_hole_main'[1,1]
 							ereturn scalar hole_mass_pred = `notch_hole_main'[1,2]
@@ -2884,6 +2976,23 @@
 										di as txt "Note: the excluded region ends at " as res %9.0g `zH_excl_orig' as txt ", below the fitted upper edge of the hole (" as res %9.0g `notch_zI_main' as txt ")."
 										di as txt "      Reference bins inside the hole are fit as nonresponders only, so the sharp hole edge"
 										di as txt "      identifies the response and the analytic standard errors are unreliable. Widen window()."
+									}
+								}
+								if `autoupper_on' & `t1' > `t0' {
+									di as txt "Note: autoupper with a change in the marginal rate: the naive mass balance ignores the"
+									di as txt "      responders' shift above the hole and locates its upper edge unreliably. Check e(balance)."
+								}
+								if `autoupper_on' {
+									if `autoupper_closed' {
+										di as txt "      upper bound of the excluded region chosen by mass balance: H = " as res `H' ///
+											as txt " (to " as res %9.0g `zH_excl_orig' as txt "); standard errors"
+										di as txt "      " cond("`vce'"=="bootstrap", "include the selection (repeated in every replication).", "are conditional on it.")
+									}
+									else {
+										di as txt "Note: bunching mass exceeds missing mass at every upper bound tried, so the balance did not close;"
+										di as txt "      the excluded region ends where it is smallest (H = " as res `H' as txt ", to " as res %9.0g `zH_excl_orig' as txt ")."
+										di as txt "      With a change in the marginal rate missing mass is spread over the whole upper bracket"
+										di as txt "      and the naive balance need not close; consider estimator(3), or set window() by hand."
 									}
 								}
 								if `notch_abound_main' == -1 {
@@ -9698,6 +9807,119 @@ cap program drop bunch_saez
 		}
 
 		return(Jm)
+	}
+
+	/*
+		Kleven & Waseem's rule for the upper bound of the excluded region,
+		naive estimator.  For each candidate H the pooled polynomial is
+		fitted to the reference bins outside the window [-L, H] (in bins
+		relative to the cutoff) and the mass balance
+			D(H) = (observed mass in the window) - (fitted h0 over it)
+		is bunching mass minus missing mass.  D > 0 while the window ends
+		inside the hole and is zero plus noise from the hole edge on.
+
+		That noise is strongly autocorrelated in H, so the literal rule
+		"first H with D <= 0" overshoots, often by a long way, whenever D
+		happens to be slightly positive at the edge.  The balance
+		therefore counts as closed at the first H with D <= tol * se(D).
+		D is linear in the counts (h0hat is least squares), D = w'y, so
+		se(D) is the multinomial sqrt(sum w^2 y - D^2/N).  tol = 0 gives
+		the literal rule.  H* adds `margin' bins: stopping early leaves
+		hole bins in the reference region, stopping late costs little.
+
+		The crossing itself (Hcross, in bins above the cutoff) is the
+		linear zero of D through the stopping H and the one before.  If
+		the balance never closes, closed = 0 and H* is where D is smallest
+		(plus the margin).  z may be
+		in any affine units, with bw in the same units.  Writes r_au_H,
+		r_au_closed, r_au_Hcross and r_au_profile (H, H, D, se).
+	*/
+	void notch_autoH(
+		string scalar yvar,
+		string scalar zvar,
+		string scalar relbinvar,
+		real scalar L,
+		real scalar Hmin,
+		real scalar Hmaxin,
+		real scalar margin,
+		real scalar tol,
+		real scalar K,
+		real scalar bw
+	)
+	{
+		real colvector y, z, rb, zs, ref, win, wref
+		real scalar zmn, zmx, bws, maxrel, Hcap, Hmax, H, j, nH, D, se, N, Hc, Hx, closed, Hstar, sl
+		real matrix prof, X
+		real rowvector R
+
+		y  = st_data(., yvar)
+		z  = st_data(., zvar)
+		rb = st_data(., relbinvar)
+		N  = sum(y)
+
+		zmn = min(z)
+		zmx = max(z)
+		zs  = (2 :* z :- (zmn + zmx)) :/ (zmx - zmn)
+		bws = 2 * bw / (zmx - zmn)
+
+		// keep at least K+2 reference bins above the window
+		maxrel = max(rb)
+		Hcap   = maxrel - (K + 2)
+		Hmax   = (Hmaxin > 0 ? Hmaxin : maxrel - 2*(K + 1))
+		if (Hmax > Hcap) Hmax = Hcap
+		if (Hmax < Hmin) Hmax = Hmin
+
+		nH   = Hmax - Hmin + 1
+		prof = J(nH, 4, .)
+		Hc   = .
+		for (j = 1; j <= nH; j++) {
+			H    = Hmin + j - 1
+			ref  = selectindex((rb :< -L) :| (rb :> H))
+			win  = selectindex((rb :>= -L) :& (rb :<= H))
+			X    = pbasis(zs[ref], K)
+			R    = intbasis(min(zs[win]) - bws/2, max(zs[win]) + bws/2, K) / bws
+			wref = -X * (invsym(quadcross(X, X)) * R')
+			D    = sum(y[win]) + quadcross(wref, y[ref])
+			se   = sqrt(sum(y[win]) + quadcross(wref :^ 2, y[ref]) - D^2 / N)
+			prof[j, .] = (H, H, D, se)
+			if (Hc >= . & D <= tol * se) Hc = H
+		}
+
+		closed = (Hc < .)
+		if (closed) {
+			Hstar = Hc + margin
+			if (Hstar > Hcap) Hstar = Hcap
+			if (Hstar < Hc)   Hstar = Hc
+			Hx = Hc
+			if (Hc > Hmin) {
+				j  = Hc - Hmin + 1
+				sl = prof[j-1, 3] - prof[j, 3]
+				if (sl > 0) {
+					Hx = Hc + prof[j, 3] / sl
+					if (Hx > Hc + 1) Hx = Hc + 1
+					if (Hx < Hc - 1) Hx = Hc - 1
+				}
+			}
+		}
+		else {
+			// never closed: take the H where the balance is smallest.  With
+			// a change in the marginal rate missing mass is spread over the
+			// whole upper bracket, so D falls steeply up to the hole edge
+			// and rises slowly beyond it; its minimum marks the edge.
+			Hc = Hmin
+			for (j = 2; j <= nH; j++) {
+				if (prof[j, 3] < prof[Hc - Hmin + 1, 3]) Hc = Hmin + j - 1
+			}
+			Hstar = Hc + margin
+			if (Hstar > Hcap) Hstar = Hcap
+			if (Hstar < Hc)   Hstar = Hc
+			Hx    = .
+		}
+
+		st_numscalar("r_au_H", Hstar)
+		st_numscalar("r_au_closed", closed)
+		st_numscalar("r_au_Hcross", Hx)
+		st_matrix("r_au_profile", prof)
 	}
 
 	// tax and grid parameters shared by estimation and the specification test

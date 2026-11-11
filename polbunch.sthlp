@@ -36,6 +36,10 @@ from the bin spacing and {opt bw()} may not be specified.
 {synopt:{opt t1(#)}}linear tax rate above the cutoff{p_end}
 {synopt:{opt notch}}{opt t0()}/{opt t1()} are proportional rates on all income, so the average tax rate jumps at the cutoff; see {help polbunch##notch:Notches}{p_end}
 {synopt:{opt dt(#)}}lump-sum tax increase at the cutoff, in units of the running variable; see {help polbunch##notch:Notches}{p_end}
+{synopt:{opt autoupper}}notch, {cmd:estimator(1)}: choose the upper bound of the excluded region from the data (bunching mass = missing mass); the default for a pure notch when {opt window()} is omitted{p_end}
+{synopt:{opt automargin(#)}}bins added beyond the point where the mass balance closes; default {cmd:automargin(1)}{p_end}
+{synopt:{opt autotol(#)}}the balance counts as closed within this many standard errors of zero; default {cmd:autotol(1)}; {cmd:autotol(0)} is the literal first crossing{p_end}
+{synopt:{opt automax(#)}}largest upper bound tried; default leaves 2(K+1) reference bins above the window{p_end}
 
 {syntab:Reporting and transformations}
 {synopt:{opt notransform}}report raw estimating-equation coefficients rather than transformed bunching parameters{p_end}
@@ -188,6 +192,23 @@ Reported in the {cmd:bunching} equation: {cmd:number_bunchers}, {cmd:excess_mass
 response does not exceed the dominated range, lies at the {opt deltamax()} bound, or {it:a} is at its upper bound.
 Available with {cmd:vce(conventional)}, {cmd:vce(robust)} and {cmd:vce(bootstrap)} (multinomial or bayesian). Not yet available with a notch: {opt log}, {opt wls}, {opt contrast}, the Hausman test, {cmd:test(}...{cmd:, boot)},
 {cmd:vce(cluster)}, and the residual and wild bootstraps.
+{p_end}
+
+{pstd}
+{it:Choosing the upper bound of the excluded region.} For {cmd:estimator(1)} the excluded region has to reach the upper edge of the hole: the naive fit has no model for the hole, and a window that ends inside it biases the
+elasticity badly. {opt autoupper} chooses {it:H} as Kleven and Waseem (2013, section II.C) do. For each candidate {it:H} the polynomial is fitted outside the window and the mass balance, observed mass in the window minus
+the fitted counterfactual over it, is bunching mass minus missing mass. It is positive while the window ends inside the hole and zero from the hole edge on. Because the balance beyond the edge is zero plus strongly
+autocorrelated noise, the literal rule (first {it:H} at which it is non-positive) overshoots, often by far, whenever it happens to be slightly positive at the edge; the balance therefore counts as closed at the first {it:H} where it is
+within {opt autotol(#)} standard errors of zero (default 1), and {opt automargin(#)} bins (default 1) are added, since stopping early is the costly direction. {opt autoupper} is the default for a pure notch when
+{opt window()} is omitted; with {opt window(L H)} it starts from {it:H}. Analytic standard errors are conditional on the selected window; with {cmd:vce(bootstrap)} the selection is repeated in every replication.
+{cmd:e(balance)} holds the profile, and {cmd:e(delta_convergence)} and {cmd:e(elasticity_convergence)} the response and elasticity at which the balance closes -- Kleven and Waseem's convergence method, an upper bound
+when elasticities are heterogeneous, since the balance closes at the edge of the most elastic group.
+{p_end}
+
+{pstd}
+With a change in the marginal rate the responders above the hole shift down, so some missing mass is spread over the whole upper bracket and the naive balance does not close reliably. {opt autoupper} is then not the default and,
+if requested, sets the window where the balance is smallest when it never closes; this is unreliable in samples, and {opt window()} should be set by hand or {cmd:estimator(3)} used.
+{cmd:estimator(3)} does not take {opt autoupper}: it imposes that bunching mass equals the model's missing mass at any window, estimates the upper edge of the hole itself ({cmd:e(hole_upper)}), and is consistent with a short window.
 {p_end}
 
 {pstd}
@@ -605,6 +626,10 @@ Collapse to binned data and use polbunch with bin counts {cmd:freq} and bin midp
 {synopt:{cmd:e(dominated_bins)}}number of whole bins in the dominated range, used to identify the nonresponder share{p_end}
 {synopt:{cmd:e(elasticity_observed)}}notch elasticity without the friction adjustment, when it exists{p_end}
 {synopt:{cmd:e(hole_upper)}}upper edge of the hole implied by the fit ({cmd:estimator(3)} with a notch){p_end}
+{synopt:{cmd:e(autoupper)}}notch: 1 if the upper bound of the excluded region was chosen from the data{p_end}
+{synopt:{cmd:e(autoupper_H)}, {cmd:e(autoupper_closed)}}notch: the selected {it:H}, and whether the mass balance closed{p_end}
+{synopt:{cmd:e(delta_convergence)}, {cmd:e(elasticity_convergence)}}notch: response and elasticity at which the balance closes (convergence method){p_end}
+{synopt:{cmd:e(balance)}}notch: matrix with {it:H}, the window's upper edge, the mass balance and its standard error over the scanned range{p_end}
 {synopt:{cmd:e(nonresponders_bound)}}notch: 0 if the nonresponder share is interior, -1 at its lower bound 0, 1 at its upper bound 0.999, 2 if undefined{p_end}
 {synopt:{cmd:e(hole_mass)}, {cmd:e(hole_mass_pred)}}notch: observed and model-predicted mass in the excluded bins above the dominated range{p_end}
 {synopt:{cmd:e(hole_diff)}, {cmd:e(hole_se)}}notch: their difference and its standard error{p_end}
